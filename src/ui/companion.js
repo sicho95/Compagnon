@@ -1,12 +1,12 @@
 /**
  * companion.js — Vue gestion du Compagnon ESP32 dans Nestor PWA
- * Connexion BLE, WiFi provisioning, sync agents, clavier distant, config
+ * Connexion BLE, WiFi provisioning, sync agents, clavier distant, config, batterie PMIC
  */
 import { bleAvailable, bleConnect, bleDisconnect, bleConnected, bleDeviceName } from '../bt/ble.js';
 import { deviceStatus, subscribeBleStatus, setBleConnected, setBleDisconnected } from '../bt/ble_status.js';
 import { scanWifiNetworks, provisionWifi, getSavedNetworks } from '../device/provisioning.js';
 import { syncAgentsWithDevice } from '../sync/agents_sync.js';
-import { getDeviceConfig, saveDeviceConfig, pushDeviceConfig } from '../device/device_settings.js';
+import { getDeviceConfig, saveDeviceConfig, pushDeviceConfig, pushBatteryConfig, pullBatteryStatus, voltageToSoc, BATTERY_PROFILE } from '../device/device_settings.js';
 import { setupLlmRelay } from '../bt/ble_protocol.js';
 import { createKeyboardOverlay } from '../input/bt_keyboard.js';
 import { callLLM, listBackends } from '../api/backends.js';
@@ -15,7 +15,7 @@ export function renderCompanionView(container, state, rerender) {
   container.innerHTML = '';
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;';
 
-  // ── Bandeau connexion ────────────────────────────────
+  // ── Bandeau connexion ────────────────────────────────────
   const connBar = el('div', 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0e1a0e;border-bottom:1px solid #1a2a1a;position:sticky;top:0;z-index:2;');
   const connInfo = el('div', 'display:flex;flex-direction:column;gap:2px;');
   const connectBtn = document.createElement('button');
@@ -43,21 +43,15 @@ export function renderCompanionView(container, state, rerender) {
         connectBtn.textContent = '⏳…'; connectBtn.disabled = true;
         const name = await bleConnect();
         setBleConnected(name);
-        // Démarrer relay LLM automatiquement
         const backends = listBackends();
         const defaultB = backends[0];
         setupLlmRelay(async (messages, model) => {
           const choice = await callLLM(defaultB?.id || 'groq-llama', { messages });
           return choice?.message?.content || '';
         });
-        // Auto-sync agents si configuré
         const cfg = getDeviceConfig();
         if (cfg.ble.autoSyncAgents) {
-          try {
-            const merged = await syncAgentsWithDevice();
-            state.agents = merged;
-            rerender();
-          } catch {}
+          try { const merged = await syncAgentsWithDevice(); state.agents = merged; rerender(); } catch {}
         }
       } catch (e) { alert('Connexion échouée: ' + e.message); }
       finally { connectBtn.disabled = false; }
@@ -69,7 +63,7 @@ export function renderCompanionView(container, state, rerender) {
   container.appendChild(connBar);
   refreshBar();
 
-  // ── Sections ─────────────────────────────────────────
+  // ── Sections ───────────────────────────────────────
   const sectionsWrap = el('div', 'display:flex;flex-direction:column;');
   container.appendChild(sectionsWrap);
 
@@ -85,6 +79,7 @@ export function renderCompanionView(container, state, rerender) {
     }
     sectionsWrap.appendChild(mkSection('📶 Réseau WiFi', buildWifiSection()));
     sectionsWrap.appendChild(mkSection('🧠 Agents & Sync', buildAgentsSection(state, rerender)));
+    sectionsWrap.appendChild(mkSection('🔋 Batterie & PMIC', buildBatterySection()));
     sectionsWrap.appendChild(mkSection('⌨️ Clavier distant', buildKeyboardSection()));
     sectionsWrap.appendChild(mkSection('⚙️ Configuration', buildConfigSection()));
   }
@@ -93,7 +88,7 @@ export function renderCompanionView(container, state, rerender) {
   subscribeBleStatus(() => { refreshBar(); renderSections(); });
 }
 
-// ── WiFi ─────────────────────────────────────────────────
+// ── WiFi ────────────────────────────────────────────────────
 function buildWifiSection() {
   const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
   const status = el('div', 'font-size:12px;color:#5a7a5a;padding:4px 0;');
@@ -125,10 +120,8 @@ function buildWifiSection() {
   scanBtn.style.cssText = btnStyle('#1a2a3a', '#7af');
   scanBtn.onclick = async () => {
     scanBtn.textContent = '⏳ Scan…'; scanBtn.disabled = true;
-    try {
-      const nets = await scanWifiNetworks();
-      showNetworkPicker(nets, wrap, status);
-    } catch (e) { alert('Scan échoué: ' + e.message); }
+    try { const nets = await scanWifiNetworks(); showNetworkPicker(nets, wrap, status); }
+    catch (e) { alert('Scan échoué: ' + e.message); }
     finally { scanBtn.textContent = '🔍 Scanner les réseaux WiFi'; scanBtn.disabled = false; }
   };
   wrap.appendChild(scanBtn);
@@ -157,7 +150,7 @@ function showNetworkPicker(networks, wrap, statusEl) {
   wrap.appendChild(list);
 }
 
-// ── Agents ───────────────────────────────────────────────
+// ── Agents ────────────────────────────────────────────────
 function buildAgentsSection(state, rerender) {
   const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
   const info = el('div', 'font-size:11px;color:#555;');
@@ -187,7 +180,94 @@ function buildAgentsSection(state, rerender) {
   return wrap;
 }
 
-// ── Clavier ───────────────────────────────────────────────
+// ── Batterie & PMIC ───────────────────────────────────────
+function buildBatterySection() {
+  const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
+  const cfg  = getDeviceConfig();
+  const bat  = cfg.battery;
+
+  const statusRow = el('div', 'display:flex;align-items:center;gap:12px;padding:8px 0;');
+  const voltEl    = el('div', 'font-size:13px;color:#7ef;font-weight:600;min-width:52px;');
+  const socBar    = el('div', 'flex:1;height:8px;background:#1a1a1a;border-radius:4px;overflow:hidden;');
+  const socFill   = el('div', 'height:100%;background:#3a8a5a;border-radius:4px;transition:width 0.4s;width:0%;');
+  const socLabel  = el('div', 'font-size:11px;color:#555;min-width:32px;text-align:right;');
+  socBar.appendChild(socFill);
+  statusRow.append(voltEl, socBar, socLabel);
+  wrap.appendChild(statusRow);
+
+  async function refreshStatus() {
+    try {
+      const s = await pullBatteryStatus();
+      const pct = s.soc;
+      voltEl.textContent = (s.voltageMv / 1000).toFixed(2) + 'V' + (s.charging ? ' ⚡' : '');
+      socFill.style.width = pct + '%';
+      socFill.style.background = pct < 10 ? '#e87' : pct < 25 ? '#fa8' : '#3a8a5a';
+      socLabel.textContent = pct + '%';
+    } catch {
+      voltEl.textContent = '—';
+      socLabel.textContent = '—';
+    }
+  }
+  refreshStatus();
+
+  const params = [
+    { label: '⚡ Courant charge (mA)',      key: 'chargeCurrentMa',       min: 100,  max: 800,  step: 50  },
+    { label: '🔋 Tension max (mV)',          key: 'chargeVoltageMv',        min: 4100, max: 4200, step: 10  },
+    { label: '🏁 Courant fin charge (mA)',   key: 'terminationCurrentMa',  min: 25,   max: 100,  step: 25  },
+    { label: '⚠️ Alerte basse (mV)',          key: 'alertLowMv',             min: 3100, max: 3500, step: 50  },
+    { label: '🛑 Coupure critique (mV)',      key: 'alertCriticalMv',       min: 2900, max: 3200, step: 50  },
+  ];
+
+  for (const p of params) {
+    const row = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0;');
+    const lbl = el('div', 'font-size:11px;color:#888;flex:1;'); lbl.textContent = p.label;
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = p.min; inp.max = p.max; inp.step = p.step; inp.value = bat[p.key];
+    inp.style.cssText = 'width:72px;background:#111;border:1px solid #333;border-radius:6px;padding:4px 6px;color:#7ef;font-size:12px;text-align:right;';
+    inp.onchange = () => { bat[p.key] = Number(inp.value); saveDeviceConfig(cfg); };
+    row.append(lbl, inp);
+    wrap.appendChild(row);
+  }
+
+  wrap.appendChild(mkToggle('🔬 Jauge AXP2101 interne', bat.gaugeEnabled, v => { bat.gaugeEnabled = v; saveDeviceConfig(cfg); }));
+
+  const modeRow = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0;');
+  const modeLbl = el('div', 'font-size:11px;color:#888;'); modeLbl.textContent = '📊 Affichage batterie';
+  const modeBtn = el('button', '');
+  let dispMode = bat.displayMode || 'percent';
+  const refreshMode = () => {
+    modeBtn.textContent = dispMode === 'percent' ? '% capacité' : 'V tension';
+    modeBtn.style.cssText = 'padding:4px 10px;border:1px solid #333;border-radius:12px;font-size:11px;cursor:pointer;background:#1a1a1a;color:#aaa;';
+  };
+  modeBtn.onclick = () => { dispMode = dispMode === 'percent' ? 'voltage' : 'percent'; bat.displayMode = dispMode; saveDeviceConfig(cfg); refreshMode(); };
+  refreshMode();
+  modeRow.append(modeLbl, modeBtn);
+  wrap.appendChild(modeRow);
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.textContent = '🔄 Actualiser statut batterie';
+  refreshBtn.style.cssText = btnStyle('#0a1a0a', '#5af');
+  refreshBtn.onclick = async () => { refreshBtn.textContent = '⏳…'; await refreshStatus(); refreshBtn.textContent = '🔄 Actualiser statut batterie'; };
+  wrap.appendChild(refreshBtn);
+
+  const pushBtn = document.createElement('button');
+  pushBtn.textContent = '📤 Envoyer config PMIC au Compagnon';
+  pushBtn.style.cssText = btnStyle('#2a1a0a', '#fa8');
+  pushBtn.onclick = async () => {
+    pushBtn.textContent = '⏳ Envoi…'; pushBtn.disabled = true;
+    try   { await pushBatteryConfig(bat); pushBtn.textContent = '✅ PMIC configuré'; }
+    catch { pushBtn.textContent = '❌ Erreur envoi'; }
+    finally { setTimeout(() => { pushBtn.textContent = '📤 Envoyer config PMIC au Compagnon'; pushBtn.disabled = false; }, 2500); }
+  };
+  wrap.appendChild(pushBtn);
+
+  const info = el('div', 'font-size:10px;color:#333;line-height:1.6;margin-top:4px;');
+  info.textContent = `${BATTERY_PROFILE.model} · ${BATTERY_PROFILE.capacityMah}mAh · ${BATTERY_PROFILE.chemistry} · ${BATTERY_PROFILE.voltageMin}–${BATTERY_PROFILE.voltageFull}V`;
+  wrap.appendChild(info);
+  return wrap;
+}
+
+// ── Clavier ──────────────────────────────────────────────────
 function buildKeyboardSection() {
   const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
   const desc = el('div', 'font-size:12px;color:#555;line-height:1.5;');
@@ -221,14 +301,9 @@ function buildConfigSection() {
   return wrap;
 }
 
-// ── Helpers DOM ───────────────────────────────────────────
-function el(tag, css) {
-  const e = document.createElement(tag);
-  if (css) e.style.cssText = css; return e;
-}
-function btnStyle(bg, color) {
-  return `background:${bg};color:${color};border:1px solid ${color}22;border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;width:100%;text-align:left;`;
-}
+// ── Helpers DOM ─────────────────────────────────────────────
+function el(tag, css) { const e = document.createElement(tag); if (css) e.style.cssText = css; return e; }
+function btnStyle(bg, color) { return `background:${bg};color:${color};border:1px solid ${color}22;border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;width:100%;text-align:left;`; }
 function mkSection(title, content) {
   const w = el('div', 'background:#0a0a0a;border-bottom:1px solid #1a1a1a;');
   const h = el('button', 'width:100%;background:none;border:none;text-align:left;padding:12px 16px;color:#888;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;cursor:pointer;text-transform:uppercase;letter-spacing:0.06em;');
