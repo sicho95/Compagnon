@@ -2,11 +2,12 @@ import { listBackends, callLLM } from '../api/backends.js';
 import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson, lsGet, lsSet } from '../storage/agents-db.js';
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, getSearchStatus } from '../api/search.js';
+import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
   'monthly-payments': '📅', 'pea-portfolio': '📈', stories: '📚',
-  research: '🔍', 'web-search': '🌐', generic: '🤖',
+  research: '🔍', 'web-search': '🌐', 'web-analyst': '🔎', generic: '🤖',
 };
 function roleIcon(role) { return ROLE_ICONS[role] || '🤖'; }
 function tag(text, color) {
@@ -87,8 +88,16 @@ function renderAgentsList(container, state, rerender) {
     const icon = el('span', { fontSize:'20px' }); icon.textContent = roleIcon(agent.role);
     const nameEl = el('div', { fontWeight:'600', fontSize:'14px', flex:'1' });
     nameEl.textContent = agent.name;
-    const backendBadge = tag(agent.backendId || 'groq-llama', '#1c2a1c');
-    topRow.append(icon, nameEl, backendBadge);
+    // Badge rôle web-analyst
+    const roleBadgeColor = agent.role === ROLES.WEB_ANALYST ? '#1a2a3a' :
+                           agent.role === ROLES.WEB_SEARCH  ? '#1a1a3a' : '#1c2a1c';
+    const backendBadge = tag(agent.backendId || 'groq-llama', roleBadgeColor);
+    if (agent.role === ROLES.WEB_ANALYST) {
+      const mixBadge = tag('WEB+LLM', '#1a3a2a');
+      topRow.append(icon, nameEl, mixBadge, backendBadge);
+    } else {
+      topRow.append(icon, nameEl, backendBadge);
+    }
 
     const descEl = el('div', { fontSize:'12px', color:'#888', lineHeight:'1.4' });
     descEl.textContent = agent.description || '';
@@ -136,13 +145,21 @@ function renderAgentsList(container, state, rerender) {
   container.appendChild(list);
 }
 
+// ─── Chat View ───────────────────────────────────────────────────────────────
 function renderChatView(container, state, rerender) {
   const agent = state.activeAgent;
+  const isOrchestrator = agent.role === ROLES.ORCHESTRATOR;
   state.chatHistory = state.chatHistory || [{ role:'system', content: agent.system_prompt || '' }];
 
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
   title.textContent = roleIcon(agent.role) + ' ' + agent.name;
+  if (isOrchestrator) {
+    const badge = tag('Moteur actif', '#1a3a2a');
+    badge.style.color = '#7ef';
+    title.appendChild(document.createTextNode(' '));
+    title.appendChild(badge);
+  }
   header.append(title);
   container.appendChild(header);
 
@@ -151,27 +168,43 @@ function renderChatView(container, state, rerender) {
     padding:'8px 0', maxHeight:'55vh', minHeight:'120px'
   });
 
+  // Trace panel (orchestrateur uniquement)
+  let tracePanel = null;
+  if (isOrchestrator) {
+    tracePanel = el('div', { display:'none', background:'#0a1a0a', border:'1px solid #1a3a1a',
+      borderRadius:'8px', padding:'8px', marginBottom:'6px', fontSize:'11px', color:'#4a8a4a' });
+    tracePanel.id = 'orch-trace';
+  }
+
   const renderMessages = () => {
     msgArea.innerHTML = '';
     state.chatHistory.filter(m => m.role !== 'system').forEach(m => {
       const bubble = el('div', {
         maxWidth:'85%', padding:'8px 12px', borderRadius:'12px', fontSize:'13px', lineHeight:'1.5',
         alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-        background: m.role === 'user' ? '#1a3a2a' : '#1e1e2e',
+        background: m.role === 'user' ? '#1a3a2a' : (m._orchestrated ? '#1a1a3a' : '#1e1e2e'),
         color: '#ddd', whiteSpace:'pre-wrap'
       });
       bubble.textContent = m.content;
+      // Badge stratégie si orchestré
+      if (m._strategy) {
+        const sb = el('div', { fontSize:'10px', color:'#5a7a9a', marginTop:'4px' });
+        sb.textContent = '⚙️ ' + m._strategy;
+        bubble.appendChild(sb);
+      }
       msgArea.appendChild(bubble);
     });
     msgArea.scrollTop = msgArea.scrollHeight;
   };
   renderMessages();
   container.appendChild(msgArea);
+  if (tracePanel) container.appendChild(tracePanel);
 
+  // Feedback
   const feedbackZone = el('div', { margin:'4px 0' });
   const feedbackToggle = btn('📝 Corriger / Feedback', '', () => {
     feedbackInput.style.display = feedbackInput.style.display === 'none' ? 'block' : 'none';
-    feedbackSend.style.display = feedbackSend.style.display === 'none' ? 'inline-block' : 'none';
+    feedbackSend.style.display  = feedbackSend.style.display  === 'none' ? 'inline-block' : 'none';
   });
   feedbackToggle.style.fontSize = '11px';
   const feedbackInput = document.createElement('textarea');
@@ -179,7 +212,7 @@ function renderChatView(container, state, rerender) {
     display:'none', width:'100%', marginTop:'4px', background:'#111', color:'#ccc',
     border:'1px solid #333', borderRadius:'6px', padding:'6px', fontSize:'12px', boxSizing:'border-box'
   });
-  feedbackInput.placeholder = 'Correction ou preference pour cet agent…';
+  feedbackInput.placeholder = 'Correction ou préférence pour cet agent…';
   feedbackInput.rows = 2;
   const feedbackSend = btn('✔ Enregistrer', 'primary', async () => {
     const txt = feedbackInput.value.trim();
@@ -192,8 +225,8 @@ function renderChatView(container, state, rerender) {
     state.agents = state.agents.map(a => a.id === agent.id ? agent : a);
     feedbackInput.value = '';
     feedbackInput.style.display = 'none';
-    feedbackSend.style.display = 'none';
-    showToast('Correction enregistree pour ' + agent.name);
+    feedbackSend.style.display  = 'none';
+    showToast('Correction enregistrée pour ' + agent.name);
   });
   feedbackSend.style.display = 'none'; feedbackSend.style.marginTop = '4px';
   feedbackZone.append(feedbackToggle, feedbackInput, feedbackSend);
@@ -217,45 +250,78 @@ function renderChatView(container, state, rerender) {
     state.chatHistory.push({ role:'user', content: msg });
     renderMessages();
 
-    const prefs = (agent.preferences || []).join('\n');
-    const sysContent = agent.system_prompt + (prefs ? '\n\nPreferences utilisateur :\n' + prefs : '');
-
     try {
-      let messages;
-      let backendId = agent.backendId || 'groq-llama';
+      let reply, strategy = '', traceSteps = [];
 
-      if (agent.role === 'web-search') {
-        const results = await searchWeb(msg, { maxResults: 5 });
-        const context = results.map((r, i) => (
-          `${i + 1}. ${r.title}\n${r.link}\n${r.snippet}`
-        )).join('\n\n');
+      if (isOrchestrator) {
+        // ── MODE ORCHESTRATEUR : moteur de résolution intelligent ────────────
+        const { reply: r, trace, newAgent } = await orchestratorResolve(
+          msg, state.agents, agent
+        );
+        reply = r;
+        traceSteps = trace;
+        strategy = trace.find(t => t.step === 'plan')?.data?.strategy || 'direct';
 
-        const intro = results.length
-          ? `Resultats de recherche fournis (top ${results.length}) :\n\n${context}`
-          : 'Attention : la recherche web n\'a retourne aucun resultat exploitable. Reponds en le signalant clairement.';
+        // Affichage trace
+        if (tracePanel) {
+          tracePanel.style.display = 'block';
+          tracePanel.innerHTML = traceSteps
+            .map(t => `<div>▸ [${t.step}] ${t.msg || JSON.stringify(t.data?.strategy || '')}</div>`)
+            .join('');
+        }
 
-        messages = [
-          { role: 'system', content: sysContent },
-          { role: 'system', content: intro },
-          { role: 'user', content: msg },
-        ];
+        // Si nouvel agent créé, proposer de le sauvegarder
+        if (newAgent) {
+          const keep = confirm(
+            `L'orchestrateur a créé l'agent "${newAgent.name}" (${newAgent.role}) pour répondre.\n` +
+            `L'ajouter définitivement à ta liste d'agents ?`
+          );
+          if (keep) {
+            await saveAgent(newAgent);
+            state.agents = state.agents.concat([newAgent]);
+            showToast(`Agent "${newAgent.name}" ajouté.`);
+            rerender();
+          }
+        }
+
+        state.chatHistory.push({ role:'assistant', content: reply, _orchestrated: true, _strategy: strategy });
+
+      } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
+        // ── MODE WEB-ANALYST / WEB-SEARCH : RAG pattern ─────────────────────
+        const results = await searchWeb(msg, { maxResults: 6 });
+        const context = results.length
+          ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
+          : 'Aucun résultat web disponible.';
+
+        const prefs = (agent.preferences || []).join('\n');
+        const sysContent = agent.system_prompt
+          + (prefs ? `\n\nPréférences :\n${prefs}` : '')
+          + `\n\nRÉSULTATS WEB (${results.length} sources) :\n${context}`;
+
+        const choice = await callLLM(agent.backendId || 'groq-llama', {
+          messages: [{ role:'system', content: sysContent }, { role:'user', content: msg }],
+          agentConfig: agent,
+        });
+        reply = choice?.message?.content || '(pas de réponse)';
+        state.chatHistory.push({ role:'assistant', content: reply });
+
       } else {
-        messages = [
+        // ── MODE LLM PUR ─────────────────────────────────────────────────────
+        const prefs = (agent.preferences || []).join('\n');
+        const sysContent = agent.system_prompt + (prefs ? `\n\nPréférences :\n${prefs}` : '');
+        const messages = [
           { role:'system', content: sysContent },
-          ...state.chatHistory.filter(m => m.role !== 'system')
+          ...state.chatHistory.filter(m => m.role !== 'system'),
         ];
+        const choice = await callLLM(agent.backendId || 'groq-llama', { messages, agentConfig: agent });
+        reply = choice?.message?.content || '(pas de réponse)';
+        state.chatHistory.push({ role:'assistant', content: reply });
       }
 
-      const choice = await callLLM(backendId, { messages, agentConfig: agent });
-      const reply = choice?.message?.content || '(pas de reponse)';
-      state.chatHistory.push({ role:'assistant', content: reply });
-
-      if (agent.role === 'orchestrator' && reply.includes('"name"') && reply.includes('"system_prompt"')) {
-        tryAutoCreateAgent(reply, state, rerender);
-      }
     } catch(e) {
       state.chatHistory.push({ role:'assistant', content:'⚠️ Erreur : ' + e.message });
     }
+
     sendBtn.disabled = false; sendBtn.textContent = 'Envoyer';
     renderMessages();
     agent.metrics = agent.metrics || {};
@@ -267,36 +333,7 @@ function renderChatView(container, state, rerender) {
   container.appendChild(inputRow);
 }
 
-async function tryAutoCreateAgent(reply, state, rerender) {
-  try {
-    const match = reply.match(/\{[\s\S]*?\}/);
-    if (!match) return;
-    const parsed = JSON.parse(match[0]);
-    if (!parsed.name || !parsed.system_prompt) return;
-    const newAgent = {
-      id: 'agent-' + Date.now(),
-      name: parsed.name,
-      role: parsed.role || 'generic',
-      description: parsed.description || '',
-      tags: parsed.tags || [],
-      backendId: parsed.backendId || 'groq-llama',
-      system_prompt: parsed.system_prompt,
-      memory_profile: parsed.memory_profile || { level:'normal' },
-      preferences: [], examples: [],
-      metrics: { corrections:0, confidence:1, lastUsed:null },
-      version: 1,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    if (confirm('Orchestrateur propose un nouvel agent : "' + newAgent.name + '".\nL\'ajouter au registre ?')) {
-      await saveAgent(newAgent);
-      state.agents = state.agents.concat([newAgent]);
-      showToast('Agent "' + newAgent.name + '" cree automatiquement.');
-      rerender();
-    }
-  } catch (_) { /* JSON mal forme */ }
-}
-
+// ─── Fabrique View ───────────────────────────────────────────────────────────
 function renderFabriqueView(container, state, rerender) {
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
@@ -305,17 +342,17 @@ function renderFabriqueView(container, state, rerender) {
   container.appendChild(header);
 
   const desc = el('div', { fontSize:'12px', color:'#888', marginBottom:'12px', lineHeight:'1.5' });
-  desc.textContent = 'Decris l\'agent en quelques mots et clique "Generer". La Fabrique creera un agent specialise pret a l\'emploi.';
+  desc.textContent = 'Décris l\'agent en quelques mots. La Fabrique choisira automatiquement le bon rôle (web-analyst si besoin de données temps réel, LLM sinon).';
   container.appendChild(desc);
 
-  const briefLabel = labelEl('Brief (ex: agent pour suivre mes abonnements)');
+  const briefLabel = labelEl('Brief (ex: programme TV des 6 chaînes nationales)');
   const briefInput = document.createElement('textarea');
   Object.assign(briefInput.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
     borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
   });
   briefInput.rows = 3;
-  briefInput.placeholder = 'Agent pour gerer mes abonnements mensuels...';
+  briefInput.placeholder = 'Agent pour voir le programme TV ce soir...';
   container.append(briefLabel, briefInput);
 
   const backendLabel = labelEl('Backend LLM');
@@ -337,8 +374,8 @@ function renderFabriqueView(container, state, rerender) {
 
   const genBtn = btn('✨ Generer avec la Fabrique', 'primary', async () => {
     const brief = briefInput.value.trim();
-    if (!brief) { showToast('Decris l\'agent d\'abord.', true); return; }
-    genBtn.textContent = '⏳ Generation…'; genBtn.disabled = true;
+    if (!brief) { showToast('Décris l\'agent d\'abord.', true); return; }
+    genBtn.textContent = '⏳ Génération…'; genBtn.disabled = true;
     previewZone.innerHTML = ''; previewZone.style.display = 'none';
     try {
       const fabAgent = state.agents.find(a => a.role === 'factory');
@@ -350,15 +387,17 @@ function renderFabriqueView(container, state, rerender) {
       const choice = await callLLM(fabAgent.backendId || 'groq-llama', { messages });
       const raw = choice?.message?.content || '';
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('La Fabrique n\'a pas renvoye de JSON valide. Reessaie.');
+      if (!match) throw new Error('La Fabrique n\'a pas renvoyé de JSON valide. Réessaie.');
       const parsed = JSON.parse(match[0]);
       if (!parsed.name || !parsed.system_prompt) throw new Error('JSON incomplet.');
 
+      const roleLabel = parsed.role === ROLES.WEB_ANALYST ? '🔎 WEB+LLM (web-analyst)' : parsed.role;
+
       previewZone.style.display = 'block';
       const preTitle = el('div', { fontWeight:'600', marginBottom:'6px', marginTop:'12px' });
-      preTitle.textContent = 'Previsualisation de l\'agent genere :';
+      preTitle.textContent = 'Prévisualisation de l\'agent généré :';
       const preCard = el('div', { background:'#1a2a1a', border:'1px solid #2a4a2a', borderRadius:'10px', padding:'12px', fontSize:'12px', lineHeight:'1.6' });
-      preCard.innerHTML = '📛 <b>' + esc(parsed.name) + '</b> <small>(' + esc(parsed.role || '') + ')</small><br>'
+      preCard.innerHTML = '📛 <b>' + esc(parsed.name) + '</b> <small>(' + esc(roleLabel) + ')</small><br>'
         + '<span style="color:#888">' + esc(parsed.description || '') + '</span><br><br>'
         + '<details><summary style="cursor:pointer;color:#5a9">Voir le prompt</summary><pre style="white-space:pre-wrap;font-size:11px;color:#aaa;margin-top:6px">'
         + esc(parsed.system_prompt) + '</pre></details>';
@@ -378,7 +417,7 @@ function renderFabriqueView(container, state, rerender) {
         };
         await saveAgent(newAgent);
         state.agents = state.agents.concat([newAgent]);
-        showToast('Agent "' + newAgent.name + '" ajoute.');
+        showToast('Agent "' + newAgent.name + '" ajouté.');
         state.view = 'agents'; rerender();
       });
       previewZone.append(preTitle, preCard, confirmBtn);
@@ -390,6 +429,7 @@ function renderFabriqueView(container, state, rerender) {
   container.appendChild(genBtn);
 }
 
+// ─── Edit View ───────────────────────────────────────────────────────────────
 function renderEditView(container, state, rerender) {
   const agent = state.editingAgent;
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
@@ -458,23 +498,22 @@ function renderEditView(container, state, rerender) {
     await saveAgent(agent);
     state.agents = state.agents.map(a => a.id === agent.id ? agent : a);
     state.view = 'agents'; state.editingAgent = null;
-    showToast('Agent "' + agent.name + '" sauvegarde.');
+    showToast('Agent "' + agent.name + '" sauvegardé.');
     rerender();
   });
   form.appendChild(saveBtn);
   container.appendChild(form);
 }
 
+// ─── Settings View ───────────────────────────────────────────────────────────
 function renderSettings(container, state, rerender) {
   const backends = listBackends();
   const list = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
 
-  // ── Note générale ──────────────────────────────────────────────────────────
   const noteEl = el('div', { fontSize:'12px', color:'#888', marginBottom:'8px', lineHeight:'1.5' });
-  noteEl.innerHTML = '🔑 Les cles API sont stockees localement sur cet appareil uniquement.<br>Groq est gratuit avec un compte sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
+  noteEl.innerHTML = '🔑 Les clés API sont stockées localement sur cet appareil uniquement.<br>Groq est gratuit avec un compte sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
   list.appendChild(noteEl);
 
-  // ── Backends LLM ───────────────────────────────────────────────────────────
   backends.forEach((b) => {
     const card = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
     const titleEl = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
@@ -484,7 +523,7 @@ function renderSettings(container, state, rerender) {
     card.append(titleEl, typeEl);
 
     if (b.requiresApiKey && b.envKey) {
-      const lEl = labelEl('Cle API : ' + b.envKey);
+      const lEl = labelEl('Clé API : ' + b.envKey);
       const inp = document.createElement('input');
       inp.type = 'password'; inp.autocomplete = 'off';
       Object.assign(inp.style, {
@@ -493,29 +532,26 @@ function renderSettings(container, state, rerender) {
       });
       inp.placeholder = b.envKey.includes('GROQ') ? 'gsk_...' : 'sk-...';
       inp.value = lsGet(b.envKey) || '';
-      inp.onchange = () => { lsSet(b.envKey, inp.value.trim()); showToast('Cle ' + b.envKey + ' sauvegardee.'); };
+      inp.onchange = () => { lsSet(b.envKey, inp.value.trim()); showToast('Clé ' + b.envKey + ' sauvegardée.'); };
       card.append(lEl, inp);
-
-      // Indicateur visuel cle presente / absente
       const statusDot = el('div', { fontSize:'11px', marginTop:'4px' });
       const hasKey = !!(lsGet(b.envKey) || '').trim();
-      statusDot.textContent = hasKey ? '✅ Cle presente' : '⚠️ Cle manquante';
+      statusDot.textContent = hasKey ? '✅ Clé présente' : '⚠️ Clé manquante';
       statusDot.style.color = hasKey ? '#5a9' : '#a66';
       card.appendChild(statusDot);
     } else {
       const freeEl = el('div', { fontSize:'12px', color:'#5a9' });
-      freeEl.textContent = '✅ Gratuit, aucune cle requise';
+      freeEl.textContent = '✅ Gratuit, aucune clé requise';
       card.appendChild(freeEl);
     }
     list.appendChild(card);
   });
 
-  // ── Section Recherche Web ──────────────────────────────────────────────────
+  // Recherche Web
   const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
   const sTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
   sTitle.textContent = '🌐 Recherche Web';
 
-  // Statut moteur actif
   const status = getSearchStatus();
   const statusBadge = el('div', { fontSize:'11px', marginBottom:'8px', padding:'4px 8px', borderRadius:'6px',
     background: status.engine === 'serper' ? '#1a3a1a' : '#1a1a3a',
@@ -526,11 +562,10 @@ function renderSettings(container, state, rerender) {
   searchCard.append(sTitle, statusBadge);
 
   const sDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  sDesc.innerHTML = 'Strategie : <b>Serper.dev</b> en 1er (2500 req/mois gratuites, vrai Google) → <b>SearXNG</b> en fallback (illimite, sans cle).<br>Cree un compte gratuit sur <a href="https://serper.dev" target="_blank" style="color:#5af">serper.dev</a> pour obtenir ta cle.';
+  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> en 1er → <b>SearXNG</b> en fallback.<br>Utilisé par les agents <b>web-analyst</b> et <b>web-search</b>.';
   searchCard.appendChild(sDesc);
 
-  // Champ clé Serper
-  const serperLabel = labelEl('Cle Serper.dev (SERPER_KEY) — optionnelle mais recommandee');
+  const serperLabel = labelEl('Clé Serper.dev (SERPER_KEY)');
   const serperInput = document.createElement('input');
   Object.assign(serperInput.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
@@ -539,16 +574,15 @@ function renderSettings(container, state, rerender) {
   serperInput.type = 'password';
   serperInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
   serperInput.value = lsGet('SERPER_KEY') || '';
-  serperInput.onchange = () => { lsSet('SERPER_KEY', serperInput.value.trim()); showToast('SERPER_KEY sauvegardee.'); rerender(); };
+  serperInput.onchange = () => { lsSet('SERPER_KEY', serperInput.value.trim()); showToast('SERPER_KEY sauvegardée.'); rerender(); };
 
   const serperStatus = el('div', { fontSize:'11px', marginBottom:'8px' });
   const hasSerper = !!(lsGet('SERPER_KEY') || '').trim();
-  serperStatus.textContent = hasSerper ? '✅ Cle Serper presente' : '⚠️ Pas de cle Serper — SearXNG sera utilise en fallback direct';
+  serperStatus.textContent = hasSerper ? '✅ Clé Serper présente' : '⚠️ Pas de clé Serper — SearXNG sera utilisé';
   serperStatus.style.color = hasSerper ? '#5a9' : '#a66';
 
   searchCard.append(serperLabel, serperInput, serperStatus);
 
-  // Champ proxy
   const proxyLabel = labelEl('URL du proxy CORS (SEARCH_PROXY_URL)');
   const proxyInput = document.createElement('input');
   Object.assign(proxyInput.style, {
@@ -558,7 +592,7 @@ function renderSettings(container, state, rerender) {
   proxyInput.type = 'text';
   proxyInput.placeholder = 'https://proxy.sicho95.workers.dev/';
   proxyInput.value = lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/';
-  proxyInput.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInput.value.trim()); showToast('SEARCH_PROXY_URL sauvegardee.'); };
+  proxyInput.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInput.value.trim()); showToast('SEARCH_PROXY_URL sauvegardée.'); };
   searchCard.append(proxyLabel, proxyInput);
 
   list.appendChild(searchCard);
