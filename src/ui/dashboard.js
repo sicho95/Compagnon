@@ -19,6 +19,28 @@ function tag(text, color) {
   return s;
 }
 
+// ─── Sépare la réponse principale des sources ─────────────────────────────────
+// Détecte un bloc "Source(s) :" ou "Source :" à la fin du message
+function splitReplyAndSources(text) {
+  // Patterns courants : "Source : ...", "Sources :\n...", "Source(s) :\n..."
+  const sourcePattern = /\n+(?:Sources?\s*(?:\(s\))?\s*:.*)/si;
+  const match = text.match(sourcePattern);
+  if (!match) return { main: text, sources: '' };
+  const idx = text.indexOf(match[0]);
+  return {
+    main: text.slice(0, idx).trimEnd(),
+    sources: match[0].trim(),
+  };
+}
+
+// ─── Texte pour TTS : retire les sources et les URLs ──────────────────────────
+function textForTTS(text) {
+  // Supprimer le bloc sources
+  const { main } = splitReplyAndSources(text);
+  // Supprimer les URLs restantes
+  return main.replace(/https?:\/\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
 export function renderDashboard(container, state, rerender) {
   container.innerHTML = '';
 
@@ -197,7 +219,34 @@ function renderChatView(container, state, rerender) {
         background: m.role === 'user' ? '#1a3a2a' : (m._orchestrated ? '#1a1a3a' : '#1e1e2e'),
         color: '#ddd', whiteSpace:'pre-wrap'
       });
-      bubble.textContent = m.content;
+
+      if (m.role === 'assistant') {
+        // Séparer réponse principale et sources
+        const { main, sources } = splitReplyAndSources(m.content);
+        bubble.textContent = main;
+
+        if (sources) {
+          const srcEl = el('div', {
+            marginTop: '10px',
+            paddingTop: '8px',
+            borderTop: '1px solid #2a2a3a',
+            fontSize: '10px',
+            color: '#556',
+            lineHeight: '1.5',
+            whiteSpace: 'pre-wrap',
+          });
+          // Rendre les URLs cliquables
+          srcEl.innerHTML = sources.replace(
+            /(https?:\/\/[^\s<]+)/g,
+            '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#558;word-break:break-all;">$1</a>'
+          );
+          bubble.appendChild(srcEl);
+        }
+
+      } else {
+        bubble.textContent = m.content;
+      }
+
       if (m._strategy) {
         const sb = el('div', { fontSize:'10px', color:'#5a7a9a', marginTop:'4px' });
         sb.textContent = '⚙️ ' + m._strategy;
@@ -295,13 +344,10 @@ function renderChatView(container, state, rerender) {
 
       } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
         // ── WEB ANALYST : découpage multi-requêtes si demande complexe ────────
-        // Détecter si la requête mentionne plusieurs entités (ex: plusieurs chaînes TV)
-        // Pattern simple : présence de virgules, "et", ou liste de mots-clés connus
         const subQueries = splitIntoSubQueries(msg);
         let context;
 
         if (subQueries.length > 1) {
-          // Multi-requêtes (fallback DDG en particulier)
           const { allResults } = await searchWebMulti(subQueries, { maxResultsPerQuery: 3 });
           context = allResults.length
             ? allResults.map((r, i) => `[${i+1}] (${r._query})\n${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
@@ -349,9 +395,10 @@ function renderChatView(container, state, rerender) {
     agent.metrics.lastUsed = new Date().toISOString();
     await saveAgent(agent);
 
-    // ── TTS : lire la réponse sauf si mode silencieux ──────────────────────
+    // ── TTS : lire la réponse sauf si mode silencieux — SANS les sources ──
     if (reply && !isSilentMode()) {
-      speak(reply).catch(e => console.warn('[Nestor/TTS]', e.message));
+      const ttsText = textForTTS(reply);
+      if (ttsText) speak(ttsText).catch(e => console.warn('[Nestor/TTS]', e.message));
     }
   }
 
@@ -360,30 +407,19 @@ function renderChatView(container, state, rerender) {
 }
 
 // ─── Découpage de requête complexe en sous-requêtes ──────────────────────────
-// Heuristique simple :
-//   - Présence de "/" → split
-//   - Présence de virgules avec plusieurs mots → split
-//   - Mots-clés TV connus (TF1, France2, M6, etc.) → une requête par chaîne
-
 const TV_CHAINS = ['TF1','France 2','France2','France 3','France3','Canal+','France 5','France5','M6','Arte','C8','CNews','BFM','TMC'];
 
 function splitIntoSubQueries(query) {
-  // Détection TV
   const foundChains = TV_CHAINS.filter(c => query.toLowerCase().includes(c.toLowerCase()));
   if (foundChains.length >= 3) {
-    // Construire une requête par chaîne
     const base = query.replace(new RegExp(foundChains.join('|'), 'gi'), '').trim()
       .replace(/,|et|\s+/g, ' ').trim();
     return foundChains.map(c => (base ? base + ' ' + c : 'programme ' + c + ' ce soir'));
   }
-
-  // Split sur "/"
   if (query.includes('/')) {
     const parts = query.split('/').map(s => s.trim()).filter(Boolean);
     if (parts.length >= 2) return parts;
   }
-
-  // Requête simple
   return [query];
 }
 
@@ -441,355 +477,204 @@ function renderFabriqueView(container, state, rerender) {
       const choice = await callLLM(fabAgent.backendId || 'groq-llama', { messages });
       const raw = choice?.message?.content || '';
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('La Fabrique n\'a pas renvoyé de JSON valide. Réessaie.');
-      const parsed = JSON.parse(match[0]);
-      if (!parsed.name || !parsed.system_prompt) throw new Error('JSON incomplet.');
-
-      const roleLabel = parsed.role === ROLES.WEB_ANALYST ? '🔎 WEB+LLM (web-analyst)' : parsed.role;
+      if (!match) throw new Error('Réponse Fabrique invalide (pas de JSON).');
+      const newAgent = JSON.parse(match[0]);
+      newAgent.id = 'agent-' + Date.now();
+      newAgent.backendId = backendSel.value || 'groq-llama';
+      newAgent.preferences = [];
+      newAgent.examples = [];
+      newAgent.metrics = { corrections: 0, confidence: 1, lastUsed: null };
+      newAgent.version = 1;
+      newAgent.createdAt = new Date().toISOString();
+      newAgent.updatedAt = new Date().toISOString();
 
       previewZone.style.display = 'block';
-      const preTitle = el('div', { fontWeight:'600', marginBottom:'6px', marginTop:'12px' });
-      preTitle.textContent = 'Prévisualisation de l\'agent généré :';
-      const preCard = el('div', { background:'#1a2a1a', border:'1px solid #2a4a2a', borderRadius:'10px', padding:'12px', fontSize:'12px', lineHeight:'1.6' });
-      preCard.innerHTML = '📛 <b>' + esc(parsed.name) + '</b> <small>(' + esc(roleLabel) + ')</small><br>'
-        + '<span style="color:#888">' + esc(parsed.description || '') + '</span><br><br>'
-        + '<details><summary style="cursor:pointer;color:#5a9">Voir le prompt</summary><pre style="white-space:pre-wrap;font-size:11px;color:#aaa;margin-top:6px">'
-        + esc(parsed.system_prompt) + '</pre></details>';
+      previewZone.innerHTML = '';
+      const previewTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px', color:'#9ef' });
+      previewTitle.textContent = '👁 Aperçu : ' + newAgent.name + ' (' + newAgent.role + ')';
+      const previewDesc = el('div', { fontSize:'12px', color:'#888', marginBottom:'6px' });
+      previewDesc.textContent = newAgent.description || '';
+      const previewTags = el('div', { display:'flex', flexWrap:'wrap', gap:'4px', marginBottom:'8px' });
+      (newAgent.tags || []).forEach(t => previewTags.appendChild(tag(t)));
+      previewZone.append(previewTitle, previewDesc, previewTags);
 
-      const confirmBtn = btn('✔ Ajouter cet agent', 'primary', async () => {
-        const newAgent = {
-          id: 'agent-' + Date.now(),
-          name: parsed.name, role: parsed.role || 'generic',
-          description: parsed.description || '',
-          tags: parsed.tags || [], backendId: backendSel.value,
-          system_prompt: parsed.system_prompt,
-          memory_profile: parsed.memory_profile || { level:'normal' },
-          preferences: [], examples: [],
-          metrics: { corrections:0, confidence:1, lastUsed:null },
-          version: 1,
-          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        };
+      const saveBtn = btn('✅ Sauvegarder cet agent', 'primary', async () => {
         await saveAgent(newAgent);
         state.agents = state.agents.concat([newAgent]);
-        showToast('Agent "' + newAgent.name + '" ajouté.');
-        state.view = 'agents'; rerender();
+        showToast('Agent "' + newAgent.name + '" créé !');
+        state.view = 'agents';
+        rerender();
       });
-      previewZone.append(preTitle, preCard, confirmBtn);
+      previewZone.appendChild(saveBtn);
     } catch(e) {
       showToast('Erreur Fabrique : ' + e.message, true);
     }
-    genBtn.textContent = '✨ Générer avec la Fabrique'; genBtn.disabled = false;
+    genBtn.textContent = '✨ Générer avec la Fabrique';
+    genBtn.disabled = false;
   });
   container.appendChild(genBtn);
+
+  const cancelBtn = btn('← Retour', '', () => { state.view = 'agents'; rerender(); });
+  cancelBtn.style.marginTop = '8px';
+  container.appendChild(cancelBtn);
 }
 
 // ─── Edit View ───────────────────────────────────────────────────────────────
 function renderEditView(container, state, rerender) {
   const agent = state.editingAgent;
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'14px', flex:'1' });
-  title.textContent = '✏️ ' + agent.name;
-  header.append(title);
-  container.appendChild(header);
 
-  const form = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', marginBottom:'12px' });
+  title.textContent = '✏️ Éditer : ' + agent.name;
+  container.appendChild(title);
+
   const fields = [
-    { key:'name', lbl:'Nom', type:'text' },
-    { key:'role', lbl:'Role (slug)', type:'text' },
-    { key:'description', lbl:'Description', type:'textarea' },
-    { key:'system_prompt', lbl:'System prompt', type:'textarea', rows:8 },
+    { key:'name',          label:'Nom',           type:'input'    },
+    { key:'description',   label:'Description',   type:'textarea' },
+    { key:'system_prompt', label:'System Prompt', type:'textarea', rows:6 },
+    { key:'tags',          label:'Tags (virgule)',type:'input'    },
   ];
-  fields.forEach(({ key, lbl, type, rows }) => {
-    const lEl = labelEl(lbl);
-    let inp;
+
+  fields.forEach(({ key, label, type, rows }) => {
+    container.appendChild(labelEl(label));
+    let el2;
     if (type === 'textarea') {
-      inp = document.createElement('textarea');
-      inp.rows = rows || 3;
+      el2 = document.createElement('textarea');
+      el2.rows = rows || 3;
     } else {
-      inp = document.createElement('input');
-      inp.type = 'text';
+      el2 = document.createElement('input');
     }
-    Object.assign(inp.style, {
+    Object.assign(el2.style, {
       width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-      borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+      borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box', marginBottom:'8px'
     });
-    inp.value = agent[key] || '';
-    inp.oninput = () => { agent[key] = inp.value; };
-    form.append(lEl, inp);
+    el2.value = key === 'tags'
+      ? (agent.tags || []).join(', ')
+      : (agent[key] || '');
+    el2.addEventListener('input', () => {
+      agent[key] = key === 'tags'
+        ? el2.value.split(',').map(s => s.trim()).filter(Boolean)
+        : el2.value;
+    });
+    container.appendChild(el2);
   });
 
-  const bLabel = labelEl('Backend LLM');
-  const bSel = document.createElement('select');
-  Object.assign(bSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  // Backend selector
+  container.appendChild(labelEl('Backend LLM'));
+  const backendSel = document.createElement('select');
+  Object.assign(backendSel.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', marginBottom:'10px'
+  });
   listBackends().forEach(b => {
     const opt = document.createElement('option');
     opt.value = b.id; opt.textContent = b.label;
     if (b.id === (agent.backendId || 'groq-llama')) opt.selected = true;
-    bSel.appendChild(opt);
+    backendSel.appendChild(opt);
   });
-  bSel.onchange = () => { agent.backendId = bSel.value; };
-  form.append(bLabel, bSel);
+  backendSel.addEventListener('change', () => { agent.backendId = backendSel.value; });
+  container.appendChild(backendSel);
 
-  if (agent.preferences && agent.preferences.length > 0) {
-    const pLabel = labelEl('📋 Préférences apprises (' + agent.preferences.length + ')');
-    const pList = el('div', { background:'#111', border:'1px solid #222', borderRadius:'8px', padding:'8px', fontSize:'12px', color:'#5a9' });
-    agent.preferences.forEach((p, i) => {
-      const row = el('div', { display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'6px', marginBottom:'4px' });
-      const txt = el('span', {}); txt.textContent = '• ' + p;
-      const delBtn = btn('✕', '', () => {
-        agent.preferences.splice(i, 1);
-        saveAgent(agent);
-        state.agents = state.agents.map(a => a.id === agent.id ? agent : a);
-        renderEditView(container, state, rerender);
-      });
-      delBtn.style.cssText = 'background:none;color:#f66;border:none;cursor:pointer;font-size:12px;padding:0;flex-shrink:0';
-      row.append(txt, delBtn); pList.appendChild(row);
-    });
-    form.append(pLabel, pList);
-  }
-
-  const saveBtn = btn('💾 Enregistrer', 'primary', async () => {
+  const btns = el('div', { display:'flex', gap:'8px', marginTop:'8px' });
+  const saveBtn = btn('💾 Sauvegarder', 'primary', async () => {
+    agent.tags = Array.isArray(agent.tags) ? agent.tags : (agent.tags || '').split(',').map(s=>s.trim()).filter(Boolean);
+    agent.updatedAt = new Date().toISOString();
     await saveAgent(agent);
     state.agents = state.agents.map(a => a.id === agent.id ? agent : a);
-    state.view = 'agents'; state.editingAgent = null;
     showToast('Agent "' + agent.name + '" sauvegardé.');
+    state.view = 'agents';
     rerender();
   });
-  form.appendChild(saveBtn);
-  container.appendChild(form);
+  const cancelBtn = btn('← Annuler', '', () => { state.view = 'agents'; rerender(); });
+  btns.append(saveBtn, cancelBtn);
+  container.appendChild(btns);
 }
 
-// ─── Settings View ───────────────────────────────────────────────────────────
+// ─── Settings View ────────────────────────────────────────────────────────────
 function renderSettings(container, state, rerender) {
-  const list = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', marginBottom:'12px' });
+  title.textContent = '⚙️ Réglages';
+  container.appendChild(title);
 
-  // ── Note générale ──
-  const noteEl = el('div', { fontSize:'12px', color:'#888', marginBottom:'8px', lineHeight:'1.5' });
-  noteEl.innerHTML = '🔑 Clés API stockées localement sur cet appareil.<br>Groq gratuit sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
-  list.appendChild(noteEl);
-
-  // ── Groq (clé unique, modèles dynamiques) ──
-  const groqCard = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
-  const groqTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  groqTitle.textContent = '🟢 Groq';
-  const groqDesc = el('div', { fontSize:'11px', color:'#666', marginBottom:'8px' });
-  groqDesc.innerHTML = 'Une seule clé pour tous les modèles Groq. La liste des modèles est chargée dynamiquement.';
-  groqCard.append(groqTitle, groqDesc);
-
-  const groqLbl = labelEl('Clé API Groq (GROQ_API_KEY)');
-  const groqInp = document.createElement('input');
-  groqInp.type = 'password'; groqInp.autocomplete = 'off';
-  Object.assign(groqInp.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
-  });
-  groqInp.placeholder = 'gsk_...';
-  groqInp.value = lsGet('GROQ_API_KEY') || '';
-  groqInp.onchange = async () => {
-    lsSet('GROQ_API_KEY', groqInp.value.trim());
-    showToast('Clé Groq sauvegardée.');
-    // Recharger les modèles Groq dynamiquement
-    await loadGroqModels();
-    rerender();
-  };
-  groqCard.append(groqLbl, groqInp);
-
-  const groqStatus = el('div', { fontSize:'11px', marginTop:'4px' });
-  const hasGroq = !!(lsGet('GROQ_API_KEY') || '').trim();
-  groqStatus.textContent = hasGroq ? '✅ Clé présente' : '⚠️ Clé manquante';
-  groqStatus.style.color = hasGroq ? '#5a9' : '#a66';
-  groqCard.appendChild(groqStatus);
-
-  // Bouton refresh modèles Groq
-  const refreshBtn = btn('🔄 Rafraîchir modèles Groq', '', async () => {
-    refreshBtn.disabled = true; refreshBtn.textContent = '⏳';
-    await loadGroqModels();
-    rerender();
-  });
-  Object.assign(refreshBtn.style, { marginTop:'6px', fontSize:'11px' });
-  groqCard.appendChild(refreshBtn);
-  list.appendChild(groqCard);
-
-  // ── Perplexity ──
-  const pxCard = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
-  const pxTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'8px' });
-  pxTitle.textContent = '🔵 Perplexity Sonar';
-  const pxLbl = labelEl('Clé API Perplexity (PERPLEXITY_API_KEY)');
-  const pxInp = document.createElement('input');
-  pxInp.type = 'password'; pxInp.autocomplete = 'off';
-  Object.assign(pxInp.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
-  });
-  pxInp.placeholder = 'pplx-...';
-  pxInp.value = lsGet('PERPLEXITY_API_KEY') || '';
-  pxInp.onchange = () => { lsSet('PERPLEXITY_API_KEY', pxInp.value.trim()); showToast('Clé Perplexity sauvegardée.'); };
-  pxCard.append(pxTitle, pxLbl, pxInp);
-  list.appendChild(pxCard);
-
-  // ── Recherche Web ──
-  const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px' });
-  const sTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  sTitle.textContent = '🌐 Recherche Web';
-
-  const status = getSearchStatus();
-  const statusBadge = el('div', { fontSize:'11px', marginBottom:'8px', padding:'4px 8px', borderRadius:'6px',
-    background: status.engine === 'serper' ? '#1a3a1a' : '#1a1a3a',
-    color: status.engine === 'serper' ? '#7ef' : '#88f', display:'inline-block'
-  });
-  statusBadge.textContent = (status.engine === 'serper' ? '🟢 Serper.dev actif' : '🔵 DuckDuckGo fallback') + ' — ' + status.reason;
-  searchCard.append(sTitle, statusBadge);
-
-  const sDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> → <b>DuckDuckGo</b> (sans clé).<br>Requêtes complexes découpées en multi-requêtes automatiquement.';
-  searchCard.appendChild(sDesc);
-
-  const serperLbl = labelEl('Clé Serper.dev (SERPER_KEY)');
-  const serperInp = document.createElement('input');
-  Object.assign(serperInp.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box', marginBottom:'6px'
-  });
-  serperInp.type = 'password';
-  serperInp.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
-  serperInp.value = lsGet('SERPER_KEY') || '';
-  serperInp.onchange = () => { lsSet('SERPER_KEY', serperInp.value.trim()); showToast('SERPER_KEY sauvegardée.'); rerender(); };
-
-  const serperStatus = el('div', { fontSize:'11px', marginBottom:'8px' });
-  const hasSerper = !!(lsGet('SERPER_KEY') || '').trim();
-  serperStatus.textContent = hasSerper ? '✅ Clé Serper présente' : '⚠️ Pas de clé — DuckDuckGo sera utilisé';
-  serperStatus.style.color = hasSerper ? '#5a9' : '#a66';
-  searchCard.append(serperLbl, serperInp, serperStatus);
-
-  const proxyLbl = labelEl('Proxy CORS (SEARCH_PROXY_URL)');
-  const proxyInp = document.createElement('input');
-  Object.assign(proxyInp.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
-  });
-  proxyInp.type = 'text';
-  proxyInp.placeholder = 'https://proxy.sicho95.workers.dev/';
-  proxyInp.value = lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/';
-  proxyInp.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInp.value.trim()); showToast('Proxy sauvegardé.'); };
-  searchCard.append(proxyLbl, proxyInp);
-  list.appendChild(searchCard);
-
-  // ── TTS ──
-  const ttsCard = el('div', { background:'#101018', border:'1px solid #2a1a3a', borderRadius:'10px', padding:'12px' });
-  const ttsTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  ttsTitle.textContent = '🔊 Voix (TTS)';
-  const ttsDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'8px', lineHeight:'1.5' });
-  ttsDesc.innerHTML = 'La réponse est lue à voix haute sauf si le mode silencieux est activé.<br>Moteur : voix du navigateur/téléphone (défaut) ou Gemini TTS (si clé présente).';
-  ttsCard.append(ttsTitle, ttsDesc);
-
-  // Toggle silencieux
-  const silentRow = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
-  const silentLbl = el('div', { fontSize:'12px', color:'#888' }); silentLbl.textContent = 'Mode silencieux';
-  const silentToggle = btn(isSilentMode() ? '🔇 Activé' : '🔊 Désactivé', '', () => {
-    const newMode = !isSilentMode();
-    setSilentMode(newMode);
-    silentToggle.textContent = newMode ? '🔇 Activé' : '🔊 Désactivé';
-    silentToggle.style.background = newMode ? '#3a1a1a' : '#1a3a1a';
-    silentToggle.style.color = newMode ? '#f88' : '#7ef';
-    if (newMode) stopSpeech();
-    showToast(newMode ? 'Mode silencieux activé.' : 'Voix activée.');
-  });
-  silentToggle.style.background = isSilentMode() ? '#3a1a1a' : '#1a3a1a';
-  silentToggle.style.color = isSilentMode() ? '#f88' : '#7ef';
-  silentRow.append(silentLbl, silentToggle);
-  ttsCard.appendChild(silentRow);
-
-  // Sélecteur moteur TTS
-  const engineLbl = labelEl('Moteur TTS');
-  const engineSel = document.createElement('select');
-  Object.assign(engineSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px', marginBottom:'6px' });
-  [{ v:'browser', l:'🖥 Voix du navigateur / téléphone (défaut, gratuit)' }, { v:'gemini', l:'✨ Gemini TTS (cloud, nécessite clé Gemini)' }]
-    .forEach(({ v, l }) => {
-      const opt = document.createElement('option');
-      opt.value = v; opt.textContent = l;
-      if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === v) opt.selected = true;
-      engineSel.appendChild(opt);
+  // Voice selector
+  const voices = listBrowserVoices();
+  if (voices.length > 0) {
+    container.appendChild(labelEl('Voix TTS'));
+    const sel = document.createElement('select');
+    Object.assign(sel.style, {
+      width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+      borderRadius:'8px', padding:'8px', fontSize:'13px', marginBottom:'10px'
     });
-  engineSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engineSel.value); showToast('Moteur TTS : ' + engineSel.value); };
-  ttsCard.append(engineLbl, engineSel);
+    voices.forEach((v, i) => {
+      const opt = document.createElement('option');
+      opt.value = i; opt.textContent = v.name + ' (' + v.lang + ')';
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => {
+      lsSet('nestor_voice_index', sel.value);
+      showToast('Voix sélectionnée : ' + voices[sel.value]?.name);
+    });
+    const saved = lsGet('nestor_voice_index');
+    if (saved !== null) sel.value = saved;
+    container.appendChild(sel);
+  }
 
-  // Clé Gemini (pour TTS Gemini)
-  const geminiLbl = labelEl('Clé Gemini API (GEMINI_API_KEY) — pour TTS Gemini');
-  const geminiInp = document.createElement('input');
-  geminiInp.type = 'password'; geminiInp.autocomplete = 'off';
-  Object.assign(geminiInp.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  // Groq models
+  const loadModelsBtn = btn('🔄 Charger modèles Groq', '', async () => {
+    try {
+      const models = await loadGroqModels();
+      showToast(models.length + ' modèles Groq chargés.');
+      rerender();
+    } catch(e) { showToast('Erreur : ' + e.message, true); }
   });
-  geminiInp.placeholder = 'AIza...';
-  geminiInp.value = lsGet('GEMINI_API_KEY') || '';
-  geminiInp.onchange = () => { lsSet('GEMINI_API_KEY', geminiInp.value.trim()); showToast('Clé Gemini sauvegardée.'); };
-  const geminiStatus = el('div', { fontSize:'11px', marginTop:'4px' });
-  const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
-  geminiStatus.textContent = hasGemini ? '✅ Clé Gemini présente' : 'ℹ️ Optionnel — voix navigateur utilisée si absent';
-  geminiStatus.style.color = hasGemini ? '#5a9' : '#777';
-  ttsCard.append(geminiLbl, geminiInp, geminiStatus);
+  container.appendChild(loadModelsBtn);
 
-  // Bouton test TTS
-  const testBtn = btn('▶ Tester la voix', '', async () => {
-    testBtn.disabled = true;
-    const { speak: _speak } = await import('../api/tts.js');
-    await _speak('Bonjour, je suis Nestor. La voix fonctionne correctement.').catch(e => showToast('TTS erreur : ' + e.message, true));
-    testBtn.disabled = false;
-  });
-  Object.assign(testBtn.style, { marginTop:'8px' });
-  ttsCard.appendChild(testBtn);
-
-  list.appendChild(ttsCard);
-  container.appendChild(list);
+  const backBtn = btn('← Retour', '', () => { state.view = 'agents'; rerender(); });
+  backBtn.style.marginTop = '8px';
+  container.appendChild(backBtn);
 }
 
-// ─── Utilitaires DOM ──────────────────────────────────────────────────────────
-function el(tagName, styles) {
-  const e = document.createElement(tagName);
-  if (styles) Object.assign(e.style, styles);
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function el(tag, styles = {}) {
+  const e = document.createElement(tag);
+  Object.assign(e.style, styles);
   return e;
 }
+
 function btn(text, variant, onClick) {
   const b = document.createElement('button');
   b.textContent = text;
+  const isPrimary = variant === 'primary';
   Object.assign(b.style, {
-    padding: variant === 'primary' ? '7px 14px' : '6px 12px',
-    background: variant === 'primary' ? '#1a4a2a' : '#222',
-    color: variant === 'primary' ? '#7ef' : '#ccc',
-    border: '1px solid ' + (variant === 'primary' ? '#2a6a3a' : '#333'),
-    borderRadius: '8px', fontSize: '13px', cursor:'pointer', whiteSpace:'nowrap',
+    padding: '6px 12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer',
+    border: isPrimary ? 'none' : '1px solid #333',
+    background: isPrimary ? '#1a4a2a' : '#1a1a1a',
+    color: isPrimary ? '#7ef' : '#ccc',
+    transition: 'background 0.15s',
   });
-  b.onclick = onClick;
+  b.addEventListener('mouseenter', () => { b.style.background = isPrimary ? '#1f5a32' : '#252525'; });
+  b.addEventListener('mouseleave', () => { b.style.background = isPrimary ? '#1a4a2a' : '#1a1a1a'; });
+  b.addEventListener('click', onClick);
   return b;
 }
+
 function labelEl(text) {
-  const l = el('div', { fontSize:'12px', color:'#888', marginBottom:'2px', marginTop:'6px' });
-  l.textContent = text; return l;
-}
-function esc(str) {
-  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const l = document.createElement('label');
+  l.textContent = text;
+  Object.assign(l.style, { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
+  return l;
 }
 
-let toastTimer;
-function showToast(msg, isError) {
-  let toast = document.getElementById('nestor-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'nestor-toast';
-    Object.assign(toast.style, {
-      position:'fixed', bottom:'24px', left:'50%', transform:'translateX(-50%)',
-      padding:'10px 20px', borderRadius:'20px', fontSize:'13px',
-      maxWidth:'80vw', textAlign:'center', zIndex:'9999',
-      transition:'opacity 0.3s', pointerEvents:'none'
-    });
-    document.body.appendChild(toast);
-  }
-  toast.textContent = msg;
-  toast.style.background = isError ? '#4a1a1a' : '#1a3a2a';
-  toast.style.color = isError ? '#f88' : '#7ef';
-  toast.style.border = '1px solid ' + (isError ? '#6a2a2a' : '#2a5a3a');
-  toast.style.opacity = '1';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+function showToast(msg, isError = false) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position:'fixed', bottom:'20px', left:'50%', transform:'translateX(-50%)',
+    background: isError ? '#3a1a1a' : '#1a3a1a',
+    color: isError ? '#f88' : '#7ef',
+    padding:'8px 16px', borderRadius:'8px', fontSize:'13px',
+    zIndex:'9999', pointerEvents:'none',
+    animation:'fadeInOut 2.5s ease forwards',
+  });
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
 }

@@ -38,6 +38,35 @@ export const ROLES = {
   GARDENER:     'gardener',
 };
 
+// ─── Date/heure locale via JS (pas de requête réseau) ────────────────────────
+function getNowLabel() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const days = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+  const months = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  return `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} à ${pad(now.getHours())}h${pad(now.getMinutes())}`;
+}
+
+/**
+ * Enrichit la requête de recherche web avec la date/heure système.
+ * Remplace "maintenant", "aujourd'hui", "ce soir" etc. par des valeurs concrètes.
+ */
+function enrichQueryWithDatetime(query) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const dateStr = `${now.getDate()}/${now.getMonth()+1}/${now.getFullYear()}`;
+  const timeStr = `${pad(now.getHours())}h${pad(now.getMinutes())}`;
+  const days = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+  const dayName = days[now.getDay()];
+
+  return query
+    .replace(/\bmaintenant\b/gi, timeStr)
+    .replace(/\bactuellement\b/gi, timeStr)
+    .replace(/\ben ce moment\b/gi, timeStr)
+    .replace(/\baujourd[''h]?ui\b/gi, dateStr)
+    .replace(/\bce soir\b/gi, `soir ${dateStr}`);
+}
+
 // ─── Score de couverture ─────────────────────────────────────────────────────────
 function coverageScore(agent, userMsg, needsWeb) {
   if (!agent || agent.role === ROLES.ORCHESTRATOR) return 0;
@@ -154,7 +183,10 @@ RÉPONSE JSON STRICT :
 async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options = {}) {
   const { needsDeepContent = false, needsRealtime = false } = options;
 
-  const results = await searchWeb(searchQuery || userMsg, { maxResults: 6 });
+  // Enrichir la requête avec la date/heure réelle depuis le navigateur
+  const enrichedQuery = enrichQueryWithDatetime(searchQuery || userMsg);
+
+  const results = await searchWeb(enrichedQuery, { maxResults: 6 });
   const hasResults = results.length && results[0].title !== 'Aucun résultat';
 
   let pageContent = '';
@@ -178,8 +210,10 @@ async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options 
     ? `${webSnippets}\n\n${pageContent}`
     : webSnippets;
 
+  const nowLabel = getNowLabel();
   const prefs = (agent.preferences || []).join('\n');
   const sys = agent.system_prompt
+    + `\n\nDate et heure actuelles (système) : ${nowLabel}`
     + (prefs    ? `\n\nPréférences :\n${prefs}` : '')
     + `\n\nRÉSULTATS WEB :\n${webCtx}`
     + (context  ? `\n\nCONTEXTE :\n${context}` : '');
@@ -192,8 +226,10 @@ async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options 
 }
 
 async function runLlmAgent(agent, userMsg, context = '') {
+  const nowLabel = getNowLabel();
   const prefs = (agent.preferences || []).join('\n');
   const sys = agent.system_prompt
+    + `\n\nDate et heure actuelles (système) : ${nowLabel}`
     + (prefs   ? `\n\nPréférences :\n${prefs}` : '')
     + (context ? `\n\nCONTEXTE :\n${context}` : '');
   const r = await callLLM(agent.backendId || 'groq-llama', {
