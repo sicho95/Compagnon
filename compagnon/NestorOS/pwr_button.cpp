@@ -2,16 +2,17 @@
  * pwr_button.cpp
  * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.x).
  *
- * Fix v6 :
- *  - pmu.begin(Wire, addr) SANS repasser les pins SDA/SCL
- *    → évite la réinitialisation du bus Wire qui cassait le touch CST816
- *  - Toujours XPowersAXP2101 (XPowersLib 0.3.3)
+ * Fix v7 :
+ *  - pmu.begin(Wire, addr, SDA, SCL) : seule signature valide en 0.3.3
+ *  - Wire.begin() rappelé après pmu.begin() pour restaurer le bus I2C
+ *    partagé avec le CST816 (touch) — XPowersLib réinitialise Wire en interne
  */
 #include "pwr_button.h"
 #include "bootloader_ui.h"
 #include "display_init.h"
 #include "pin_config.h"
 #include <XPowersLib.h>
+#include <Wire.h>
 #include <Arduino.h>
 #include <esp_sleep.h>
 
@@ -57,9 +58,15 @@ static void power_off() {
 
 void pwr_button_init() {
   // Wire déjà initialisé dans display_init().
-  // Ne PAS repasser IIC_SDA/IIC_SCL ici : réinitialiserait le bus et
-  // casserait la communication I2C avec le touch CST816.
-  _pmu_ok = pmu.begin(Wire, AXP_I2C_ADDR);
+  // begin() avec pins : seule signature valide dans XPowersLib 0.3.3
+  // XPowersLib rappelle Wire.begin() en interne → on restaure ensuite.
+  _pmu_ok = pmu.begin(Wire, AXP_I2C_ADDR, IIC_SDA, IIC_SCL);
+
+  // Restaure Wire à 400kHz pour le touch CST816 (XPowersLib peut avoir
+  // changé la vitesse ou réinitialisé le bus)
+  Wire.begin(IIC_SDA, IIC_SCL);
+  Wire.setClock(400000);
+
   if (!_pmu_ok) {
     Serial.println("[PWR] AXP2101 non trouve - bouton PWR desactive");
     return;
