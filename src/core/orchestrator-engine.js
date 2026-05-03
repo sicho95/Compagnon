@@ -10,15 +10,10 @@
  *  4. Sinon                                                    → CREATE_AGENT + CHAIN
  *  5. Fallback                                                 → DIRECT orchestrateur
  *
- * Chaque stratégie mesure sa confiance post-exécution.
- * Si confiance < seuil → escalade automatique vers stratégie supérieure.
- *
- * runWebAnalyst — enrichissement transparent par fetch :
- *  • Les snippets search suffisent pour les requêtes temps-réel / factuelles courtes.
- *  • Pour les questions de fond (définitions, explications, analyses), les 1-2
- *    premières URLs sont fetchées et leur contenu injecté dans le contexte LLM.
- *  • La décision fetch/no-fetch est heuristique (needsDeepContent), sans LLM.
- *  • Timeout 8 s par page, silencieux si la page est inaccessible.
+ * needsDeepContent = true dès qu'il faut aller LIRE une page :
+ *   - questions de définition / explication
+ *   - données temps-réel (TV, météo, programme, horaire) où le snippet
+ *     ne suffit pas — la page contient les horaires actuels
  */
 
 import { callLLM }                  from '../api/backends.js';
@@ -27,12 +22,12 @@ import { saveAgent, loadAgents }    from '../storage/agents-db.js';
 
 // ─── Types de stratégie ───────────────────────────────────────────────────────
 export const STRATEGY = {
-  DIRECT_MIXED:   'direct_mixed',    // agent mixte existant couvre tout
-  DIRECT_LLM:     'direct_llm',      // agent LLM pur existant couvre tout
-  CHAIN:          'chain',           // chaîne d'agents existants
-  CREATE_MIXED:   'create_mixed',    // créer un agent mixte dédié (plus économique que chain)
-  CREATE_AGENT:   'create_agent',    // créer un agent manquant puis exécuter
-  DIRECT_ORCH:    'direct_orch',     // fallback orchestrateur direct
+  DIRECT_MIXED:   'direct_mixed',
+  DIRECT_LLM:     'direct_llm',
+  CHAIN:          'chain',
+  CREATE_MIXED:   'create_mixed',
+  CREATE_AGENT:   'create_agent',
+  DIRECT_ORCH:    'direct_orch',
 };
 
 export const ROLES = {
@@ -43,19 +38,14 @@ export const ROLES = {
   GARDENER:     'gardener',
 };
 
-// ─── Registre d'agents enrichi ───────────────────────────────────────────────
-// Calcule un score de couverture 0-100 pour un agent face à une demande
+// ─── Score de couverture ─────────────────────────────────────────────────────────
 function coverageScore(agent, userMsg, needsWeb) {
   if (!agent || agent.role === ROLES.ORCHESTRATOR) return 0;
-  const msg = userMsg.toLowerCase();
+  const msg  = userMsg.toLowerCase();
   const tags = (agent.tags || []).map(t => t.toLowerCase());
   const desc = (agent.description || '').toLowerCase();
-
-  // Bonus web
   const isWebAgent = agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH;
-  if (needsWeb && !isWebAgent) return 0; // exclure agents LLM si web requis
-
-  // Score par correspondance tags/desc
+  if (needsWeb && !isWebAgent) return 0;
   const tokens = msg.split(/\s+/).filter(t => t.length > 3);
   let score = 0;
   for (const token of tokens) {
@@ -66,49 +56,53 @@ function coverageScore(agent, userMsg, needsWeb) {
   return Math.min(score, 100);
 }
 
-// ─── Heuristique rapide (sans LLM) ──────────────────────────────────────────
+// ─── Heuristique rapide ──────────────────────────────────────────────────────────
 
-// Mots-clés signalant un besoin de données fraîches / temps-réel
-const WEB_REALTIME_KEYWORDS = [
-  'actualit', 'météo', 'cours ', 'prix ', 'aujourd', 'dernier', 'récent',
-  'cote ', 'bourse', 'live', 'direct', 'tv ', 'programme', 'horaire', 'news',
+// Données temps-réel : snippets insuffisants, FETCH requis
+const WEB_REALTIME_FETCH_KEYWORDS = [
+  'maintenant', 'en ce moment', 'actuellement', 'ce soir', 'aujourd\'hui',
+  'programme', 'programmes', 'grille', 'horaire', 'horaires',
+  'live', 'direct', 'tv ', 'télé ', 'tele ',
+  'météo', 'meteo', 'temps qu\'il fait', 'prévisions',
+  'cours ', 'prix ', 'cote ', 'bourse', 'news', 'actualit', 'dernier', 'récent',
 ];
 
-// Mots-clés signalant une question de fond → fetch pages utile
+// Questions de fond : définitions, explications — FETCH requis aussi
 const WEB_DEFINITION_KEYWORDS = [
-  'qu\'est', 'qu\'est-ce', 'c\'est quoi', 'c\'est quoi', 'keskeuh', 'keskeske',
-  'définition', 'définir', 'expliqu', 'comment fonctionne', 'comment marche',
-  'comment s\'appelle', 'comment appell', 'kezako', 'kézako',
-  'qui est', 'qui était', 'quelle est', 'quel est', 'biographie', 'histoire de',
-  'origine de', 'description', 'présente-moi', 'présente moi', 'parle-moi de',
-  'parle moi de', 'dis-moi', 'dis moi', 'raconte', 'renseigne',
+  'qu\'est', 'c\'est quoi', 'définition', 'définir', 'expliqu',
+  'comment fonctionne', 'comment marche', 'kezako', 'kézako',
+  'qui est', 'qui était', 'quelle est', 'quel est',
+  'biographie', 'histoire de', 'origine de', 'présente', 'parle',
+  'dis-moi', 'dis moi', 'raconte', 'renseigne',
 ];
 
 const MULTI_KEYWORDS = [
-  'puis', 'ensuite', 'après', 'et aussi', 'en plus', 'compare',
-  'synthèse', 'rapport', 'd\'abord',
+  'puis', 'ensuite', 'après', 'et aussi', 'en plus',
+  'compare', 'synthèse', 'rapport', 'd\'abord',
 ];
 
 function quickAnalyze(userMsg) {
   const m = userMsg.toLowerCase();
-  const needsRealtime  = WEB_REALTIME_KEYWORDS.some(k => m.includes(k));
-  const needsDefinition = WEB_DEFINITION_KEYWORDS.some(k => m.includes(k));
+  const needsRealtime    = WEB_REALTIME_FETCH_KEYWORDS.some(k => m.includes(k));
+  const needsDefinition  = WEB_DEFINITION_KEYWORDS.some(k => m.includes(k));
   return {
     needsWeb:         needsRealtime || needsDefinition,
-    needsDeepContent: needsDefinition && !needsRealtime, // fetch pages si question de fond
-    isMultiStep:      MULTI_KEYWORDS.some(k => m.includes(k)) || userMsg.length > 200,
-    wordCount:        userMsg.split(/\s+/).length,
+    // Fetch page dès que les snippets sont insuffisants : temps-réel OU définition
+    needsDeepContent: needsRealtime || needsDefinition,
+    needsRealtime,
+    isMultiStep: MULTI_KEYWORDS.some(k => m.includes(k)) || userMsg.length > 200,
+    wordCount:   userMsg.split(/\s+/).length,
   };
 }
 
-// ─── Coût estimé (tokens approximatifs) ─────────────────────────────────────
+// ─── Coût ────────────────────────────────────────────────────────────────────
 function estimateCost(strategy, agentCount) {
   const BASE = { direct_mixed: 1200, direct_llm: 800, chain: 0, create_mixed: 2000, create_agent: 1800, direct_orch: 900 };
   if (strategy === STRATEGY.CHAIN) return 900 * agentCount;
   return BASE[strategy] || 1000;
 }
 
-// ─── Prompt méta-planification ───────────────────────────────────────────────
+// ─── Prompt méta-planification ──────────────────────────────────────────────
 function buildMetaPlanPrompt(userMsg, agents, quickAnalysis) {
   const agentList = agents
     .filter(a => a.role !== ROLES.ORCHESTRATOR && a.role !== ROLES.GARDENER)
@@ -149,48 +143,33 @@ RÉPONSE JSON STRICT :
 // ─── Runners ─────────────────────────────────────────────────────────────────
 
 /**
- * runWebAnalyst — Agent web avec enrichissement transparent par fetch de pages
+ * runWebAnalyst
  *
- * Logique :
- *  1. searchWeb() → snippets (toujours)
- *  2. Si needsDeepContent=true (question de fond) :
- *     → fetch du 1er lien avec URL valide (2e en backup silencieux)
- *     → contenu injecté dans le contexte sous "CONTENU PAGE"
- *  3. Prompt LLM construit avec snippets + contenu page (si disponible)
+ * needsDeepContent=true : fetch la 1ère page qui répond, contenu injecté en contexte.
+ * needsDeepContent=false : snippets seuls (cohérent pour les requêtes où le snippet suffit).
  *
- * Le fetch est entièrement transparent : silencieux si la page échoue,
- * le LLM ne voit que des données enrichies sans savoir d'où elles viennent.
+ * Pour les requêtes TV/programme, maxChars est monté à 4000 car les grilles
+ * de programmes sont denses et l'horaire exact peut être loin dans la page.
  */
 async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options = {}) {
-  const { needsDeepContent = false } = options;
+  const { needsDeepContent = false, needsRealtime = false } = options;
 
-  // 1. Recherche web (snippets)
   const results = await searchWeb(searchQuery || userMsg, { maxResults: 6 });
   const hasResults = results.length && results[0].title !== 'Aucun résultat';
 
-  // 2. Fetch page si question de fond et résultats disponibles
   let pageContent = '';
   if (needsDeepContent && hasResults) {
-    // Chercher la 1ère URL valide dans les résultats
+    const pageCharLimit = needsRealtime ? 4000 : 3000;
     const candidates = results.filter(r => r.link && r.link.startsWith('http'));
-    for (const candidate of candidates.slice(0, 2)) {
-      const text = await fetchPageText(candidate.link, { maxChars: 3000 });
-      if (text.length > 200) {
+    for (const candidate of candidates.slice(0, 3)) {
+      const text = await fetchPageText(candidate.link, { maxChars: pageCharLimit });
+      if (text.length > 150) {
         pageContent = `--- Contenu de : ${candidate.title} (${candidate.link}) ---\n${text}`;
-        break; // On s'arrête dès qu'on a une page suffisamment riche
-      }
-    }
-    if (!pageContent) {
-      // Toutes les pages ont échoué → on essaie la 3e en dernier recours
-      const fallback = candidates[2];
-      if (fallback) {
-        const text = await fetchPageText(fallback.link, { maxChars: 2000 });
-        if (text.length > 100) pageContent = `--- Contenu de : ${fallback.title} ---\n${text}`;
+        break;
       }
     }
   }
 
-  // 3. Construction du contexte web pour le LLM
   const webSnippets = hasResults
     ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
     : 'Aucun résultat web.';
@@ -199,7 +178,6 @@ async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options 
     ? `${webSnippets}\n\n${pageContent}`
     : webSnippets;
 
-  // 4. Appel LLM
   const prefs = (agent.preferences || []).join('\n');
   const sys = agent.system_prompt
     + (prefs    ? `\n\nPréférences :\n${prefs}` : '')
@@ -225,7 +203,6 @@ async function runLlmAgent(agent, userMsg, context = '') {
   return r?.message?.content || '(pas de réponse)';
 }
 
-// Évalue la confiance d'une réponse (heuristique légère sans LLM)
 function assessConfidence(reply, userMsg) {
   if (!reply || reply.length < 30) return 0.2;
   if (reply.includes('(pas de réponse)') || reply.includes('je ne sais pas')) return 0.3;
@@ -270,21 +247,15 @@ async function createAgentSpec(factoryAgent, newAgentSpec, backendId) {
 }
 
 // ─── POINT D'ENTRÉE ───────────────────────────────────────────────────────────
-/**
- * resolve(userMsg, agents, orchestratorAgent, options?)
- * @returns {{ reply, trace, newAgent?, strategy, confidence }}
- */
 export async function resolve(userMsg, agents, orchestratorAgent, options = {}) {
   const trace = [];
   const findAgent  = id => agents.find(a => a.id === id);
   const findByRole = r  => agents.find(a => a.role === r);
   const { confidenceThreshold = 0.65 } = options;
 
-  // ── 0. Analyse rapide heuristique (sans LLM) ─────────────────────────────
   const qa = quickAnalyze(userMsg);
   trace.push({ step: 'quick-analyze', data: qa });
 
-  // Pré-sélection : calculer les scores de couverture
   const scored = agents
     .filter(a => a.role !== ROLES.ORCHESTRATOR && a.role !== ROLES.GARDENER && a.role !== ROLES.FACTORY)
     .map(a => ({ agent: a, score: coverageScore(a, userMsg, qa.needsWeb) }))
@@ -294,21 +265,19 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
   const bestScore = scored[0]?.score || 0;
   trace.push({ step: 'coverage-scores', data: scored.slice(0, 4).map(s => ({ id: s.agent.id, score: s.score })) });
 
-  // ── 1. Décision rapide si score élevé (évite appel LLM planificateur) ────
   let plan = null;
   if (bestScore >= 65 && !qa.isMultiStep) {
     const isWebAgent = bestAgent.role === ROLES.WEB_ANALYST || bestAgent.role === ROLES.WEB_SEARCH;
     plan = {
       strategy: isWebAgent ? STRATEGY.DIRECT_MIXED : STRATEGY.DIRECT_LLM,
-      reasoning: `Couverture heuristique ${bestScore}% — pas besoin de planification LLM`,
+      reasoning: `Couverture heuristique ${bestScore}% — fast-route`,
       agents: [bestAgent.id],
       search_query: userMsg,
       confidence_threshold: confidenceThreshold,
       new_agent: null,
     };
-    trace.push({ step: 'fast-route', msg: `Score ${bestScore}% → ${plan.strategy} sans LLM planificateur` });
+    trace.push({ step: 'fast-route', msg: `Score ${bestScore}% → ${plan.strategy}` });
   } else {
-    // ── 2. Planification LLM (demande complexe ou score faible) ─────────────
     trace.push({ step: 'planning', msg: 'Planification LLM (demande complexe)…' });
     const planPrompt = buildMetaPlanPrompt(userMsg, agents, qa);
     const planR = await callLLM(
@@ -322,29 +291,27 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
     } catch {
       plan = { strategy: STRATEGY.DIRECT_ORCH, reasoning: 'Parsing échoué', agents: [], search_query: '', new_agent: null };
     }
-    // Validation coût : vérifier si CREATE_MIXED est justifié
     if (plan.strategy === STRATEGY.CREATE_MIXED) {
       const chainCost = estimateCost(STRATEGY.CHAIN, (plan.agents || []).length);
       const mixedCost = estimateCost(STRATEGY.CREATE_MIXED, 1);
       if (chainCost < mixedCost && (plan.agents || []).length <= 2) {
         plan.strategy = STRATEGY.CHAIN;
-        trace.push({ step: 'cost-override', msg: `Chain (${chainCost}t) moins cher que CREATE_MIXED (${mixedCost}t)` });
+        trace.push({ step: 'cost-override', msg: `Chain (${chainCost}t) < CREATE_MIXED (${mixedCost}t)` });
       }
     }
     trace.push({ step: 'plan', data: plan });
   }
 
-  // ── 3. Exécution ──────────────────────────────────────────────────────────
   let reply = '', confidence = 0, newAgentCreated = null;
-  // Options d'enrichissement transmises aux runners web
-  const webOpts = { needsDeepContent: qa.needsDeepContent };
+  const webOpts = { needsDeepContent: qa.needsDeepContent, needsRealtime: qa.needsRealtime };
 
   try {
     if (plan.strategy === STRATEGY.DIRECT_MIXED) {
       const agent = (plan.agents?.[0] && findAgent(plan.agents[0]))
         || findByRole(ROLES.WEB_ANALYST) || findByRole(ROLES.WEB_SEARCH);
       if (!agent) throw new Error('Aucun agent web disponible');
-      trace.push({ step: 'exec', msg: `→ ${agent.name} (web-analyst)${webOpts.needsDeepContent ? ' [+fetch page]' : ''}` });
+      const fetchLabel = webOpts.needsDeepContent ? ' [+fetch page]' : '';
+      trace.push({ step: 'exec', msg: `→ ${agent.name} (web-analyst)${fetchLabel}` });
       reply = await runWebAnalyst(agent, userMsg, plan.search_query, '', webOpts);
 
     } else if (plan.strategy === STRATEGY.DIRECT_LLM) {
@@ -382,13 +349,11 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
         : await runLlmAgent(newAgent, userMsg);
     }
 
-    // ── 4. Évaluation confiance post-exécution ───────────────────────────
     confidence = assessConfidence(reply, userMsg);
     trace.push({ step: 'confidence', value: confidence, threshold: plan.confidence_threshold || confidenceThreshold });
 
-    // ── 5. Escalade si confiance insuffisante ────────────────────────────
     if (confidence < (plan.confidence_threshold || confidenceThreshold) && plan.strategy !== STRATEGY.DIRECT_ORCH) {
-      trace.push({ step: 'escalate', msg: `Confiance ${confidence.toFixed(2)} < seuil → escalade vers orchestrateur direct` });
+      trace.push({ step: 'escalate', msg: `Confiance ${confidence.toFixed(2)} < seuil → escalade` });
       const prefs = (orchestratorAgent?.preferences || []).join('\n');
       const sys = (orchestratorAgent?.system_prompt || 'Tu es Nestor.')
         + (prefs ? `\n\nPréférences :\n${prefs}` : '')
@@ -403,7 +368,6 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
 
   } catch (e) {
     trace.push({ step: 'error', msg: e.message });
-    // Fallback direct orchestrateur
     trace.push({ step: 'fallback', msg: 'Fallback orchestrateur direct' });
     const sys = orchestratorAgent?.system_prompt || 'Tu es Nestor, assistant personnel.';
     const r = await callLLM(orchestratorAgent?.backendId || 'groq-llama', {
@@ -413,11 +377,5 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
     confidence = assessConfidence(reply, userMsg);
   }
 
-  return {
-    reply,
-    trace,
-    newAgent:  newAgentCreated,
-    strategy:  plan.strategy,
-    confidence,
-  };
+  return { reply, trace, newAgent: newAgentCreated, strategy: plan.strategy, confidence };
 }
