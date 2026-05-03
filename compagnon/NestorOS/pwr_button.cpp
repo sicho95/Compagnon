@@ -2,24 +2,25 @@
  * pwr_button.cpp
  * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.3).
  *
- * Fix v4 :
- *  - SHORT_IRQ et LONG_IRQ utilisés directement pour déclencher actions
- *  - Shutdown via LONG_IRQ (>= 6s AXP2101 hardware) en complément du soft
+ * Fix v5 :
+ *  - XPowersPMU -> XPowersAXP2101 (correct pour XPowersLib 0.3.3)
+ *  - Utilise AXP_INT depuis pin_config.h
+ *  - shutdown via pmu.shutdown()
  *  - pmu_get_battery_percent() robuste
  */
 #include "pwr_button.h"
 #include "bootloader_ui.h"
 #include "display_init.h"
+#include "pin_config.h"
 #include <XPowersLib.h>
 #include <Arduino.h>
 #include <esp_sleep.h>
 
-#define AXP_IRQ_PIN   13
 #define AXP_I2C_ADDR  0x34
 
-static XPowersPMU pmu;
-static bool       _pmu_ok   = false;
-static bool       _sleeping = false;
+static XPowersAXP2101 pmu;
+static bool            _pmu_ok   = false;
+static bool            _sleeping = false;
 
 static volatile bool _irq_fired = false;
 static uint32_t      _press_ms  = 0;
@@ -35,10 +36,9 @@ static void enter_sleep() {
   extern Arduino_CO5300 *gfx;
   gfx->setBrightness(0);
   gfx->displayOff();
-  // Configure wakeup sur front descendant IRQ AXP
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)AXP_IRQ_PIN, 0);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)AXP_INT, 0);
   esp_light_sleep_start();
-  // Réveil
+  // Reveil
   Serial.println("[PWR] Reveil.");
   gfx->displayOn();
   gfx->setBrightness(200);
@@ -52,9 +52,8 @@ static void power_off() {
   Serial.println("[PWR] Arret complet.");
   delay(200);
   if (_pmu_ok) {
-    pmu.shutdown();          // AXP2101 coupe l'alimentation
+    pmu.shutdown();
   }
-  // Fallback si AXP KO
   esp_deep_sleep_start();
 }
 
@@ -66,32 +65,27 @@ void pwr_button_init() {
   }
   Serial.println("[PWR] AXP2101 OK");
 
-  // Active les IRQ utiles
   pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
   pmu.enableIRQ(
-    XPOWERS_AXP2101_PKEY_SHORT_IRQ    |  // appui court -> retour carousel
-    XPOWERS_AXP2101_PKEY_LONG_IRQ     |  // appui long  -> veille
-    XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |  // front desc  -> debut appui
-    XPOWERS_AXP2101_PKEY_POSITIVE_IRQ    // front mont  -> fin appui
+    XPOWERS_AXP2101_PKEY_SHORT_IRQ    |
+    XPOWERS_AXP2101_PKEY_LONG_IRQ     |
+    XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |
+    XPOWERS_AXP2101_PKEY_POSITIVE_IRQ
   );
   pmu.clearIrqStatus();
 
-  // Configure l'AXP pour shutdown apres 6s appui long
-  // (registre PWRON_TIME, valeur 4 = 6s selon datasheet AXP2101)
-  // Certaines versions de XPowersLib exposent setPowerKeyPressOffTime()
 #ifdef XPOWERS_AXP2101_POWEROFF_6S
   pmu.setPowerKeyPressOffTime(XPOWERS_AXP2101_POWEROFF_6S);
 #endif
 
-  pinMode(AXP_IRQ_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(AXP_IRQ_PIN), axp_isr, FALLING);
+  pinMode(AXP_INT, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(AXP_INT), axp_isr, FALLING);
 }
 
 void pwr_button_tick() {
   if (!_pmu_ok) return;
 
-  // Détection soft du maintien (en parallèle des IRQ)
-  bool pin_low = (digitalRead(AXP_IRQ_PIN) == LOW);
+  bool pin_low = (digitalRead(AXP_INT) == LOW);
   if (pin_low && !_pressed) {
     _pressed  = true;
     _press_ms = millis();
@@ -104,12 +98,8 @@ void pwr_button_tick() {
       return;
     } else if (held >= 1500) {
       if (!_sleeping) enter_sleep();
-      else {
-        // Réveil: déjà géré dans enter_sleep via light_sleep_start return
-      }
       return;
     } else if (held >= 50) {
-      // Appui court
       if (!_sleeping) {
         Serial.println("[PWR] Retour carousel");
         bootloader_ui_return();
@@ -117,7 +107,6 @@ void pwr_button_tick() {
     }
   }
 
-  // Traitement IRQ AXP (redondant mais utile pour le SHORT_IRQ AXP)
   if (!_irq_fired) return;
   _irq_fired = false;
   pmu.getIrqStatus();
@@ -127,7 +116,6 @@ void pwr_button_tick() {
   }
   if (pmu.isPekeyLongPressIrq()) {
     if (!_sleeping) enter_sleep();
-    // Si déjà en veille: le wakeup est géré par enter_sleep
   }
 
   pmu.clearIrqStatus();
