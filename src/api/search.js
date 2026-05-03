@@ -58,6 +58,7 @@ function markSerperExhausted() {
 //   - Plus de 8 mots
 //   - Présence de mots de liaison multi-entités (et, ou, ainsi que, +, /)
 //   - Énumération détectée (virgules entre noms propres)
+//   - Pattern chaîne TV détecté (même sur requête courte)
 
 const MULTI_ENTITY_PATTERNS = [
   /\bet\b.*\bet\b/i,           // "X et Y et Z"
@@ -66,30 +67,54 @@ const MULTI_ENTITY_PATTERNS = [
   /[,;]\s*[A-ZÀÂÉÈÊËÎÏÔÙÛÜ]/,  // Énumération de noms propres
 ];
 
+// Patterns TV temps-réel : toujours complexe même si < 8 mots
+const REALTIME_TV_PATTERN = /\b(programme|programmes|grille|direct|maintenant|actuellement|ce soir|aujourd'hui)\b.*\b(tv|télé|tele|chaîne|chaine|tf1|france\s*\d|m6|canal|arte|bfm)\b|\b(tf1|france\s*\d|m6|canal|arte|bfm)\b.*\b(programme|direct|maintenant|actuellement|ce soir|aujourd'hui)\b/i;
+
 function isComplexQuery(query) {
+  if (REALTIME_TV_PATTERN.test(query)) return true;
   if (query.split(/\s+/).length > 8) return true;
   return MULTI_ENTITY_PATTERNS.some(p => p.test(query));
 }
 
 // ─── Décomposition automatique d'une requête complexe ────────────────────────
 //
-// Stratégie simple et robuste :
-//   - Découpe sur ", " / " et " / " ou " pour extraire les entités
-//   - Reconstruit des requêtes courtes avec le contexte générique détecté
-//   - Ex : "programme TV TF1, France 2 et M6 ce soir"
-//       → ["programme TV TF1 ce soir", "programme TV France 2 ce soir", "programme TV M6 ce soir"]
+// Stratégie :
+//   1. Si la requête contient une chaîne TV nommée → split par chaîne
+//   2. Sinon split classique sur séparateurs (, et ou &)
+//
+// Ex : "programme tv tf1 maintenant"
+//   → ["programme TV TF1 maintenant site:tf1.fr OR site:telerama.fr"]
+//
+// Ex : "programme TV TF1, France 2 et M6 ce soir"
+//   → ["programme TV TF1 ce soir", "programme TV France 2 ce soir", "programme TV M6 ce soir"]
+
+const TV_CHANNELS = ['TF1', 'France 2', 'France 3', 'France 4', 'France 5', 'M6', 'Canal+', 'Arte', 'BFM TV', 'RMC'];
+const TV_CHANNEL_RE = /\b(tf1|france\s*[2-5]|m6|canal\+?|arte|bfm(?:\s*tv)?|rmc)\b/gi;
 
 function splitComplexQuery(query) {
-  // Extraire entités (split sur virgule, " et ", " ou ")
+  // Cas spécial : requête TV temps-réel avec UNE seule chaîne
+  const tvMatches = [...query.matchAll(TV_CHANNEL_RE)].map(m => m[0]);
+  if (tvMatches.length === 1) {
+    // Reformuler en requête ciblée avec site: pour forcer des résultats
+    const ch = tvMatches[0].replace(/\s+/g, ' ').trim();
+    const context = query.replace(TV_CHANNEL_RE, '').replace(/\s+/g, ' ').trim();
+    return [`programme TV ${ch} maintenant site:${ch.toLowerCase().replace(/\s|\+/g, '')}.fr OR site:telerama.fr OR site:programme-tv.net`];
+  }
+
+  // Cas TV multi-chaînes : générer une requête par chaîne
+  if (tvMatches.length > 1) {
+    const context = query.replace(TV_CHANNEL_RE, '').replace(/\s+/g, ' ').trim();
+    return tvMatches.map(ch => `programme TV ${ch} ${context}`.trim());
+  }
+
+  // Split classique sur séparateurs
   const parts = query
     .split(/,|\set\s|\sou\s|\s&\s|\/|\+/i)
     .map(p => p.trim())
     .filter(p => p.length > 1);
 
-  if (parts.length <= 1) return null; // Pas de split possible
+  if (parts.length <= 1) return null;
 
-  // Contexte = mots communs entre les parties (debut de la requête d'origine)
-  // Heuristique : garder le préfixe commun avant la première entité
   const firstEntity = parts[0];
   const prefixMatch = query.indexOf(firstEntity);
   const prefix = prefixMatch > 0 ? query.slice(0, prefixMatch).trim() : '';
@@ -137,11 +162,15 @@ async function searchViaSerper(query, maxResults) {
 
 // ─── 2. DuckDuckGo Instant Answer (fallback, sans clé) ───────────────────────
 //
-// Source faible — utilisée uniquement sur des requêtes simples.
-// Pour les requêtes complexes → voir splitComplexQuery() + searchWebMulti().
+// Deux niveaux :
+//   a) Instant Answer API (JSON) — rapide, couvre définitions/infos statiques
+//   b) Si résultat vide → fallback HTML scraping léger via ?q=...&t=h_
+//      (pour les requêtes temps-réel type programme TV)
 
 async function searchViaDDG(query) {
   const proxy  = getProxyUrl();
+
+  // a) Instant Answer API
   const ddgUrl = 'https://api.duckduckgo.com/?' + new URLSearchParams({
     q: query, format: 'json', no_html: '1', skip_disambig: '1',
   });
@@ -172,6 +201,38 @@ async function searchViaDDG(query) {
     results.push({ title: 'Infobox — ' + (data.Heading || query), link: '', snippet: kv });
   }
 
+  if (results.length > 0) return results;
+
+  // b) Fallback HTML : scraping léger de la page DuckDuckGo HTML
+  //    Retourne les snippets des premiers résultats organiques
+  try {
+    const htmlUrl  = 'https://html.duckduckgo.com/html/?' + new URLSearchParams({ q: query });
+    const htmlProxy = proxy + '?url=' + encodeURIComponent(htmlUrl);
+    const htmlRes  = await fetch(htmlProxy, {
+      headers: { 'Accept': 'text/html' },
+      signal:  AbortSignal.timeout(8000),
+    });
+    if (!htmlRes.ok) return results;
+
+    const html = await htmlRes.text();
+
+    // Extraire résultats : <a class="result__a" href="...">titre</a> + <a class="result__snippet">snippet</a>
+    const linkRe    = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/g;
+    const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([^<]+)<\/a>/g;
+
+    const links   = [...html.matchAll(linkRe)].slice(0, 5);
+    const snippets = [...html.matchAll(snippetRe)].slice(0, 5);
+
+    for (let i = 0; i < links.length; i++) {
+      const title   = links[i][2]?.trim()   || query;
+      const link    = links[i][1]?.trim()   || '';
+      const snippet = snippets[i]?.[1]?.trim() || '';
+      if (title || snippet) results.push({ title, link, snippet });
+    }
+  } catch (e) {
+    console.warn('[Nestor/search] DDG HTML fallback échoué :', e.message);
+  }
+
   return results;
 }
 
@@ -183,10 +244,9 @@ async function searchViaDDG(query) {
 // Retourne toujours Array<{ title, link, snippet, _query? }>
 
 async function searchDDGSmart(query, maxResults) {
-  // Tenter le split si requête complexe
   if (isComplexQuery(query)) {
     const subQueries = splitComplexQuery(query);
-    if (subQueries && subQueries.length > 1) {
+    if (subQueries && subQueries.length > 0) {
       console.info('[Nestor/search] DDG split :', subQueries.length, 'sous-requêtes pour :', query);
       const allResults = [];
       for (const sq of subQueries) {
@@ -197,11 +257,10 @@ async function searchDDGSmart(query, maxResults) {
           console.warn('[Nestor/search] DDG sous-requête échouée :', sq, e.message);
         }
       }
-      if (allResults.length > 0) return allResults.slice(0, maxResults * subQueries.length);
+      if (allResults.length > 0) return allResults.slice(0, maxResults * Math.max(subQueries.length, 1));
     }
   }
 
-  // Requête simple ou split impossible → appel direct
   return await searchViaDDG(query);
 }
 
@@ -210,16 +269,6 @@ async function searchDDGSmart(query, maxResults) {
 // L'orchestrateur passe explicitement un tableau de sous-requêtes.
 // Chaque sous-requête passe par searchWeb() (Serper en priorité, DDG sinon).
 // Le LLM reçoit allResults avec _query pour la synthèse/reformatage.
-//
-// Exemple :
-//   searchWebMulti([
-//     'programme TF1 maintenant',
-//     'programme France 2 maintenant',
-//     'programme France 3 maintenant',
-//     'programme Canal+ maintenant',
-//     'programme France 5 maintenant',
-//     'programme M6 maintenant',
-//   ])
 
 export async function searchWebMulti(queries, { maxResultsPerQuery = 4 } = {}) {
   const resultsMap = {};
@@ -246,7 +295,6 @@ export async function searchWebMulti(queries, { maxResultsPerQuery = 4 } = {}) {
 // Retourne : Array<{ title, link, snippet }>
 
 export async function searchWeb(query, { maxResults = 5 } = {}) {
-  // 1. Serper (primaire — si clé présente et quota non épuisé)
   const hasSerperKey = !!(lsGet('SERPER_KEY') || '').trim();
   const serperDead   = isSerperExhausted();
 
@@ -259,8 +307,6 @@ export async function searchWeb(query, { maxResults = 5 } = {}) {
     }
   }
 
-  // 2. DuckDuckGo intelligent (fallback — toujours disponible)
-  //    → split automatique si requête complexe
   try {
     const ddgResults = await searchDDGSmart(query, maxResults);
     if (ddgResults.length > 0) return ddgResults.slice(0, maxResults);
