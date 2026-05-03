@@ -2,40 +2,44 @@
 // tts.js — Text-to-Speech pour Nestor
 //
 // Stratégie :
-//   1. Vérification mode silencieux (variable globale ou localStorage)
-//   2. Gemini TTS (API cloud, voix naturelle) si clé GEMINI_API_KEY configurée
-//   3. Web Speech API (speechSynthesis) du navigateur/téléphone — gratuit,
-//      natif, fonctionne hors-ligne, utilise les voix du système.
-//
-// OpenAI TTS : NON intégré (payant, pas de free tier stable).
+//   1. Mode silence : si activé, speak() est un no-op total
+//   2. Web Speech API (browser) — gratuit, natif, offline, voix système
+//      → Moteur par défaut, fonctionne toujours sans clé
+//   3. Gemini TTS (optionnel) — voix naturelle si GEMINI_API_KEY configurée
+//      → Modèle : gemini-2.5-flash-preview-tts (free tier Gemini)
+//      → Retourne PCM 16-bit 24kHz → AudioContext
+//      → Bascule silencieuse sur browser si Gemini échoue
 //
 // Usage :
-//   import { speak, stopSpeech, isSpeechEnabled } from './tts.js';
+//   import { speak, stopSpeech, isSpeechEnabled, setSilentMode } from './tts.js';
 //   await speak('Bonjour, je suis Nestor.');
-//   stopSpeech(); // Stoppe la lecture en cours
+//   setSilentMode(true);  // Coupe tout le son
+//   stopSpeech();         // Stoppe la lecture en cours
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { lsGet } from '../storage/agents-db.js';
+import { lsGet, lsSet } from '../storage/agents-db.js';
 
 const LS_SILENT_MODE = 'NESTOR_SILENT_MODE';
 const LS_TTS_ENGINE  = 'NESTOR_TTS_ENGINE';  // 'browser' | 'gemini'
-const LS_TTS_VOICE   = 'NESTOR_TTS_VOICE';   // Nom de voix browser sélectionnée
+const LS_TTS_VOICE   = 'NESTOR_TTS_VOICE';   // Nom de voix browser
 const LS_TTS_RATE    = 'NESTOR_TTS_RATE';    // Vitesse 0.5–2.0
 
-// ─── Silencieux ───────────────────────────────────────────────────────────────
+// ─── Mode silence ─────────────────────────────────────────────────────────────
 
 export function isSilentMode() {
   return lsGet(LS_SILENT_MODE) === '1';
 }
 
-export function setSilentMode(val) {
-  import('../storage/agents-db.js').then(({ lsSet }) => lsSet(LS_SILENT_MODE, val ? '1' : '0'));
+export function setSilentMode(enabled) {
+  lsSet(LS_SILENT_MODE, enabled ? '1' : '0');
+  if (enabled) stopSpeech();
 }
 
-// Retourne true si le TTS est activé (pas silencieux ET API dispo)
+/** true si le TTS peut produire du son (pas silencieux + au moins une API disponible) */
 export function isSpeechEnabled() {
   if (isSilentMode()) return false;
-  return !!window.speechSynthesis || !!(lsGet('GEMINI_API_KEY') || '').trim();
+  return typeof window !== 'undefined' &&
+    (!!window.speechSynthesis || !!(lsGet('GEMINI_API_KEY') || '').trim());
 }
 
 // ─── Browser Speech Synthesis ─────────────────────────────────────────────────
@@ -44,7 +48,6 @@ function getVoices() {
   return new Promise((resolve) => {
     const voices = window.speechSynthesis.getVoices();
     if (voices.length > 0) { resolve(voices); return; }
-    // Chrome/Firefox chargent les voix en async
     window.speechSynthesis.addEventListener('voiceschanged', () => {
       resolve(window.speechSynthesis.getVoices());
     }, { once: true });
@@ -53,37 +56,37 @@ function getVoices() {
 }
 
 function pickVoice(voices) {
-  const savedVoiceName = lsGet(LS_TTS_VOICE) || '';
-  if (savedVoiceName) {
-    const found = voices.find(v => v.name === savedVoiceName);
+  const saved = lsGet(LS_TTS_VOICE) || '';
+  if (saved) {
+    const found = voices.find(v => v.name === saved);
     if (found) return found;
   }
-  // Préférence : voix française
-  return voices.find(v => v.lang && v.lang.startsWith('fr')) || voices[0] || null;
+  // Préférence voix française
+  return voices.find(v => v.lang?.startsWith('fr')) || voices[0] || null;
 }
 
 async function speakBrowser(text) {
   return new Promise((resolve, reject) => {
     if (!window.speechSynthesis) { reject(new Error('speechSynthesis non supporté')); return; }
-
-    window.speechSynthesis.cancel(); // Stoppe toute lecture précédente
-
+    window.speechSynthesis.cancel();
     getVoices().then((voices) => {
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.voice = pickVoice(voices);
-      utter.lang  = 'fr-FR';
-      utter.rate  = parseFloat(lsGet(LS_TTS_RATE) || '1.0');
-      utter.pitch = 1.0;
-      utter.onend   = () => resolve();
+      const utter  = new SpeechSynthesisUtterance(text);
+      utter.voice  = pickVoice(voices);
+      utter.lang   = 'fr-FR';
+      utter.rate   = parseFloat(lsGet(LS_TTS_RATE) || '1.0');
+      utter.pitch  = 1.0;
+      utter.onend  = () => resolve();
       utter.onerror = (e) => reject(new Error('speechSynthesis erreur : ' + e.error));
       window.speechSynthesis.speak(utter);
     });
   });
 }
 
-// ─── Gemini TTS ───────────────────────────────────────────────────────────────
-// Modèle : gemini-2.5-flash-preview-tts (gratuit dans le free tier Gemini)
-// Retourne de l'audio PCM 24kHz → on joue via AudioContext
+// ─── Gemini TTS (optionnel) ───────────────────────────────────────────────────
+// Nécessite GEMINI_API_KEY dans Réglages.
+// Bascule silencieuse sur browser si absent ou en erreur.
+
+let _geminiCtx = null;
 
 async function speakGemini(text) {
   const apiKey = (lsGet('GEMINI_API_KEY') || '').trim();
@@ -94,9 +97,9 @@ async function speakGemini(text) {
   const proxyUrl = proxy + '?url=' + encodeURIComponent(endpoint);
 
   const res = await fetch(proxyUrl, {
-    method: 'POST',
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body:    JSON.stringify({
       contents: [{ parts: [{ text }] }],
       generationConfig: {
         responseModalities: ['AUDIO'],
@@ -105,6 +108,7 @@ async function speakGemini(text) {
         },
       },
     }),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {
@@ -116,51 +120,50 @@ async function speakGemini(text) {
   const b64  = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   if (!b64) throw new Error('Gemini TTS : réponse audio vide');
 
-  // Décoder base64 → ArrayBuffer → PCM 16-bit → lecture AudioContext
-  const binary    = atob(b64);
-  const bytes     = new Uint8Array(binary.length);
+  // PCM 16-bit 24kHz → AudioContext
+  const binary  = atob(b64);
+  const bytes   = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
   const ctx       = new (window.AudioContext || window.webkitAudioContext)();
-  const sampleRate = 24000;
+  _geminiCtx      = ctx;
   const pcm16     = new Int16Array(bytes.buffer);
   const float32   = new Float32Array(pcm16.length);
   for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768;
 
-  const buffer    = ctx.createBuffer(1, float32.length, sampleRate);
+  const buffer = ctx.createBuffer(1, float32.length, 24000);
   buffer.copyToChannel(float32, 0);
-  const src       = ctx.createBufferSource();
-  src.buffer      = buffer;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
   src.connect(ctx.destination);
 
   return new Promise((resolve, reject) => {
-    src.onended = () => { ctx.close(); resolve(); };
-    src.onerror = (e) => { ctx.close(); reject(e); };
+    src.onended = () => { ctx.close(); _geminiCtx = null; resolve(); };
+    src.onerror = (e) => { ctx.close(); _geminiCtx = null; reject(e); };
     src.start();
   });
 }
 
 // ─── Point d'entrée principal ─────────────────────────────────────────────────
 
-let _currentCtx = null;
-
 export async function speak(text) {
-  if (!text || !text.trim()) return;
-  if (isSilentMode()) return;
+  if (!text?.trim()) return;
+  if (isSilentMode()) return; // Mode silence : no-op total
 
-  const engine = lsGet(LS_TTS_ENGINE) || 'browser';
+  const engine    = lsGet(LS_TTS_ENGINE) || 'browser';
   const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
 
+  // Gemini optionnel (uniquement si engine='gemini' ET clé présente)
   if (engine === 'gemini' && hasGemini) {
     try {
       await speakGemini(text);
       return;
     } catch (e) {
-      console.warn('[Nestor/TTS] Gemini TTS échoué, bascule sur browser :', e.message);
+      console.warn('[Nestor/TTS] Gemini TTS échoué, bascule browser :', e.message);
     }
   }
 
-  // Browser speech synthesis (défaut)
+  // Browser speech synthesis (défaut + fallback)
   if (window.speechSynthesis) {
     try {
       await speakBrowser(text);
@@ -172,7 +175,7 @@ export async function speak(text) {
 
 export function stopSpeech() {
   if (window.speechSynthesis) window.speechSynthesis.cancel();
-  if (_currentCtx) { _currentCtx.close().catch(() => {}); _currentCtx = null; }
+  if (_geminiCtx) { _geminiCtx.close().catch(() => {}); _geminiCtx = null; }
 }
 
 // ─── Listing des voix browser (pour UI Réglages) ──────────────────────────────
@@ -181,4 +184,15 @@ export async function listBrowserVoices() {
   if (!window.speechSynthesis) return [];
   const voices = await getVoices();
   return voices.map(v => ({ name: v.name, lang: v.lang }));
+}
+
+// ─── Statut TTS (pour UI Réglages) ───────────────────────────────────────────
+
+export function getTTSStatus() {
+  if (isSilentMode()) return { engine: 'silent', reason: 'Mode silence activé — aucun son' };
+  const engine    = lsGet(LS_TTS_ENGINE) || 'browser';
+  const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
+  if (engine === 'gemini' && hasGemini) return { engine: 'gemini',  reason: 'Gemini TTS actif (voix naturelle)' };
+  if (window.speechSynthesis)           return { engine: 'browser', reason: 'Synthèse vocale navigateur (offline)' };
+  return                                       { engine: 'none',    reason: 'Aucun TTS disponible' };
 }
