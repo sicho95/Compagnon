@@ -5,27 +5,11 @@
  * Libs   : lvgl, Mylibrary (Waveshare), XPowersLib, SensorLib,
  *          WiFiManager (tzapu), BluetoothSerial (built-in)
  *
- * ─── Onglets ─────────────────────────────────────────────────────────────
- *  display_init        -> init ecran AMOLED + touch
- *  pwr_button          -> bouton PWR AXP2101 (court/2s/5s)
- *  status_bar          -> barre d'etat persistante (heure, batt, WiFi, BT)
- *  wifi_manager_ui     -> captive portal Compagnon_Setup + QR code
- *  bt_manager          -> Bluetooth Classic manager
- *  bootloader_ui       -> carousel apps (swipe + boutons GPIO)
- *  nestor_app          -> Nestor IA (PWA via WiFi)
- *  radar_app           -> placeholder Radar RF
- *  lora_app            -> placeholder LoRa/GPS
- *  histoire_app        -> placeholder Histoires
- *  brain / orchestrator -> logique partagee
- * ──────────────────────────────────────────────────────────────────────────
- *
- * Boutons physiques :
- *  GPIO0  (BOOT)  -> carte precedente dans le carousel
- *  GPIO18 (BTN2)  -> carte suivante dans le carousel
- *  PWR    (AXP2101, GPIO13 IRQ) :
- *    Appui court  -> retour au carousel
- *    Maintien 2s  -> veille ecran
- *    Maintien 5s  -> arret complet
+ * Fix v4 :
+ *  - Bluetooth DESACTIVE (trop gourmand en RAM avec WiFi+LVGL)
+ *  - WiFiManager initialisé EN DERNIER, après display+LVGL+carousel
+ *  - lv_timer_handler() appelé pendant wifi_manager_init() via callback
+ *    pour que l'écran reste actif pendant la connexion WiFi
  */
 
 #include <lvgl.h>
@@ -33,14 +17,16 @@
 #include "pwr_button.h"
 #include "status_bar.h"
 #include "wifi_manager_ui.h"
-#include "bt_manager.h"
 #include "bootloader_ui.h"
 #include "orchestrator.h"
 
+// BT désactivé temporairement pour libérer ~60KB de RAM
+// #include "bt_manager.h"
+
 // ── Boutons physiques GPIO ───────────────────────────────────────────────────
-#define BTN_PREV_PIN  0    // BOOT button - active-low
-#define BTN_NEXT_PIN  18   // Bouton custom - active-low
-#define BTN_DEBOUNCE_MS 50 // Anti-rebond 50ms
+#define BTN_PREV_PIN    0    // BOOT button - active-low
+#define BTN_NEXT_PIN   18   // Bouton custom - active-low
+#define BTN_DEBOUNCE_MS 50
 
 static bool     prev_btn_last = true;
 static bool     next_btn_last = true;
@@ -57,13 +43,11 @@ static void buttons_tick() {
   bool prev_now = digitalRead(BTN_PREV_PIN);
   bool next_now = digitalRead(BTN_NEXT_PIN);
 
-  // Bouton PREV (GPIO0) - front descendant avec debounce
   if (!prev_now && prev_btn_last && (now - prev_last_ms) > BTN_DEBOUNCE_MS) {
     prev_last_ms = now;
     Serial.println("[BTN] PREV");
     bootloader_ui_prev();
   }
-  // Bouton NEXT (GPIO18) - front descendant avec debounce
   if (!next_now && next_btn_last && (now - next_last_ms) > BTN_DEBOUNCE_MS) {
     next_last_ms = now;
     Serial.println("[BTN] NEXT");
@@ -77,31 +61,49 @@ static void buttons_tick() {
 // ── setup ────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  Serial.println("[COMPAGNON] Demarrage v3...");
+  delay(300);
+  Serial.println("\n[COMPAGNON] Demarrage v3...");
+  Serial.printf("[MEM] Heap libre: %lu octets\n", (unsigned long)ESP.getFreeHeap());
+  Serial.printf("[MEM] PSRAM libre: %lu octets\n", (unsigned long)ESP.getFreePsram());
 
-  display_init();         // Ecran AMOLED + LVGL + touch (Wire.begin inclus)
-  pwr_button_init();      // AXP2101 + IRQ bouton PWR (Wire déjà init)
-  status_bar_init();      // Barre d'etat layer systeme LVGL
-  buttons_init();         // GPIO BOOT (0) et BTN2 (18)
-  bt_manager_init();      // Bluetooth Classic "Compagnon"
+  // ── 1. Ecran en premier — indispensable pour voir quoi que ce soit ──
+  display_init();         // Ecran AMOLED + LVGL + touch
 
-  // WiFi - captive portal si pas de credentials en NVS
+  // ── 2. Carousel visible immédiatement ──────────────────────────────
+  orchestrator_init();
+  bootloader_ui_show();   // Lance le carousel - l'ecran doit s'allumer ici
+
+  // Quelques frames LVGL pour que l'écran s'affiche avant d'init le WiFi
+  for (int i = 0; i < 20; i++) {
+    lv_timer_handler();
+    delay(10);
+  }
+
+  // ── 3. Status bar ──────────────────────────────────────────────────
+  status_bar_init();
+
+  // ── 4. PWR button ───────────────────────────────────────────────────
+  pwr_button_init();
+  buttons_init();
+
+  // ── 5. WiFi EN DERNIER (gros consommateur de heap) ──────────────────
+  Serial.printf("[MEM] Heap avant WiFi: %lu octets\n", (unsigned long)ESP.getFreeHeap());
   wifi_manager_init();
 
-  orchestrator_init();
-  bootloader_ui_show();   // Lance le carousel
+  // BT desactive - trop gourmand en RAM simultanement avec WiFi+LVGL
+  // bt_manager_init();
 
   Serial.println("[COMPAGNON] Pret.");
+  Serial.printf("[MEM] Heap final: %lu octets\n", (unsigned long)ESP.getFreeHeap());
 }
 
 // ── loop ─────────────────────────────────────────────────────────────────────
 void loop() {
-  pwr_button_tick();      // Gestion PWR (court/2s/5s)
-  buttons_tick();         // GPIO BOOT + BTN2 avec debounce
-  bt_manager_tick();      // Messages BT entrants
-  status_bar_tick();      // Heure/batt/icones toutes 5s
-  orchestrator_tick();    // Logique metier
-  lv_timer_handler();     // Rendu LVGL
+  pwr_button_tick();
+  buttons_tick();
+  // bt_manager_tick();    // desactive
+  status_bar_tick();
+  orchestrator_tick();
+  lv_timer_handler();
   delay(5);
 }
