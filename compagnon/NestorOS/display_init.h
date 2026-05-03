@@ -4,6 +4,8 @@
  * Pilote   : SH8601 / CO5300  —  Interface : QSPI
  * Touch    : I2C (CST816 ou similaire)
  * Résolution : 480 × 480 px
+ *
+ * ⚠️  API LVGL v9  (lv_display_t / lv_indev_t)
  */
 #pragma once
 #include <lvgl.h>
@@ -11,9 +13,4 @@
 #define SCREEN_W  480
 #define SCREEN_H  480
 
-/**
- * Initialise le matériel (QSPI, touch I2C) et enregistre
- * les drivers display + input auprès de LVGL.
- * À appeler une seule fois dans setup().
- */
 void display_init();
