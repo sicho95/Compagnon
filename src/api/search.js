@@ -24,6 +24,10 @@ import { lsGet, lsSet } from '../storage/agents-db.js';
 //   → Chaque sous-requête lancée indépendamment via searchWeb()
 //   → Retourne { resultsMap, allResults } pour synthèse LLM
 //
+// fetchPageText(url) :
+//   → Fetch une page via le proxy CORS, extrait le texte brut utile
+//   → Utilisé par runWebAnalyst pour enrichir les réponses au-delà des snippets
+//
 // Proxy CORS : toutes les requêtes passent par proxy.sicho95.workers.dev
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -82,7 +86,7 @@ function isComplexQuery(query) {
 //   1. Si la requête contient une chaîne TV nommée → split par chaîne
 //   2. Sinon split classique sur séparateurs (, et ou &)
 //
-// Ex : "programme tv tf1 maintenant"
+// Ex : "programme tv tf1 maintenant site:tf1.fr OR site:telerama.fr"
 //   → ["programme TV TF1 maintenant site:tf1.fr OR site:telerama.fr"]
 //
 // Ex : "programme TV TF1, France 2 et M6 ce soir"
@@ -286,6 +290,69 @@ export async function searchWebMulti(queries, { maxResultsPerQuery = 4 } = {}) {
   }
 
   return { resultsMap, allResults };
+}
+
+// ─── fetchPageText — Fetch + extraction texte d'une URL ──────────────────────
+//
+// Passe par le proxy CORS, récupère le HTML, extrait le texte lisible :
+//   1. Supprime scripts, styles, nav, footer, aside
+//   2. Extrait le contenu de <article>, <main> ou <body> (priorité décroissante)
+//   3. Nettoie le HTML restant → texte brut
+//   4. Tronque à maxChars pour ne pas dépasser le contexte LLM
+//
+// @param {string}  url       — URL à fetcher
+// @param {number}  maxChars  — Limite de caractères extraits (défaut : 3000)
+// @returns {Promise<string>} — Texte extrait ou chaîne vide si échec
+
+export async function fetchPageText(url, { maxChars = 3000 } = {}) {
+  if (!url || !url.startsWith('http')) return '';
+
+  try {
+    const proxy    = getProxyUrl();
+    const proxyUrl = proxy + '?url=' + encodeURIComponent(url);
+
+    const res = await fetch(proxyUrl, {
+      headers: { 'Accept': 'text/html' },
+      signal:  AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return '';
+
+    let html = await res.text();
+
+    // Supprimer les éléments parasites
+    html = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+      .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+      .replace(/<header[\s\S]*?<\/header>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+
+    // Extraire le bloc principal (article > main > body)
+    const contentMatch =
+      html.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+      html.match(/<main[^>]*>([\s\S]*?)<\/main>/i)       ||
+      html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+
+    const rawContent = contentMatch ? contentMatch[1] : html;
+
+    // Nettoyer les balises restantes → texte brut
+    const text = rawContent
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g,  '&')
+      .replace(/&lt;/g,   '<')
+      .replace(/&gt;/g,   '>')
+      .replace(/&quot;/g, '"')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    return text.slice(0, maxChars);
+  } catch (e) {
+    console.warn('[Nestor/search] fetchPageText échoué pour', url, ':', e.message);
+    return '';
+  }
 }
 
 // ─── Point d'entrée principal ─────────────────────────────────────────────────

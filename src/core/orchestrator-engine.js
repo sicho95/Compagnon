@@ -12,11 +12,18 @@
  *
  * Chaque stratégie mesure sa confiance post-exécution.
  * Si confiance < seuil → escalade automatique vers stratégie supérieure.
+ *
+ * runWebAnalyst — enrichissement transparent par fetch :
+ *  • Les snippets search suffisent pour les requêtes temps-réel / factuelles courtes.
+ *  • Pour les questions de fond (définitions, explications, analyses), les 1-2
+ *    premières URLs sont fetchées et leur contenu injecté dans le contexte LLM.
+ *  • La décision fetch/no-fetch est heuristique (needsDeepContent), sans LLM.
+ *  • Timeout 8 s par page, silencieux si la page est inaccessible.
  */
 
-import { callLLM }    from '../api/backends.js';
-import { searchWeb }  from '../api/search.js';
-import { saveAgent, loadAgents } from '../storage/agents-db.js';
+import { callLLM }                  from '../api/backends.js';
+import { searchWeb, fetchPageText } from '../api/search.js';
+import { saveAgent, loadAgents }    from '../storage/agents-db.js';
 
 // ─── Types de stratégie ───────────────────────────────────────────────────────
 export const STRATEGY = {
@@ -60,15 +67,37 @@ function coverageScore(agent, userMsg, needsWeb) {
 }
 
 // ─── Heuristique rapide (sans LLM) ──────────────────────────────────────────
-const WEB_KEYWORDS = ['actualit', 'météo', 'cours ', 'prix ', 'aujourd', 'dernier', 'récent', 'cote ', 'bourse', 'live', 'direct', 'tv ', 'programme', 'horaire', 'news'];
-const MULTI_KEYWORDS = ['puis', 'ensuite', 'après', 'et aussi', 'en plus', 'compare', 'synthèse', 'rapport', 'd\'abord'];
+
+// Mots-clés signalant un besoin de données fraîches / temps-réel
+const WEB_REALTIME_KEYWORDS = [
+  'actualit', 'météo', 'cours ', 'prix ', 'aujourd', 'dernier', 'récent',
+  'cote ', 'bourse', 'live', 'direct', 'tv ', 'programme', 'horaire', 'news',
+];
+
+// Mots-clés signalant une question de fond → fetch pages utile
+const WEB_DEFINITION_KEYWORDS = [
+  'qu\'est', 'qu\'est-ce', 'c\'est quoi', 'c\'est quoi', 'keskeuh', 'keskeske',
+  'définition', 'définir', 'expliqu', 'comment fonctionne', 'comment marche',
+  'comment s\'appelle', 'comment appell', 'kezako', 'kézako',
+  'qui est', 'qui était', 'quelle est', 'quel est', 'biographie', 'histoire de',
+  'origine de', 'description', 'présente-moi', 'présente moi', 'parle-moi de',
+  'parle moi de', 'dis-moi', 'dis moi', 'raconte', 'renseigne',
+];
+
+const MULTI_KEYWORDS = [
+  'puis', 'ensuite', 'après', 'et aussi', 'en plus', 'compare',
+  'synthèse', 'rapport', 'd\'abord',
+];
 
 function quickAnalyze(userMsg) {
   const m = userMsg.toLowerCase();
+  const needsRealtime  = WEB_REALTIME_KEYWORDS.some(k => m.includes(k));
+  const needsDefinition = WEB_DEFINITION_KEYWORDS.some(k => m.includes(k));
   return {
-    needsWeb:    WEB_KEYWORDS.some(k => m.includes(k)),
-    isMultiStep: MULTI_KEYWORDS.some(k => m.includes(k)) || userMsg.length > 200,
-    wordCount:   userMsg.split(/\s+/).length,
+    needsWeb:         needsRealtime || needsDefinition,
+    needsDeepContent: needsDefinition && !needsRealtime, // fetch pages si question de fond
+    isMultiStep:      MULTI_KEYWORDS.some(k => m.includes(k)) || userMsg.length > 200,
+    wordCount:        userMsg.split(/\s+/).length,
   };
 }
 
@@ -118,16 +147,65 @@ RÉPONSE JSON STRICT :
 }
 
 // ─── Runners ─────────────────────────────────────────────────────────────────
-async function runWebAnalyst(agent, userMsg, searchQuery, context = '') {
+
+/**
+ * runWebAnalyst — Agent web avec enrichissement transparent par fetch de pages
+ *
+ * Logique :
+ *  1. searchWeb() → snippets (toujours)
+ *  2. Si needsDeepContent=true (question de fond) :
+ *     → fetch du 1er lien avec URL valide (2e en backup silencieux)
+ *     → contenu injecté dans le contexte sous "CONTENU PAGE"
+ *  3. Prompt LLM construit avec snippets + contenu page (si disponible)
+ *
+ * Le fetch est entièrement transparent : silencieux si la page échoue,
+ * le LLM ne voit que des données enrichies sans savoir d'où elles viennent.
+ */
+async function runWebAnalyst(agent, userMsg, searchQuery, context = '', options = {}) {
+  const { needsDeepContent = false } = options;
+
+  // 1. Recherche web (snippets)
   const results = await searchWeb(searchQuery || userMsg, { maxResults: 6 });
-  const webCtx = results.length
+  const hasResults = results.length && results[0].title !== 'Aucun résultat';
+
+  // 2. Fetch page si question de fond et résultats disponibles
+  let pageContent = '';
+  if (needsDeepContent && hasResults) {
+    // Chercher la 1ère URL valide dans les résultats
+    const candidates = results.filter(r => r.link && r.link.startsWith('http'));
+    for (const candidate of candidates.slice(0, 2)) {
+      const text = await fetchPageText(candidate.link, { maxChars: 3000 });
+      if (text.length > 200) {
+        pageContent = `--- Contenu de : ${candidate.title} (${candidate.link}) ---\n${text}`;
+        break; // On s'arrête dès qu'on a une page suffisamment riche
+      }
+    }
+    if (!pageContent) {
+      // Toutes les pages ont échoué → on essaie la 3e en dernier recours
+      const fallback = candidates[2];
+      if (fallback) {
+        const text = await fetchPageText(fallback.link, { maxChars: 2000 });
+        if (text.length > 100) pageContent = `--- Contenu de : ${fallback.title} ---\n${text}`;
+      }
+    }
+  }
+
+  // 3. Construction du contexte web pour le LLM
+  const webSnippets = hasResults
     ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
     : 'Aucun résultat web.';
+
+  const webCtx = pageContent
+    ? `${webSnippets}\n\n${pageContent}`
+    : webSnippets;
+
+  // 4. Appel LLM
   const prefs = (agent.preferences || []).join('\n');
   const sys = agent.system_prompt
-    + (prefs  ? `\n\nPréférences :\n${prefs}` : '')
+    + (prefs    ? `\n\nPréférences :\n${prefs}` : '')
     + `\n\nRÉSULTATS WEB :\n${webCtx}`
-    + (context ? `\n\nCONTEXTE :\n${context}` : '');
+    + (context  ? `\n\nCONTEXTE :\n${context}` : '');
+
   const r = await callLLM(agent.backendId || 'groq-llama', {
     messages: [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
     agentConfig: agent,
@@ -138,7 +216,7 @@ async function runWebAnalyst(agent, userMsg, searchQuery, context = '') {
 async function runLlmAgent(agent, userMsg, context = '') {
   const prefs = (agent.preferences || []).join('\n');
   const sys = agent.system_prompt
-    + (prefs  ? `\n\nPréférences :\n${prefs}` : '')
+    + (prefs   ? `\n\nPréférences :\n${prefs}` : '')
     + (context ? `\n\nCONTEXTE :\n${context}` : '');
   const r = await callLLM(agent.backendId || 'groq-llama', {
     messages: [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
@@ -198,7 +276,7 @@ async function createAgentSpec(factoryAgent, newAgentSpec, backendId) {
  */
 export async function resolve(userMsg, agents, orchestratorAgent, options = {}) {
   const trace = [];
-  const findAgent = id  => agents.find(a => a.id === id);
+  const findAgent  = id => agents.find(a => a.id === id);
   const findByRole = r  => agents.find(a => a.role === r);
   const { confidenceThreshold = 0.65 } = options;
 
@@ -258,14 +336,16 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
 
   // ── 3. Exécution ──────────────────────────────────────────────────────────
   let reply = '', confidence = 0, newAgentCreated = null;
+  // Options d'enrichissement transmises aux runners web
+  const webOpts = { needsDeepContent: qa.needsDeepContent };
 
   try {
     if (plan.strategy === STRATEGY.DIRECT_MIXED) {
       const agent = (plan.agents?.[0] && findAgent(plan.agents[0]))
         || findByRole(ROLES.WEB_ANALYST) || findByRole(ROLES.WEB_SEARCH);
       if (!agent) throw new Error('Aucun agent web disponible');
-      trace.push({ step: 'exec', msg: `→ ${agent.name} (web-analyst)` });
-      reply = await runWebAnalyst(agent, userMsg, plan.search_query);
+      trace.push({ step: 'exec', msg: `→ ${agent.name} (web-analyst)${webOpts.needsDeepContent ? ' [+fetch page]' : ''}` });
+      reply = await runWebAnalyst(agent, userMsg, plan.search_query, '', webOpts);
 
     } else if (plan.strategy === STRATEGY.DIRECT_LLM) {
       const agent = plan.agents?.[0] && findAgent(plan.agents[0]);
@@ -284,7 +364,7 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
           : `Demande : "${userMsg}"\n\nRésultat étape précédente :\n${lastReply}`;
         const isWeb = agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH;
         lastReply = isWeb
-          ? await runWebAnalyst(agent, stepMsg, i === 0 ? plan.search_query : lastReply.slice(0, 200), context)
+          ? await runWebAnalyst(agent, stepMsg, i === 0 ? plan.search_query : lastReply.slice(0, 200), context, i === 0 ? webOpts : {})
           : await runLlmAgent(agent, stepMsg, context);
         context = `Étape ${i+1} (${agent.name}) :\n${lastReply.slice(0, 600)}`;
       }
@@ -298,7 +378,7 @@ export async function resolve(userMsg, agents, orchestratorAgent, options = {}) 
       trace.push({ step: 'created', msg: `"${newAgent.name}" (${newAgent.role}) créé` });
       const isWeb = newAgent.role === ROLES.WEB_ANALYST || newAgent.role === ROLES.WEB_SEARCH;
       reply = isWeb
-        ? await runWebAnalyst(newAgent, userMsg, plan.search_query)
+        ? await runWebAnalyst(newAgent, userMsg, plan.search_query, '', webOpts)
         : await runLlmAgent(newAgent, userMsg);
     }
 
