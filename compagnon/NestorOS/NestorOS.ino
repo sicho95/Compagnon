@@ -40,9 +40,12 @@
 // ── Boutons physiques GPIO ───────────────────────────────────────────────────
 #define BTN_PREV_PIN  0    // BOOT button - active-low
 #define BTN_NEXT_PIN  18   // Bouton custom - active-low
+#define BTN_DEBOUNCE_MS 50 // Anti-rebond 50ms
 
-static bool prev_btn_last = true;
-static bool next_btn_last = true;
+static bool     prev_btn_last = true;
+static bool     next_btn_last = true;
+static uint32_t prev_last_ms  = 0;
+static uint32_t next_last_ms  = 0;
 
 static void buttons_init() {
   pinMode(BTN_PREV_PIN, INPUT_PULLUP);
@@ -50,10 +53,23 @@ static void buttons_init() {
 }
 
 static void buttons_tick() {
+  uint32_t now = millis();
   bool prev_now = digitalRead(BTN_PREV_PIN);
   bool next_now = digitalRead(BTN_NEXT_PIN);
-  if (!prev_now && prev_btn_last) bootloader_ui_prev();
-  if (!next_now && next_btn_last) bootloader_ui_next();
+
+  // Bouton PREV (GPIO0) - front descendant avec debounce
+  if (!prev_now && prev_btn_last && (now - prev_last_ms) > BTN_DEBOUNCE_MS) {
+    prev_last_ms = now;
+    Serial.println("[BTN] PREV");
+    bootloader_ui_prev();
+  }
+  // Bouton NEXT (GPIO18) - front descendant avec debounce
+  if (!next_now && next_btn_last && (now - next_last_ms) > BTN_DEBOUNCE_MS) {
+    next_last_ms = now;
+    Serial.println("[BTN] NEXT");
+    bootloader_ui_next();
+  }
+
   prev_btn_last = prev_now;
   next_btn_last = next_now;
 }
@@ -65,7 +81,7 @@ void setup() {
   Serial.println("[COMPAGNON] Demarrage v3...");
 
   display_init();         // Ecran AMOLED + LVGL + touch (Wire.begin inclus)
-  pwr_button_init();      // AXP2101 + IRQ bouton PWR
+  pwr_button_init();      // AXP2101 + IRQ bouton PWR (Wire déjà init)
   status_bar_init();      // Barre d'etat layer systeme LVGL
   buttons_init();         // GPIO BOOT (0) et BTN2 (18)
   bt_manager_init();      // Bluetooth Classic "Compagnon"
@@ -82,7 +98,7 @@ void setup() {
 // ── loop ─────────────────────────────────────────────────────────────────────
 void loop() {
   pwr_button_tick();      // Gestion PWR (court/2s/5s)
-  buttons_tick();         // GPIO BOOT + BTN2
+  buttons_tick();         // GPIO BOOT + BTN2 avec debounce
   bt_manager_tick();      // Messages BT entrants
   status_bar_tick();      // Heure/batt/icones toutes 5s
   orchestrator_tick();    // Logique metier

@@ -4,11 +4,9 @@
  * Touch        : CST816 sur I2C (SDA=15, SCL=14)
  * LVGL         : v9  →  lv_display_t / lv_indev_t
  *
- * Fix v2 :
- *  - Reset CST816 via TOUCH_RES avant Wire.begin
- *  - Lecture I2C : on lit 7 octets (reg 0x01 inclus) pour avoir
- *    le nombre de doigts dans le bon registre
- *  - Masque 0x0F sur xh/yh correctement appliqué
+ * Fix v3 :
+ *  - Reset hardware LCD (GPIO45) avant gfx->begin() pour cold power-on
+ *  - lv_tick_set_cb() pour que LVGL ait un timer correct
  */
 #include "display_init.h"
 #include "pin_config.h"
@@ -43,6 +41,11 @@ static void disp_flush_cb(lv_display_t *display,
   lv_display_flush_ready(display);
 }
 
+// ── Tick LVGL via millis() ────────────────────────────────────────────────
+static uint32_t lv_tick_get_cb_impl() {
+  return (uint32_t)millis();
+}
+
 // ── Lecture touch CST816 ──────────────────────────────────────────────────
 // Registres CST816S (addr 0x15) :
 //  0x01 = GestureID, 0x02 = FingerNum, 0x03 XH, 0x04 XL, 0x05 YH, 0x06 YL
@@ -65,7 +68,6 @@ static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
   if ((points & 0x0F) > 0) {
     int16_t x = (int16_t)(((xh & 0x0F) << 8) | xl);
     int16_t y = (int16_t)(((yh & 0x0F) << 8) | yl);
-    // Clamp
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x >= SCREEN_W) x = SCREEN_W - 1;
@@ -78,16 +80,25 @@ static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
 
 // ── Initialisation principale ──────────────────────────────────────────────
 void display_init() {
-  // Reset hardware du CST816
+  // ── 1. Reset hardware CST816 (touch) AVANT Wire.begin ──────────────────
 #ifdef TOUCH_RES
   pinMode(TOUCH_RES, OUTPUT);
-  digitalWrite(TOUCH_RES, LOW);  delay(10);
-  digitalWrite(TOUCH_RES, HIGH); delay(50);
+  digitalWrite(TOUCH_RES, LOW);  delay(20);
+  digitalWrite(TOUCH_RES, HIGH); delay(100);
 #endif
 
+  // ── 2. Reset hardware LCD (CO5300) pour cold power-on ──────────────────
+  //    Arduino_CO5300 passe déjà par gfx->begin() mais un reset manuel
+  //    garantit l'état correct après un shutdown AXP2101.
+  pinMode(LCD_RESET, OUTPUT);
+  digitalWrite(LCD_RESET, LOW);  delay(20);
+  digitalWrite(LCD_RESET, HIGH); delay(120);
+
+  // ── 3. I2C (partagé CST816 + AXP2101) ─────────────────────────────────
   Wire.begin(IIC_SDA, IIC_SCL);
   Wire.setClock(400000);
 
+  // ── 4. Ecran ───────────────────────────────────────────────────────────
   if (!gfx->begin()) {
     Serial.println("[DISPLAY] Erreur init ecran !");
     while (1) delay(100);
@@ -97,7 +108,9 @@ void display_init() {
   gfx->setBrightness(200);
   Serial.println("[DISPLAY] Ecran OK 480x480");
 
+  // ── 5. LVGL v9 ────────────────────────────────────────────────────────
   lv_init();
+  lv_tick_set_cb(lv_tick_get_cb_impl);
 
   disp = lv_display_create(SCREEN_W, SCREEN_H);
   lv_display_set_flush_cb(disp, disp_flush_cb);

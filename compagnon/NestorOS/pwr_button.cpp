@@ -1,12 +1,11 @@
 /**
  * pwr_button.cpp
- * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.3).
+ * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.x).
  *
- * Fix v5 :
- *  - XPowersPMU -> XPowersAXP2101 (correct pour XPowersLib 0.3.3)
- *  - Utilise AXP_INT depuis pin_config.h
- *  - shutdown via pmu.shutdown()
- *  - pmu_get_battery_percent() robuste
+ * Fix v6 :
+ *  - pmu.begin(Wire, addr) SANS repasser les pins SDA/SCL
+ *    → évite la réinitialisation du bus Wire qui cassait le touch CST816
+ *  - Toujours XPowersAXP2101 (XPowersLib 0.3.3)
  */
 #include "pwr_button.h"
 #include "bootloader_ui.h"
@@ -33,7 +32,6 @@ static void IRAM_ATTR axp_isr() {
 static void enter_sleep() {
   Serial.println("[PWR] Veille...");
   _sleeping = true;
-  extern Arduino_CO5300 *gfx;
   gfx->setBrightness(0);
   gfx->displayOff();
   esp_sleep_enable_ext0_wakeup((gpio_num_t)AXP_INT, 0);
@@ -58,7 +56,10 @@ static void power_off() {
 }
 
 void pwr_button_init() {
-  _pmu_ok = pmu.begin(Wire, AXP_I2C_ADDR, IIC_SDA, IIC_SCL);
+  // Wire déjà initialisé dans display_init().
+  // Ne PAS repasser IIC_SDA/IIC_SCL ici : réinitialiserait le bus et
+  // casserait la communication I2C avec le touch CST816.
+  _pmu_ok = pmu.begin(Wire, AXP_I2C_ADDR);
   if (!_pmu_ok) {
     Serial.println("[PWR] AXP2101 non trouve - bouton PWR desactive");
     return;
