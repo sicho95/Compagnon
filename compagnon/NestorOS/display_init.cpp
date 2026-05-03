@@ -37,9 +37,8 @@ static void disp_flush_cb(lv_display_t *display,
 
 // ── Lecture touch CST816 (I2C) ─────────────────────────────────────────────
 static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
-  // Protocole CST816 : lecture 6 octets depuis l'adresse 0x15
   Wire.beginTransmission(0x15);
-  Wire.write(0x02); // registre données touch
+  Wire.write(0x02);
   Wire.endTransmission(false);
   Wire.requestFrom(0x15, 6);
 
@@ -65,20 +64,17 @@ static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
 
 // ── Initialisation principale ──────────────────────────────────────────────
 void display_init() {
-  // I2C pour touch
   Wire.begin(IIC_SDA, IIC_SCL);
 
-  // Init écran AMOLED via GFX
   if (!gfx->begin()) {
     Serial.println("[DISPLAY] Erreur init écran !");
-    while (1) delay(100); // bloque si pas d'écran
+    while (1) delay(100);
   }
-  bus->writeC8D8(0x36, 0xA0); // orientation Waveshare
-  gfx->fillScreen(BLACK);     // efface l'écran
-  gfx->setBrightness(200);    // luminosité initiale (0-255)
-  Serial.println("[DISPLAY] Écran OK 466x466");
+  bus->writeC8D8(0x36, 0xA0);   // orientation Waveshare
+  gfx->fillScreen(0x0000);      // noir RGB565
+  gfx->setBrightness(200);
+  Serial.println("[DISPLAY] Écran OK 480x480");
 
-  // LVGL v9
   lv_init();
 
   disp = lv_display_create(SCREEN_W, SCREEN_H);
