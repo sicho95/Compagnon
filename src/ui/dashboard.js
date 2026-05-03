@@ -1,4 +1,4 @@
-import { listBackends, callLLM, loadGroqModels } from '../api/backends.js';
+import { listBackends, callLLM, loadGroqModels, resetGroqModelsCache } from '../api/backends.js';
 import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson, lsGet, lsSet } from '../storage/agents-db.js';
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
@@ -20,9 +20,7 @@ function tag(text, color) {
 }
 
 // ─── Sépare la réponse principale des sources ─────────────────────────────────
-// Détecte un bloc "Source(s) :" ou "Source :" à la fin du message
 function splitReplyAndSources(text) {
-  // Patterns courants : "Source : ...", "Sources :\n...", "Source(s) :\n..."
   const sourcePattern = /\n+(?:Sources?\s*(?:\(s\))?\s*:.*)/si;
   const match = text.match(sourcePattern);
   if (!match) return { main: text, sources: '' };
@@ -35,9 +33,7 @@ function splitReplyAndSources(text) {
 
 // ─── Texte pour TTS : retire les sources et les URLs ──────────────────────────
 function textForTTS(text) {
-  // Supprimer le bloc sources
   const { main } = splitReplyAndSources(text);
-  // Supprimer les URLs restantes
   return main.replace(/https?:\/\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
@@ -183,7 +179,6 @@ function renderChatView(container, state, rerender) {
     title.appendChild(badge);
   }
 
-  // Bouton silencieux
   const silentBtn = btn(isSilentMode() ? '🔇' : '🔊', '', () => {
     const newMode = !isSilentMode();
     setSilentMode(newMode);
@@ -221,7 +216,6 @@ function renderChatView(container, state, rerender) {
       });
 
       if (m.role === 'assistant') {
-        // Séparer réponse principale et sources
         const { main, sources } = splitReplyAndSources(m.content);
         bubble.textContent = main;
 
@@ -235,7 +229,6 @@ function renderChatView(container, state, rerender) {
             lineHeight: '1.5',
             whiteSpace: 'pre-wrap',
           });
-          // Rendre les URLs cliquables
           srcEl.innerHTML = sources.replace(
             /(https?:\/\/[^\s<]+)/g,
             '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#558;word-break:break-all;">$1</a>'
@@ -260,7 +253,6 @@ function renderChatView(container, state, rerender) {
   container.appendChild(msgArea);
   if (tracePanel) container.appendChild(tracePanel);
 
-  // Feedback
   const feedbackZone = el('div', { margin:'4px 0' });
   const feedbackToggle = btn('📝 Corriger / Feedback', '', () => {
     feedbackInput.style.display = feedbackInput.style.display === 'none' ? 'block' : 'none';
@@ -343,7 +335,6 @@ function renderChatView(container, state, rerender) {
         state.chatHistory.push({ role:'assistant', content: reply, _orchestrated: true, _strategy: strategy });
 
       } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
-        // ── WEB ANALYST : découpage multi-requêtes si demande complexe ────────
         const subQueries = splitIntoSubQueries(msg);
         let context;
 
@@ -372,7 +363,6 @@ function renderChatView(container, state, rerender) {
         state.chatHistory.push({ role:'assistant', content: reply });
 
       } else {
-        // ── LLM PUR ───────────────────────────────────────────────────────────
         const prefs = (agent.preferences || []).join('\n');
         const sysContent = agent.system_prompt + (prefs ? `\n\nPréférences :\n${prefs}` : '');
         const messages = [
@@ -395,7 +385,6 @@ function renderChatView(container, state, rerender) {
     agent.metrics.lastUsed = new Date().toISOString();
     await saveAgent(agent);
 
-    // ── TTS : lire la réponse sauf si mode silencieux — SANS les sources ──
     if (reply && !isSilentMode()) {
       const ttsText = textForTTS(reply);
       if (ttsText) speak(ttsText).catch(e => console.warn('[Nestor/TTS]', e.message));
@@ -558,7 +547,6 @@ function renderEditView(container, state, rerender) {
     container.appendChild(el2);
   });
 
-  // Backend selector
   container.appendChild(labelEl('Backend LLM'));
   const backendSel = document.createElement('select');
   Object.assign(backendSel.style, {
@@ -591,18 +579,76 @@ function renderEditView(container, state, rerender) {
 
 // ─── Settings View ────────────────────────────────────────────────────────────
 function renderSettings(container, state, rerender) {
-  const title = el('div', { fontWeight:'600', fontSize:'15px', marginBottom:'12px' });
-  title.textContent = '⚙️ Réglages';
-  container.appendChild(title);
+  // NB : le titre "⚙️ Réglages" est déjà affiché par renderDashboard — pas de doublon ici.
 
-  // Voice selector
+  // ── Section : Clés API ────────────────────────────────────────────────────
+  const sectionApi = el('div', {
+    background:'#111', border:'1px solid #2a2a2a', borderRadius:'10px',
+    padding:'12px', marginBottom:'12px', display:'flex', flexDirection:'column', gap:'10px'
+  });
+
+  const sectionApiTitle = el('div', { fontSize:'11px', color:'#5a9', fontWeight:'600',
+    textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'2px' });
+  sectionApiTitle.textContent = '🔑 Clés API';
+  sectionApi.appendChild(sectionApiTitle);
+
+  // Helper : champ clé API
+  function apiKeyField(label, storageKey, placeholder) {
+    const wrap = el('div', { display:'flex', flexDirection:'column', gap:'3px' });
+    wrap.appendChild(labelEl(label));
+    const inp = document.createElement('input');
+    inp.type = 'password';
+    inp.placeholder = placeholder || 'sk-…';
+    inp.value = lsGet(storageKey) || '';
+    inp.setAttribute('autocomplete', 'off');
+    Object.assign(inp.style, {
+      width:'100%', background:'#0d0d0d', color:'#ccc', border:'1px solid #333',
+      borderRadius:'8px', padding:'8px 10px', fontSize:'13px', boxSizing:'border-box',
+    });
+
+    const row = el('div', { display:'flex', gap:'6px', alignItems:'center' });
+    row.appendChild(inp);
+
+    // Bouton afficher/masquer
+    const toggleBtn = btn('👁', '', () => {
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+    });
+    Object.assign(toggleBtn.style, { padding:'4px 8px', fontSize:'14px', flexShrink:'0' });
+    row.appendChild(toggleBtn);
+
+    // Bouton sauvegarder
+    const saveBtn = btn('✔', 'primary', () => {
+      const val = inp.value.trim();
+      lsSet(storageKey, val);
+      showToast(label + ' sauvegardée.');
+    });
+    Object.assign(saveBtn.style, { padding:'4px 10px', flexShrink:'0' });
+    row.appendChild(saveBtn);
+
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  sectionApi.appendChild(apiKeyField('Groq API Key', 'GROQ_API_KEY', 'gsk_…'));
+  sectionApi.appendChild(apiKeyField('Perplexity API Key', 'PERPLEXITY_API_KEY', 'pplx-…'));
+  container.appendChild(sectionApi);
+
+  // ── Section : Voix TTS ────────────────────────────────────────────────────
   const voices = listBrowserVoices();
   if (voices.length > 0) {
-    container.appendChild(labelEl('Voix TTS'));
+    const sectionTts = el('div', {
+      background:'#111', border:'1px solid #2a2a2a', borderRadius:'10px',
+      padding:'12px', marginBottom:'12px'
+    });
+    const sectionTtsTitle = el('div', { fontSize:'11px', color:'#5a9', fontWeight:'600',
+      textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+    sectionTtsTitle.textContent = '🔊 Voix TTS';
+    sectionTts.appendChild(sectionTtsTitle);
+
     const sel = document.createElement('select');
     Object.assign(sel.style, {
-      width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-      borderRadius:'8px', padding:'8px', fontSize:'13px', marginBottom:'10px'
+      width:'100%', background:'#0d0d0d', color:'#ccc', border:'1px solid #333',
+      borderRadius:'8px', padding:'8px', fontSize:'13px',
     });
     voices.forEach((v, i) => {
       const opt = document.createElement('option');
@@ -611,25 +657,49 @@ function renderSettings(container, state, rerender) {
     });
     sel.addEventListener('change', () => {
       lsSet('nestor_voice_index', sel.value);
-      showToast('Voix sélectionnée : ' + voices[sel.value]?.name);
+      showToast('Voix : ' + voices[sel.value]?.name);
     });
     const saved = lsGet('nestor_voice_index');
     if (saved !== null) sel.value = saved;
-    container.appendChild(sel);
+    sectionTts.appendChild(sel);
+    container.appendChild(sectionTts);
   }
 
-  // Groq models
-  const loadModelsBtn = btn('🔄 Charger modèles Groq', '', async () => {
-    try {
-      const models = await loadGroqModels();
-      showToast(models.length + ' modèles Groq chargés.');
-      rerender();
-    } catch(e) { showToast('Erreur : ' + e.message, true); }
+  // ── Section : Modèles Groq ────────────────────────────────────────────────
+  const sectionGroq = el('div', {
+    background:'#111', border:'1px solid #2a2a2a', borderRadius:'10px',
+    padding:'12px', marginBottom:'12px'
   });
-  container.appendChild(loadModelsBtn);
+  const sectionGroqTitle = el('div', { fontSize:'11px', color:'#5a9', fontWeight:'600',
+    textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+  sectionGroqTitle.textContent = '🤖 Modèles Groq';
+  sectionGroq.appendChild(sectionGroqTitle);
 
+  const groqHint = el('div', { fontSize:'11px', color:'#666', marginBottom:'8px' });
+  groqHint.textContent = 'Recharge la liste des modèles Groq disponibles (requiert la clé Groq).';
+  sectionGroq.appendChild(groqHint);
+
+  const loadModelsBtn = btn('🔄 Charger modèles Groq', '', async () => {
+    loadModelsBtn.textContent = '⏳ Chargement…';
+    loadModelsBtn.disabled = true;
+    try {
+      await resetGroqModelsCache();
+      const backends = listBackends().filter(b => b.groqDynamic);
+      showToast(backends.length + ' modèles Groq chargés.');
+      rerender();
+    } catch(e) {
+      showToast('Erreur : ' + e.message, true);
+    }
+    loadModelsBtn.textContent = '🔄 Charger modèles Groq';
+    loadModelsBtn.disabled = false;
+  });
+  Object.assign(loadModelsBtn.style, { width:'100%' });
+  sectionGroq.appendChild(loadModelsBtn);
+  container.appendChild(sectionGroq);
+
+  // ── Retour ────────────────────────────────────────────────────────────────
   const backBtn = btn('← Retour', '', () => { state.view = 'agents'; rerender(); });
-  backBtn.style.marginTop = '8px';
+  Object.assign(backBtn.style, { marginTop:'4px', width:'100%' });
   container.appendChild(backBtn);
 }
 
