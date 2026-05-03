@@ -2,11 +2,12 @@
  * pwr_button.cpp
  * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.3).
  *
- * Fix v2 :
+ * Fix v3 :
  *  - getIrqStatus() au lieu de readIrqStatus()
  *  - XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ  (sans _EDGE_)
  *  - XPOWERS_AXP2101_PKEY_POSITIVE_IRQ  (sans _EDGE_)
- *  - isPekeyNegativeTrigger() / isPekeyPositiveTrigger()  (sans Edge)
+ *  - isPekeyNegativeIrq()  (pas NegativeTrigger, pas NegativeEdgeTrigger)
+ *  - isPekeyPositiveIrq()  (pas PositiveTrigger, pas PositiveEdgeTrigger)
  *
  * Comportements :
  *   Appui court  (< 2 s)  -> retour au carousel launcher
@@ -67,9 +68,9 @@ void pwr_button_init() {
   Serial.println("[PWR] AXP2101 OK");
 
   pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
-  pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ    |
-                XPOWERS_AXP2101_PKEY_LONG_IRQ      |
-                XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ  |
+  pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ   |
+                XPOWERS_AXP2101_PKEY_LONG_IRQ     |
+                XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |
                 XPOWERS_AXP2101_PKEY_POSITIVE_IRQ);
   pmu.clearIrqStatus();
 
@@ -82,15 +83,16 @@ void pwr_button_tick() {
   if (!_pmu_ok || !_irq_fired) return;
   _irq_fired = false;
 
-  pmu.getIrqStatus();   // Fix: getIrqStatus() et non readIrqStatus()
+  pmu.getIrqStatus();
   uint32_t now = millis();
 
-  if (pmu.isPekeyNegativeTrigger()) {   // Fix: sans Edge
+  // Noms exacts XPowersLib 0.3.3
+  if (pmu.isPekeyNegativeIrq()) {
     _press_start_ms = now;
     Serial.println("[PWR] Bouton enfonce");
   }
 
-  if (pmu.isPekeyPositiveTrigger()) {   // Fix: sans Edge
+  if (pmu.isPekeyPositiveIrq()) {
     uint32_t held = now - _press_start_ms;
     Serial.printf("[PWR] Relache apres %lu ms\n", held);
 
