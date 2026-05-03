@@ -1,5 +1,11 @@
 #pragma once
-void bt_manager_init();       // Démarre Bluetooth Serial
-void bt_manager_tick();       // Loop BT — traite les messages entrants
-bool bt_is_active();          // true si BT démarré
-void bt_manager_set_visible(bool visible); // Rendre visible/invisible aux téléphones
+/**
+ * bt_manager.h
+ * Gestionnaire BLE (Bluetooth Low Energy) pour ESP32-S3.
+ * NOTE : L'ESP32-S3 ne supporte PAS BluetoothSerial (BT Classic).
+ * Utilisation BLE uniquement via BLEDevice.
+ */
+void bt_manager_init();
+void bt_manager_tick();
+bool bt_is_active();
+void bt_manager_set_visible(bool visible);

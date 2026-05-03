@@ -1,56 +1,55 @@
 /**
  * bt_manager.cpp
- * Gestionnaire Bluetooth Classic (BluetoothSerial).
+ * Gestionnaire BLE pour ESP32-S3.
  *
- * Fonctions :
- *  - Démarre le périphérique BT sous le nom "Compagnon"
- *  - Rend l'appareil visible/invisible (mode appairage on/off)
- *  - Affiche le PIN sur l'écran via callback
- *  - Lit les messages BT entrants (ex: commandes futures)
+ * Fix v2 : BluetoothSerial n'existe PAS sur ESP32-S3 (pas de BT Classic).
+ * Remplacement par BLEDevice (BLE uniquement).
  *
- * Appairage :
- *  - Sur votre téléphone, cherchez "Compagnon" dans les périphériques BT.
- *  - Si un PIN est demandé, il s'affiche à l'écran de la montre.
- *  - Pas d'app tierce nécessaire.
+ * Fonctionnement :
+ *  - Demarre un serveur BLE sous le nom "Compagnon"
+ *  - Advertising on/off via bt_manager_set_visible()
+ *  - Pour l'avenir : ajouter Nordic UART Service (NUS) pour
+ *    recevoir des commandes texte depuis une app BLE / Web Bluetooth.
  */
 #include "bt_manager.h"
-#include <BluetoothSerial.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLEAdvertising.h>
 #include <Arduino.h>
 
-static BluetoothSerial BT;
-static bool _bt_active  = false;
-static bool _visible    = false;
+static bool            _bt_active  = false;
+static bool            _visible    = false;
+static BLEServer      *_ble_server = nullptr;
+static BLEAdvertising *_adv        = nullptr;
 
-// Callback PIN (affiché à l'écran via Serial pour l'instant,
-// à relier à une popup LVGL si besoin)
-static void bt_pin_callback(uint32_t num_val) {
-  Serial.printf("[BT] PIN d'appairage : %06lu\n", num_val);
-  // TODO : afficher num_val dans une popup LVGL
-}
+class BLEConnCallback : public BLEServerCallbacks {
+  void onConnect(BLEServer *s) override {
+    Serial.println("[BLE] Client connecte");
+  }
+  void onDisconnect(BLEServer *s) override {
+    Serial.println("[BLE] Client deconnecte");
+    if (_visible && _adv) _adv->start();
+  }
+};
 
 void bt_manager_init() {
-  if (!BT.begin("Compagnon", false)) {   // false = mode maître/esclave classique
-    Serial.println("[BT] Démarrage échoué");
-    return;
-  }
-  BT.register_callback(NULL);  // pas de callback d'état custom pour l'instant
-  // Active le PIN callback pour appairage sécurisé
-  // BT.onConfirmRequest(bt_pin_callback); // ESP32 Arduino >= 2.0.14
+  BLEDevice::init("Compagnon");
+  _ble_server = BLEDevice::createServer();
+  _ble_server->setCallbacks(new BLEConnCallback());
+
+  _adv = BLEDevice::getAdvertising();
+  _adv->setScanResponse(true);
+  _adv->setMinPreferred(0x06);
+  _adv->start();
+
   _bt_active = true;
-  _visible   = true;  // visible par défaut au démarrage
-  Serial.println("[BT] Démarré — périphérique visible sous : Compagnon");
+  _visible   = true;
+  Serial.println("[BLE] Demarre - visible : Compagnon");
 }
 
 void bt_manager_tick() {
-  if (!_bt_active) return;
-  while (BT.available()) {
-    String msg = BT.readStringUntil('\n');
-    msg.trim();
-    if (msg.length() > 0) {
-      Serial.printf("[BT] Reçu : %s\n", msg.c_str());
-      // TODO : dispatcher les commandes BT reçues vers les apps
-    }
-  }
+  // Callbacks BLE geres en arriere-plan par le stack ESP32.
 }
 
 bool bt_is_active() {
@@ -59,13 +58,12 @@ bool bt_is_active() {
 
 void bt_manager_set_visible(bool visible) {
   _visible = visible;
-  if (!_bt_active) return;
+  if (!_bt_active || !_adv) return;
   if (visible) {
-    BT.begin("Compagnon", false);
-    Serial.println("[BT] Mode appairage : ON");
+    _adv->start();
+    Serial.println("[BLE] Advertising ON");
   } else {
-    // Pas d'API directe pour masquer sans stopper en BluetoothSerial ;
-    // on peut stopper et redémarrer plus tard.
-    Serial.println("[BT] Mode appairage : OFF (périphérique non visible)");
+    _adv->stop();
+    Serial.println("[BLE] Advertising OFF");
   }
 }
