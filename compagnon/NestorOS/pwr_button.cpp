@@ -2,17 +2,10 @@
  * pwr_button.cpp
  * Gestion du bouton PWR via AXP2101 (XPowersLib 0.3.3).
  *
- * Fix v3 :
- *  - getIrqStatus() au lieu de readIrqStatus()
- *  - XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ  (sans _EDGE_)
- *  - XPOWERS_AXP2101_PKEY_POSITIVE_IRQ  (sans _EDGE_)
- *  - isPekeyNegativeIrq()  (pas NegativeTrigger, pas NegativeEdgeTrigger)
- *  - isPekeyPositiveIrq()  (pas PositiveTrigger, pas PositiveEdgeTrigger)
- *
- * Comportements :
- *   Appui court  (< 2 s)  -> retour au carousel launcher
- *   Appui long   (>= 2 s) -> veille ecran
- *   Appui tres long (>= 5 s) -> arret complet via AXP2101 shutdown
+ * Fix v4 :
+ *  - SHORT_IRQ et LONG_IRQ utilisés directement pour déclencher actions
+ *  - Shutdown via LONG_IRQ (>= 6s AXP2101 hardware) en complément du soft
+ *  - pmu_get_battery_percent() robuste
  */
 #include "pwr_button.h"
 #include "bootloader_ui.h"
@@ -28,8 +21,9 @@ static XPowersPMU pmu;
 static bool       _pmu_ok   = false;
 static bool       _sleeping = false;
 
-static volatile uint32_t _press_start_ms = 0;
-static volatile bool     _irq_fired      = false;
+static volatile bool _irq_fired = false;
+static uint32_t      _press_ms  = 0;
+static bool          _pressed   = false;
 
 static void IRAM_ATTR axp_isr() {
   _irq_fired = true;
@@ -41,21 +35,26 @@ static void enter_sleep() {
   extern Arduino_CO5300 *gfx;
   gfx->setBrightness(0);
   gfx->displayOff();
+  // Configure wakeup sur front descendant IRQ AXP
   esp_sleep_enable_ext0_wakeup((gpio_num_t)AXP_IRQ_PIN, 0);
   esp_light_sleep_start();
+  // Réveil
   Serial.println("[PWR] Reveil.");
   gfx->displayOn();
   gfx->setBrightness(200);
   _sleeping = false;
   if (_pmu_ok) pmu.clearIrqStatus();
-  _irq_fired      = false;
-  _press_start_ms = millis();
+  _irq_fired = false;
+  _pressed   = false;
 }
 
 static void power_off() {
   Serial.println("[PWR] Arret complet.");
-  delay(100);
-  if (_pmu_ok) pmu.shutdown();
+  delay(200);
+  if (_pmu_ok) {
+    pmu.shutdown();          // AXP2101 coupe l'alimentation
+  }
+  // Fallback si AXP KO
   esp_deep_sleep_start();
 }
 
@@ -67,45 +66,68 @@ void pwr_button_init() {
   }
   Serial.println("[PWR] AXP2101 OK");
 
+  // Active les IRQ utiles
   pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
-  pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ   |
-                XPOWERS_AXP2101_PKEY_LONG_IRQ     |
-                XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |
-                XPOWERS_AXP2101_PKEY_POSITIVE_IRQ);
+  pmu.enableIRQ(
+    XPOWERS_AXP2101_PKEY_SHORT_IRQ    |  // appui court -> retour carousel
+    XPOWERS_AXP2101_PKEY_LONG_IRQ     |  // appui long  -> veille
+    XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ |  // front desc  -> debut appui
+    XPOWERS_AXP2101_PKEY_POSITIVE_IRQ    // front mont  -> fin appui
+  );
   pmu.clearIrqStatus();
+
+  // Configure l'AXP pour shutdown apres 6s appui long
+  // (registre PWRON_TIME, valeur 4 = 6s selon datasheet AXP2101)
+  // Certaines versions de XPowersLib exposent setPowerKeyPressOffTime()
+#ifdef XPOWERS_AXP2101_POWEROFF_6S
+  pmu.setPowerKeyPressOffTime(XPOWERS_AXP2101_POWEROFF_6S);
+#endif
 
   pinMode(AXP_IRQ_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(AXP_IRQ_PIN), axp_isr, FALLING);
-  _press_start_ms = millis();
 }
 
 void pwr_button_tick() {
-  if (!_pmu_ok || !_irq_fired) return;
-  _irq_fired = false;
+  if (!_pmu_ok) return;
 
-  pmu.getIrqStatus();
-  uint32_t now = millis();
-
-  // Noms exacts XPowersLib 0.3.3
-  if (pmu.isPekeyNegativeIrq()) {
-    _press_start_ms = now;
-    Serial.println("[PWR] Bouton enfonce");
-  }
-
-  if (pmu.isPekeyPositiveIrq()) {
-    uint32_t held = now - _press_start_ms;
+  // Détection soft du maintien (en parallèle des IRQ)
+  bool pin_low = (digitalRead(AXP_IRQ_PIN) == LOW);
+  if (pin_low && !_pressed) {
+    _pressed  = true;
+    _press_ms = millis();
+  } else if (!pin_low && _pressed) {
+    _pressed = false;
+    uint32_t held = millis() - _press_ms;
     Serial.printf("[PWR] Relache apres %lu ms\n", held);
-
     if (held >= 5000) {
       power_off();
-    } else if (held >= 2000) {
-      enter_sleep();
-    } else {
+      return;
+    } else if (held >= 1500) {
+      if (!_sleeping) enter_sleep();
+      else {
+        // Réveil: déjà géré dans enter_sleep via light_sleep_start return
+      }
+      return;
+    } else if (held >= 50) {
+      // Appui court
       if (!_sleeping) {
-        Serial.println("[PWR] Retour au carousel");
+        Serial.println("[PWR] Retour carousel");
         bootloader_ui_return();
       }
     }
+  }
+
+  // Traitement IRQ AXP (redondant mais utile pour le SHORT_IRQ AXP)
+  if (!_irq_fired) return;
+  _irq_fired = false;
+  pmu.getIrqStatus();
+
+  if (pmu.isPekeyShortPressIrq()) {
+    if (!_sleeping) bootloader_ui_return();
+  }
+  if (pmu.isPekeyLongPressIrq()) {
+    if (!_sleeping) enter_sleep();
+    // Si déjà en veille: le wakeup est géré par enter_sleep
   }
 
   pmu.clearIrqStatus();
@@ -114,5 +136,7 @@ void pwr_button_tick() {
 int pmu_get_battery_percent() {
   if (!_pmu_ok) return -1;
   if (!pmu.isBatteryConnect()) return -1;
-  return (int)pmu.getBatteryPercent();
+  int pct = (int)pmu.getBatteryPercent();
+  if (pct < 0 || pct > 100) return -1;
+  return pct;
 }

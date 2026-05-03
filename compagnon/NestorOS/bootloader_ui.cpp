@@ -2,9 +2,10 @@
  * bootloader_ui.cpp
  * Launcher "Compagnon" - carousel tactile LVGL v9.
  *
- * Fix v3 :
- *  - lv_obj_add_flag() appels separes (LVGL v9 n'accepte pas OR de flags)
- *  - Propagation gesture/event sur enfants corrigee
+ * Fix v4 :
+ *  - Carousel y offset augmenté pour tenir compte de la status bar 40px
+ *  - Title/sub repositionnés
+ *  - Snap amélioré
  */
 #include "bootloader_ui.h"
 #include <lvgl.h>
@@ -21,6 +22,8 @@
 #define C_TEXT    0xE8EAF6
 #define C_SUB     0x6B75A0
 #define C_BORDER  0x2A3060
+
+#define STATUS_H  40   // hauteur status bar
 
 typedef struct {
   const char *name;
@@ -49,36 +52,25 @@ static void card_tap_cb(lv_event_t *e) {
   APPS[idx].launch();
 }
 
-static void make_children_bubble(lv_obj_t *obj) {
-  lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
-  lv_obj_add_flag(obj, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  uint32_t cnt = lv_obj_get_child_count(obj);
-  for (uint32_t i = 0; i < cnt; i++) {
-    make_children_bubble(lv_obj_get_child(obj, i));
-  }
-}
-
 static lv_obj_t* make_card(lv_obj_t *parent, uint8_t idx) {
   lv_obj_t *card = lv_obj_create(parent);
-  lv_obj_set_size(card, 300, 360);
+  lv_obj_set_size(card, 300, 340);
   lv_obj_set_style_bg_color(card, lv_color_hex(C_CARD), 0);
   lv_obj_set_style_bg_color(card, lv_color_hex(C_CARD_HL), LV_STATE_PRESSED);
   lv_obj_set_style_radius(card, 28, 0);
   lv_obj_set_style_border_color(card, lv_color_hex(C_BORDER), 0);
   lv_obj_set_style_border_width(card, 1, 0);
   lv_obj_set_style_pad_all(card, 0, 0);
-
   lv_obj_add_flag(card, LV_OBJ_FLAG_SNAPPABLE);
   lv_obj_add_flag(card, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(card, LV_DIR_NONE);
-
   lv_obj_add_event_cb(card, card_tap_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)idx);
 
   // Cercle icone
   lv_obj_t *ico_bg = lv_obj_create(card);
-  lv_obj_set_size(ico_bg, 100, 100);
+  lv_obj_set_size(ico_bg, 90, 90);
   lv_obj_set_style_radius(ico_bg, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(ico_bg, lv_color_hex(C_ACCENT), 0);
   lv_obj_set_style_bg_opa(ico_bg, 28, 0);
@@ -88,7 +80,7 @@ static lv_obj_t* make_card(lv_obj_t *parent, uint8_t idx) {
   lv_obj_clear_flag(ico_bg, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(ico_bg, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_flag(ico_bg, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  lv_obj_align(ico_bg, LV_ALIGN_TOP_MID, 0, 36);
+  lv_obj_align(ico_bg, LV_ALIGN_TOP_MID, 0, 30);
 
   lv_obj_t *ico = lv_label_create(ico_bg);
   lv_label_set_text(ico, APPS[idx].icon);
@@ -104,7 +96,7 @@ static lv_obj_t* make_card(lv_obj_t *parent, uint8_t idx) {
   lv_obj_set_style_text_color(lbl_name, lv_color_hex(C_TEXT), 0);
   lv_obj_add_flag(lbl_name, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_flag(lbl_name, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  lv_obj_align(lbl_name, LV_ALIGN_TOP_MID, 0, 158);
+  lv_obj_align(lbl_name, LV_ALIGN_TOP_MID, 0, 140);
 
   lv_obj_t *lbl_sub = lv_label_create(card);
   lv_label_set_text(lbl_sub, APPS[idx].subtitle);
@@ -112,7 +104,7 @@ static lv_obj_t* make_card(lv_obj_t *parent, uint8_t idx) {
   lv_obj_set_style_text_color(lbl_sub, lv_color_hex(C_ACCENT), 0);
   lv_obj_add_flag(lbl_sub, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_flag(lbl_sub, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  lv_obj_align(lbl_sub, LV_ALIGN_TOP_MID, 0, 194);
+  lv_obj_align(lbl_sub, LV_ALIGN_TOP_MID, 0, 176);
 
   lv_obj_t *lbl_det = lv_label_create(card);
   lv_label_set_text(lbl_det, APPS[idx].detail);
@@ -122,13 +114,13 @@ static lv_obj_t* make_card(lv_obj_t *parent, uint8_t idx) {
   lv_obj_set_width(lbl_det, 260);
   lv_obj_add_flag(lbl_det, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_flag(lbl_det, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  lv_obj_align(lbl_det, LV_ALIGN_TOP_MID, 0, 224);
+  lv_obj_align(lbl_det, LV_ALIGN_TOP_MID, 0, 206);
 
   lv_obj_t *btn = lv_btn_create(card);
-  lv_obj_set_size(btn, 180, 46);
-  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -22);
+  lv_obj_set_size(btn, 180, 44);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -18);
   lv_obj_set_style_bg_color(btn, lv_color_hex(C_ACCENT), 0);
-  lv_obj_set_style_radius(btn, 23, 0);
+  lv_obj_set_style_radius(btn, 22, 0);
   lv_obj_add_event_cb(btn, card_tap_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)idx);
   lv_obj_add_flag(btn, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
@@ -152,17 +144,21 @@ void bootloader_ui_show() {
   lv_label_set_text(title, "Compagnon");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(C_ACCENT), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 46);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, STATUS_H + 8);
 
   lv_obj_t *sub = lv_label_create(scr_launcher);
   lv_label_set_text(sub, "Glissez pour naviguer");
   lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(sub, lv_color_hex(C_SUB), 0);
-  lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 78);
+  lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, STATUS_H + 40);
+
+  // Zone carousel : de y=STATUS_H+66 jusqu'en bas
+  int car_y  = STATUS_H + 66;
+  int car_h  = 480 - car_y - 4;
 
   carousel = lv_obj_create(scr_launcher);
-  lv_obj_set_size(carousel, 480, 400);
-  lv_obj_align(carousel, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_size(carousel, 480, car_h);
+  lv_obj_set_pos(carousel, 0, car_y);
   lv_obj_set_style_bg_opa(carousel, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(carousel, 0, 0);
   lv_obj_set_style_pad_all(carousel, 0, 0);

@@ -3,9 +3,17 @@
  * Driver écran : Arduino_CO5300 sur bus QSPI ESP32S3
  * Touch        : CST816 sur I2C (SDA=15, SCL=14)
  * LVGL         : v9  →  lv_display_t / lv_indev_t
+ *
+ * Fix v2 :
+ *  - Reset CST816 via TOUCH_RES avant Wire.begin
+ *  - Lecture I2C : on lit 7 octets (reg 0x01 inclus) pour avoir
+ *    le nombre de doigts dans le bon registre
+ *  - Masque 0x0F sur xh/yh correctement appliqué
  */
 #include "display_init.h"
+#include "pin_config.h"
 #include <Wire.h>
+#include <Arduino.h>
 
 // ── Objet GFX global ───────────────────────────────────────────────────────
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -20,7 +28,7 @@ Arduino_CO5300 *gfx = new Arduino_CO5300(
 
 // ── Tampon LVGL v9 (1/10 écran) ───────────────────────────────────────────
 #define BUF_SIZE (SCREEN_W * SCREEN_H / 10)
-static uint8_t buf1[BUF_SIZE * sizeof(lv_color_t)];
+static lv_color_t buf1[BUF_SIZE];
 
 static lv_display_t *disp  = NULL;
 static lv_indev_t   *indev = NULL;
@@ -35,45 +43,59 @@ static void disp_flush_cb(lv_display_t *display,
   lv_display_flush_ready(display);
 }
 
-// ── Lecture touch CST816 (I2C) ─────────────────────────────────────────────
+// ── Lecture touch CST816 ──────────────────────────────────────────────────
+// Registres CST816S (addr 0x15) :
+//  0x01 = GestureID, 0x02 = FingerNum, 0x03 XH, 0x04 XL, 0x05 YH, 0x06 YL
 static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
+  data->state = LV_INDEV_STATE_RELEASED;
+
   Wire.beginTransmission(0x15);
-  Wire.write(0x02);
-  Wire.endTransmission(false);
-  Wire.requestFrom(0x15, 6);
+  Wire.write(0x01);           // commence à GestureID
+  if (Wire.endTransmission(false) != 0) return;
+  Wire.requestFrom((uint8_t)0x15, (uint8_t)6);
+  if (Wire.available() < 6) return;
 
-  if (Wire.available() >= 6) {
-    uint8_t gesture = Wire.read();
-    uint8_t points  = Wire.read();
-    uint8_t xh      = Wire.read();
-    uint8_t xl      = Wire.read();
-    uint8_t yh      = Wire.read();
-    uint8_t yl      = Wire.read();
+  /*uint8_t gesture =*/ Wire.read();  // 0x01 GestureID (ignoré)
+  uint8_t points  = Wire.read();      // 0x02 FingerNum
+  uint8_t xh      = Wire.read();      // 0x03
+  uint8_t xl      = Wire.read();      // 0x04
+  uint8_t yh      = Wire.read();      // 0x05
+  uint8_t yl      = Wire.read();      // 0x06
 
-    if (points > 0) {
-      data->point.x = ((xh & 0x0F) << 8) | xl;
-      data->point.y = ((yh & 0x0F) << 8) | yl;
-      data->state   = LV_INDEV_STATE_PRESSED;
-    } else {
-      data->state = LV_INDEV_STATE_RELEASED;
-    }
-  } else {
-    data->state = LV_INDEV_STATE_RELEASED;
+  if ((points & 0x0F) > 0) {
+    int16_t x = (int16_t)(((xh & 0x0F) << 8) | xl);
+    int16_t y = (int16_t)(((yh & 0x0F) << 8) | yl);
+    // Clamp
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= SCREEN_W) x = SCREEN_W - 1;
+    if (y >= SCREEN_H) y = SCREEN_H - 1;
+    data->point.x = x;
+    data->point.y = y;
+    data->state   = LV_INDEV_STATE_PRESSED;
   }
 }
 
 // ── Initialisation principale ──────────────────────────────────────────────
 void display_init() {
+  // Reset hardware du CST816
+#ifdef TOUCH_RES
+  pinMode(TOUCH_RES, OUTPUT);
+  digitalWrite(TOUCH_RES, LOW);  delay(10);
+  digitalWrite(TOUCH_RES, HIGH); delay(50);
+#endif
+
   Wire.begin(IIC_SDA, IIC_SCL);
+  Wire.setClock(400000);
 
   if (!gfx->begin()) {
-    Serial.println("[DISPLAY] Erreur init écran !");
+    Serial.println("[DISPLAY] Erreur init ecran !");
     while (1) delay(100);
   }
-  bus->writeC8D8(0x36, 0xA0);   // orientation Waveshare
-  gfx->fillScreen(0x0000);      // noir RGB565
+  bus->writeC8D8(0x36, 0xA0);
+  gfx->fillScreen(0x0000);
   gfx->setBrightness(200);
-  Serial.println("[DISPLAY] Écran OK 480x480");
+  Serial.println("[DISPLAY] Ecran OK 480x480");
 
   lv_init();
 
@@ -85,6 +107,7 @@ void display_init() {
   indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touch_read_cb);
+  lv_indev_set_display(indev, disp);
 
-  Serial.println("[DISPLAY] LVGL v9 initialisé");
+  Serial.println("[DISPLAY] LVGL v9 + touch OK");
 }

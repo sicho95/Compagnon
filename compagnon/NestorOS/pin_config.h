@@ -1,31 +1,25 @@
 #pragma once
 
-#define XPOWERS_CHIP_AXP2101
-
-#define LCD_SDIO0   4
-#define LCD_SDIO1   5
-#define LCD_SDIO2   6
-#define LCD_SDIO3   7
-#define LCD_SCLK   38
-#define LCD_RESET   2
-#define LCD_CS     12
-// Résolution logique 480x480 (doc officielle Waveshare)
-// Le pin_config.h Waveshare indique 466 = zone active hardware
-// mais le driver CO5300 + LVGL doivent travailler en 480x480
+// ── Ecran AMOLED CO5300 (QSPI) ───────────────────────────────────────────
+#define LCD_CS      10
+#define LCD_SCLK     9
+#define LCD_SDIO0    8
+#define LCD_SDIO1    7
+#define LCD_SDIO2    6
+#define LCD_SDIO3    5
+#define LCD_RESET   45
 #define LCD_WIDTH  480
 #define LCD_HEIGHT 480
+#define SCREEN_W   480
+#define SCREEN_H   480
 
-// TOUCH
-#define IIC_SDA    15
-#define IIC_SCL    14
-#define TP_INT     11
-#define TP_RST      2
+// ── I2C partagé (AXP2101 + CST816 touch) ─────────────────────────────────
+#define IIC_SDA  15
+#define IIC_SCL  14
 
-// AUDIO
-#define PIN_ES7210_BCLK   9
-#define PIN_ES7210_LRCK  45
-#define PIN_ES7210_DIN   10
-#define PIN_ES7210_MCLK  16
-#define PIN_ES8311_DOUT   8
+// ── Touch CST816 ──────────────────────────────────────────────────────────
+#define TOUCH_RES  16   // pin RESET du CST816 (actif LOW)
+#define TOUCH_INT  21   // pin INT du CST816  (optionnel)
 
-#define PA 46
+// ── AXP2101 ───────────────────────────────────────────────────────────────
+#define AXP_INT    13   // IRQ AXP2101 -> GPIO13
