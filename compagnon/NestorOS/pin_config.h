@@ -9,8 +9,11 @@
 #define LCD_SCLK   38
 #define LCD_RESET   2
 #define LCD_CS     12
-#define LCD_WIDTH  466
-#define LCD_HEIGHT 466
+// Résolution logique 480x480 (doc officielle Waveshare)
+// Le pin_config.h Waveshare indique 466 = zone active hardware
+// mais le driver CO5300 + LVGL doivent travailler en 480x480
+#define LCD_WIDTH  480
+#define LCD_HEIGHT 480
 
 // TOUCH
 #define IIC_SDA    15
