@@ -1,7 +1,8 @@
-import { listBackends, callLLM } from '../api/backends.js';
+import { listBackends, callLLM, loadGroqModels } from '../api/backends.js';
 import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson, lsGet, lsSet } from '../storage/agents-db.js';
 import { gardenerMerge } from '../core/gardener.js';
-import { searchWeb, getSearchStatus } from '../api/search.js';
+import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
+import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled, listBrowserVoices } from '../api/tts.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 
 const ROLE_ICONS = {
@@ -27,7 +28,7 @@ export function renderDashboard(container, state, rerender) {
 
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
-  title.textContent = state.view === 'settings' ? '⚙️ Reglages' : '🤖 Agents';
+  title.textContent = state.view === 'settings' ? '⚙️ Réglages' : '🤖 Agents';
 
   const actions = el('div', { display:'flex', gap:'8px', flexWrap:'wrap' });
 
@@ -40,7 +41,7 @@ export function renderDashboard(container, state, rerender) {
         const merged = await gardenerMerge(state.agents, []);
         for (const a of merged) await saveAgent(a);
         state.agents = merged;
-        showToast('Jardinier : ' + merged.length + ' agent(s) revise(s).');
+        showToast('Jardinier : ' + merged.length + ' agent(s) révisé(s).');
       } catch(e) { showToast('Erreur Jardinier : ' + e.message, true); }
       rerender();
     });
@@ -88,7 +89,6 @@ function renderAgentsList(container, state, rerender) {
     const icon = el('span', { fontSize:'20px' }); icon.textContent = roleIcon(agent.role);
     const nameEl = el('div', { fontWeight:'600', fontSize:'14px', flex:'1' });
     nameEl.textContent = agent.name;
-    // Badge rôle web-analyst
     const roleBadgeColor = agent.role === ROLES.WEB_ANALYST ? '#1a2a3a' :
                            agent.role === ROLES.WEB_SEARCH  ? '#1a1a3a' : '#1c2a1c';
     const backendBadge = tag(agent.backendId || 'groq-llama', roleBadgeColor);
@@ -123,7 +123,7 @@ function renderAgentsList(container, state, rerender) {
       rerender();
     });
 
-    const btnEdit = btn('✏️ Editer', '', () => {
+    const btnEdit = btn('✏️ Éditer', '', () => {
       state.editingAgent = JSON.parse(JSON.stringify(agent));
       state.view = 'edit';
       rerender();
@@ -160,7 +160,20 @@ function renderChatView(container, state, rerender) {
     title.appendChild(document.createTextNode(' '));
     title.appendChild(badge);
   }
-  header.append(title);
+
+  // Bouton silencieux
+  const silentBtn = btn(isSilentMode() ? '🔇' : '🔊', '', () => {
+    const newMode = !isSilentMode();
+    setSilentMode(newMode);
+    silentBtn.textContent = newMode ? '🔇' : '🔊';
+    silentBtn.title = newMode ? 'Mode silencieux actif' : 'Voix activée';
+    if (newMode) stopSpeech();
+    showToast(newMode ? 'Mode silencieux activé.' : 'Voix activée.');
+  });
+  silentBtn.title = isSilentMode() ? 'Mode silencieux actif' : 'Voix activée';
+  Object.assign(silentBtn.style, { fontSize:'16px', padding:'4px 8px', background:'#222', border:'1px solid #333' });
+
+  header.append(title, silentBtn);
   container.appendChild(header);
 
   const msgArea = el('div', {
@@ -168,7 +181,6 @@ function renderChatView(container, state, rerender) {
     padding:'8px 0', maxHeight:'55vh', minHeight:'120px'
   });
 
-  // Trace panel (orchestrateur uniquement)
   let tracePanel = null;
   if (isOrchestrator) {
     tracePanel = el('div', { display:'none', background:'#0a1a0a', border:'1px solid #1a3a1a',
@@ -186,7 +198,6 @@ function renderChatView(container, state, rerender) {
         color: '#ddd', whiteSpace:'pre-wrap'
       });
       bubble.textContent = m.content;
-      // Badge stratégie si orchestré
       if (m._strategy) {
         const sb = el('div', { fontSize:'10px', color:'#5a7a9a', marginTop:'4px' });
         sb.textContent = '⚙️ ' + m._strategy;
@@ -238,7 +249,7 @@ function renderChatView(container, state, rerender) {
     flex:'1', background:'#111', color:'#fff', border:'1px solid #333',
     borderRadius:'8px', padding:'8px 10px', fontSize:'14px'
   });
-  input.placeholder = 'Ton message…';
+  input.placeholder = 'Ton message… (clavier ou dictée)';
   input.setAttribute('autocomplete', 'off');
 
   const sendBtn = btn('Envoyer', 'primary', send);
@@ -250,19 +261,17 @@ function renderChatView(container, state, rerender) {
     state.chatHistory.push({ role:'user', content: msg });
     renderMessages();
 
+    let reply = '';
+
     try {
-      let reply, strategy = '', traceSteps = [];
+      let strategy = '', traceSteps = [];
 
       if (isOrchestrator) {
-        // ── MODE ORCHESTRATEUR : moteur de résolution intelligent ────────────
-        const { reply: r, trace, newAgent } = await orchestratorResolve(
-          msg, state.agents, agent
-        );
+        const { reply: r, trace, newAgent } = await orchestratorResolve(msg, state.agents, agent);
         reply = r;
         traceSteps = trace;
         strategy = trace.find(t => t.step === 'plan')?.data?.strategy || 'direct';
 
-        // Affichage trace
         if (tracePanel) {
           tracePanel.style.display = 'block';
           tracePanel.innerHTML = traceSteps
@@ -270,11 +279,9 @@ function renderChatView(container, state, rerender) {
             .join('');
         }
 
-        // Si nouvel agent créé, proposer de le sauvegarder
         if (newAgent) {
           const keep = confirm(
-            `L'orchestrateur a créé l'agent "${newAgent.name}" (${newAgent.role}) pour répondre.\n` +
-            `L'ajouter définitivement à ta liste d'agents ?`
+            `L'orchestrateur a créé l'agent "${newAgent.name}" (${newAgent.role}).\nL'ajouter définitivement ?`
           );
           if (keep) {
             await saveAgent(newAgent);
@@ -287,16 +294,29 @@ function renderChatView(container, state, rerender) {
         state.chatHistory.push({ role:'assistant', content: reply, _orchestrated: true, _strategy: strategy });
 
       } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
-        // ── MODE WEB-ANALYST / WEB-SEARCH : RAG pattern ─────────────────────
-        const results = await searchWeb(msg, { maxResults: 6 });
-        const context = results.length
-          ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
-          : 'Aucun résultat web disponible.';
+        // ── WEB ANALYST : découpage multi-requêtes si demande complexe ────────
+        // Détecter si la requête mentionne plusieurs entités (ex: plusieurs chaînes TV)
+        // Pattern simple : présence de virgules, "et", ou liste de mots-clés connus
+        const subQueries = splitIntoSubQueries(msg);
+        let context;
+
+        if (subQueries.length > 1) {
+          // Multi-requêtes (fallback DDG en particulier)
+          const { allResults } = await searchWebMulti(subQueries, { maxResultsPerQuery: 3 });
+          context = allResults.length
+            ? allResults.map((r, i) => `[${i+1}] (${r._query})\n${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
+            : 'Aucun résultat web disponible.';
+        } else {
+          const results = await searchWeb(msg, { maxResults: 6 });
+          context = results.length
+            ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
+            : 'Aucun résultat web disponible.';
+        }
 
         const prefs = (agent.preferences || []).join('\n');
         const sysContent = agent.system_prompt
           + (prefs ? `\n\nPréférences :\n${prefs}` : '')
-          + `\n\nRÉSULTATS WEB (${results.length} sources) :\n${context}`;
+          + `\n\nRÉSULTATS WEB :\n${context}`;
 
         const choice = await callLLM(agent.backendId || 'groq-llama', {
           messages: [{ role:'system', content: sysContent }, { role:'user', content: msg }],
@@ -306,7 +326,7 @@ function renderChatView(container, state, rerender) {
         state.chatHistory.push({ role:'assistant', content: reply });
 
       } else {
-        // ── MODE LLM PUR ─────────────────────────────────────────────────────
+        // ── LLM PUR ───────────────────────────────────────────────────────────
         const prefs = (agent.preferences || []).join('\n');
         const sysContent = agent.system_prompt + (prefs ? `\n\nPréférences :\n${prefs}` : '');
         const messages = [
@@ -319,7 +339,8 @@ function renderChatView(container, state, rerender) {
       }
 
     } catch(e) {
-      state.chatHistory.push({ role:'assistant', content:'⚠️ Erreur : ' + e.message });
+      reply = '⚠️ Erreur : ' + e.message;
+      state.chatHistory.push({ role:'assistant', content: reply });
     }
 
     sendBtn.disabled = false; sendBtn.textContent = 'Envoyer';
@@ -327,10 +348,43 @@ function renderChatView(container, state, rerender) {
     agent.metrics = agent.metrics || {};
     agent.metrics.lastUsed = new Date().toISOString();
     await saveAgent(agent);
+
+    // ── TTS : lire la réponse sauf si mode silencieux ──────────────────────
+    if (reply && !isSilentMode()) {
+      speak(reply).catch(e => console.warn('[Nestor/TTS]', e.message));
+    }
   }
 
   inputRow.append(input, sendBtn);
   container.appendChild(inputRow);
+}
+
+// ─── Découpage de requête complexe en sous-requêtes ──────────────────────────
+// Heuristique simple :
+//   - Présence de "/" → split
+//   - Présence de virgules avec plusieurs mots → split
+//   - Mots-clés TV connus (TF1, France2, M6, etc.) → une requête par chaîne
+
+const TV_CHAINS = ['TF1','France 2','France2','France 3','France3','Canal+','France 5','France5','M6','Arte','C8','CNews','BFM','TMC'];
+
+function splitIntoSubQueries(query) {
+  // Détection TV
+  const foundChains = TV_CHAINS.filter(c => query.toLowerCase().includes(c.toLowerCase()));
+  if (foundChains.length >= 3) {
+    // Construire une requête par chaîne
+    const base = query.replace(new RegExp(foundChains.join('|'), 'gi'), '').trim()
+      .replace(/,|et|\s+/g, ' ').trim();
+    return foundChains.map(c => (base ? base + ' ' + c : 'programme ' + c + ' ce soir'));
+  }
+
+  // Split sur "/"
+  if (query.includes('/')) {
+    const parts = query.split('/').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 2) return parts;
+  }
+
+  // Requête simple
+  return [query];
 }
 
 // ─── Fabrique View ───────────────────────────────────────────────────────────
@@ -342,10 +396,10 @@ function renderFabriqueView(container, state, rerender) {
   container.appendChild(header);
 
   const desc = el('div', { fontSize:'12px', color:'#888', marginBottom:'12px', lineHeight:'1.5' });
-  desc.textContent = 'Décris l\'agent en quelques mots. La Fabrique choisira automatiquement le bon rôle (web-analyst si besoin de données temps réel, LLM sinon).';
+  desc.textContent = 'Décris l\'agent en quelques mots. La Fabrique choisira automatiquement le bon rôle.';
   container.appendChild(desc);
 
-  const briefLabel = labelEl('Brief (ex: programme TV des 6 chaînes nationales)');
+  const briefLabel = labelEl('Brief');
   const briefInput = document.createElement('textarea');
   Object.assign(briefInput.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
@@ -372,7 +426,7 @@ function renderFabriqueView(container, state, rerender) {
   const previewZone = el('div', { display:'none' });
   container.appendChild(previewZone);
 
-  const genBtn = btn('✨ Generer avec la Fabrique', 'primary', async () => {
+  const genBtn = btn('✨ Générer avec la Fabrique', 'primary', async () => {
     const brief = briefInput.value.trim();
     if (!brief) { showToast('Décris l\'agent d\'abord.', true); return; }
     genBtn.textContent = '⏳ Génération…'; genBtn.disabled = true;
@@ -424,7 +478,7 @@ function renderFabriqueView(container, state, rerender) {
     } catch(e) {
       showToast('Erreur Fabrique : ' + e.message, true);
     }
-    genBtn.textContent = '✨ Generer avec la Fabrique'; genBtn.disabled = false;
+    genBtn.textContent = '✨ Générer avec la Fabrique'; genBtn.disabled = false;
   });
   container.appendChild(genBtn);
 }
@@ -464,7 +518,7 @@ function renderEditView(container, state, rerender) {
     form.append(lEl, inp);
   });
 
-  const bLabel = labelEl('Backend');
+  const bLabel = labelEl('Backend LLM');
   const bSel = document.createElement('select');
   Object.assign(bSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
   listBackends().forEach(b => {
@@ -477,7 +531,7 @@ function renderEditView(container, state, rerender) {
   form.append(bLabel, bSel);
 
   if (agent.preferences && agent.preferences.length > 0) {
-    const pLabel = labelEl('📋 Preferences apprises (' + agent.preferences.length + ')');
+    const pLabel = labelEl('📋 Préférences apprises (' + agent.preferences.length + ')');
     const pList = el('div', { background:'#111', border:'1px solid #222', borderRadius:'8px', padding:'8px', fontSize:'12px', color:'#5a9' });
     agent.preferences.forEach((p, i) => {
       const row = el('div', { display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'6px', marginBottom:'4px' });
@@ -507,95 +561,186 @@ function renderEditView(container, state, rerender) {
 
 // ─── Settings View ───────────────────────────────────────────────────────────
 function renderSettings(container, state, rerender) {
-  const backends = listBackends();
   const list = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
 
+  // ── Note générale ──
   const noteEl = el('div', { fontSize:'12px', color:'#888', marginBottom:'8px', lineHeight:'1.5' });
-  noteEl.innerHTML = '🔑 Les clés API sont stockées localement sur cet appareil uniquement.<br>Groq est gratuit avec un compte sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
+  noteEl.innerHTML = '🔑 Clés API stockées localement sur cet appareil.<br>Groq gratuit sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
   list.appendChild(noteEl);
 
-  backends.forEach((b) => {
-    const card = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
-    const titleEl = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-    titleEl.textContent = b.label;
-    const typeEl = el('div', { fontSize:'11px', color:'#666', marginBottom:'8px' });
-    typeEl.textContent = b.type;
-    card.append(titleEl, typeEl);
+  // ── Groq (clé unique, modèles dynamiques) ──
+  const groqCard = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
+  const groqTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  groqTitle.textContent = '🟢 Groq';
+  const groqDesc = el('div', { fontSize:'11px', color:'#666', marginBottom:'8px' });
+  groqDesc.innerHTML = 'Une seule clé pour tous les modèles Groq. La liste des modèles est chargée dynamiquement.';
+  groqCard.append(groqTitle, groqDesc);
 
-    if (b.requiresApiKey && b.envKey) {
-      const lEl = labelEl('Clé API : ' + b.envKey);
-      const inp = document.createElement('input');
-      inp.type = 'password'; inp.autocomplete = 'off';
-      Object.assign(inp.style, {
-        width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-        borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
-      });
-      inp.placeholder = b.envKey.includes('GROQ') ? 'gsk_...' : 'sk-...';
-      inp.value = lsGet(b.envKey) || '';
-      inp.onchange = () => { lsSet(b.envKey, inp.value.trim()); showToast('Clé ' + b.envKey + ' sauvegardée.'); };
-      card.append(lEl, inp);
-      const statusDot = el('div', { fontSize:'11px', marginTop:'4px' });
-      const hasKey = !!(lsGet(b.envKey) || '').trim();
-      statusDot.textContent = hasKey ? '✅ Clé présente' : '⚠️ Clé manquante';
-      statusDot.style.color = hasKey ? '#5a9' : '#a66';
-      card.appendChild(statusDot);
-    } else {
-      const freeEl = el('div', { fontSize:'12px', color:'#5a9' });
-      freeEl.textContent = '✅ Gratuit, aucune clé requise';
-      card.appendChild(freeEl);
-    }
-    list.appendChild(card);
+  const groqLbl = labelEl('Clé API Groq (GROQ_API_KEY)');
+  const groqInp = document.createElement('input');
+  groqInp.type = 'password'; groqInp.autocomplete = 'off';
+  Object.assign(groqInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
   });
+  groqInp.placeholder = 'gsk_...';
+  groqInp.value = lsGet('GROQ_API_KEY') || '';
+  groqInp.onchange = async () => {
+    lsSet('GROQ_API_KEY', groqInp.value.trim());
+    showToast('Clé Groq sauvegardée.');
+    // Recharger les modèles Groq dynamiquement
+    await loadGroqModels();
+    rerender();
+  };
+  groqCard.append(groqLbl, groqInp);
 
-  // Recherche Web
-  const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const groqStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasGroq = !!(lsGet('GROQ_API_KEY') || '').trim();
+  groqStatus.textContent = hasGroq ? '✅ Clé présente' : '⚠️ Clé manquante';
+  groqStatus.style.color = hasGroq ? '#5a9' : '#a66';
+  groqCard.appendChild(groqStatus);
+
+  // Bouton refresh modèles Groq
+  const refreshBtn = btn('🔄 Rafraîchir modèles Groq', '', async () => {
+    refreshBtn.disabled = true; refreshBtn.textContent = '⏳';
+    await loadGroqModels();
+    rerender();
+  });
+  Object.assign(refreshBtn.style, { marginTop:'6px', fontSize:'11px' });
+  groqCard.appendChild(refreshBtn);
+  list.appendChild(groqCard);
+
+  // ── Perplexity ──
+  const pxCard = el('div', { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px' });
+  const pxTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'8px' });
+  pxTitle.textContent = '🔵 Perplexity Sonar';
+  const pxLbl = labelEl('Clé API Perplexity (PERPLEXITY_API_KEY)');
+  const pxInp = document.createElement('input');
+  pxInp.type = 'password'; pxInp.autocomplete = 'off';
+  Object.assign(pxInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  pxInp.placeholder = 'pplx-...';
+  pxInp.value = lsGet('PERPLEXITY_API_KEY') || '';
+  pxInp.onchange = () => { lsSet('PERPLEXITY_API_KEY', pxInp.value.trim()); showToast('Clé Perplexity sauvegardée.'); };
+  pxCard.append(pxTitle, pxLbl, pxInp);
+  list.appendChild(pxCard);
+
+  // ── Recherche Web ──
+  const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px' });
   const sTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
   sTitle.textContent = '🌐 Recherche Web';
 
   const status = getSearchStatus();
   const statusBadge = el('div', { fontSize:'11px', marginBottom:'8px', padding:'4px 8px', borderRadius:'6px',
     background: status.engine === 'serper' ? '#1a3a1a' : '#1a1a3a',
-    color: status.engine === 'serper' ? '#7ef' : '#88f',
-    display:'inline-block'
+    color: status.engine === 'serper' ? '#7ef' : '#88f', display:'inline-block'
   });
-  statusBadge.textContent = (status.engine === 'serper' ? '🟢 Serper.dev actif' : '🔵 SearXNG fallback') + ' — ' + status.reason;
+  statusBadge.textContent = (status.engine === 'serper' ? '🟢 Serper.dev actif' : '🔵 DuckDuckGo fallback') + ' — ' + status.reason;
   searchCard.append(sTitle, statusBadge);
 
   const sDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> en 1er → <b>SearXNG</b> en fallback.<br>Utilisé par les agents <b>web-analyst</b> et <b>web-search</b>.';
+  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> → <b>DuckDuckGo</b> (sans clé).<br>Requêtes complexes découpées en multi-requêtes automatiquement.';
   searchCard.appendChild(sDesc);
 
-  const serperLabel = labelEl('Clé Serper.dev (SERPER_KEY)');
-  const serperInput = document.createElement('input');
-  Object.assign(serperInput.style, {
+  const serperLbl = labelEl('Clé Serper.dev (SERPER_KEY)');
+  const serperInp = document.createElement('input');
+  Object.assign(serperInp.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
     borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box', marginBottom:'6px'
   });
-  serperInput.type = 'password';
-  serperInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
-  serperInput.value = lsGet('SERPER_KEY') || '';
-  serperInput.onchange = () => { lsSet('SERPER_KEY', serperInput.value.trim()); showToast('SERPER_KEY sauvegardée.'); rerender(); };
+  serperInp.type = 'password';
+  serperInp.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  serperInp.value = lsGet('SERPER_KEY') || '';
+  serperInp.onchange = () => { lsSet('SERPER_KEY', serperInp.value.trim()); showToast('SERPER_KEY sauvegardée.'); rerender(); };
 
   const serperStatus = el('div', { fontSize:'11px', marginBottom:'8px' });
   const hasSerper = !!(lsGet('SERPER_KEY') || '').trim();
-  serperStatus.textContent = hasSerper ? '✅ Clé Serper présente' : '⚠️ Pas de clé Serper — SearXNG sera utilisé';
+  serperStatus.textContent = hasSerper ? '✅ Clé Serper présente' : '⚠️ Pas de clé — DuckDuckGo sera utilisé';
   serperStatus.style.color = hasSerper ? '#5a9' : '#a66';
+  searchCard.append(serperLbl, serperInp, serperStatus);
 
-  searchCard.append(serperLabel, serperInput, serperStatus);
-
-  const proxyLabel = labelEl('URL du proxy CORS (SEARCH_PROXY_URL)');
-  const proxyInput = document.createElement('input');
-  Object.assign(proxyInput.style, {
+  const proxyLbl = labelEl('Proxy CORS (SEARCH_PROXY_URL)');
+  const proxyInp = document.createElement('input');
+  Object.assign(proxyInp.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
     borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
   });
-  proxyInput.type = 'text';
-  proxyInput.placeholder = 'https://proxy.sicho95.workers.dev/';
-  proxyInput.value = lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/';
-  proxyInput.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInput.value.trim()); showToast('SEARCH_PROXY_URL sauvegardée.'); };
-  searchCard.append(proxyLabel, proxyInput);
-
+  proxyInp.type = 'text';
+  proxyInp.placeholder = 'https://proxy.sicho95.workers.dev/';
+  proxyInp.value = lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/';
+  proxyInp.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInp.value.trim()); showToast('Proxy sauvegardé.'); };
+  searchCard.append(proxyLbl, proxyInp);
   list.appendChild(searchCard);
+
+  // ── TTS ──
+  const ttsCard = el('div', { background:'#101018', border:'1px solid #2a1a3a', borderRadius:'10px', padding:'12px' });
+  const ttsTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  ttsTitle.textContent = '🔊 Voix (TTS)';
+  const ttsDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'8px', lineHeight:'1.5' });
+  ttsDesc.innerHTML = 'La réponse est lue à voix haute sauf si le mode silencieux est activé.<br>Moteur : voix du navigateur/téléphone (défaut) ou Gemini TTS (si clé présente).';
+  ttsCard.append(ttsTitle, ttsDesc);
+
+  // Toggle silencieux
+  const silentRow = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
+  const silentLbl = el('div', { fontSize:'12px', color:'#888' }); silentLbl.textContent = 'Mode silencieux';
+  const silentToggle = btn(isSilentMode() ? '🔇 Activé' : '🔊 Désactivé', '', () => {
+    const newMode = !isSilentMode();
+    setSilentMode(newMode);
+    silentToggle.textContent = newMode ? '🔇 Activé' : '🔊 Désactivé';
+    silentToggle.style.background = newMode ? '#3a1a1a' : '#1a3a1a';
+    silentToggle.style.color = newMode ? '#f88' : '#7ef';
+    if (newMode) stopSpeech();
+    showToast(newMode ? 'Mode silencieux activé.' : 'Voix activée.');
+  });
+  silentToggle.style.background = isSilentMode() ? '#3a1a1a' : '#1a3a1a';
+  silentToggle.style.color = isSilentMode() ? '#f88' : '#7ef';
+  silentRow.append(silentLbl, silentToggle);
+  ttsCard.appendChild(silentRow);
+
+  // Sélecteur moteur TTS
+  const engineLbl = labelEl('Moteur TTS');
+  const engineSel = document.createElement('select');
+  Object.assign(engineSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px', marginBottom:'6px' });
+  [{ v:'browser', l:'🖥 Voix du navigateur / téléphone (défaut, gratuit)' }, { v:'gemini', l:'✨ Gemini TTS (cloud, nécessite clé Gemini)' }]
+    .forEach(({ v, l }) => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = l;
+      if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === v) opt.selected = true;
+      engineSel.appendChild(opt);
+    });
+  engineSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engineSel.value); showToast('Moteur TTS : ' + engineSel.value); };
+  ttsCard.append(engineLbl, engineSel);
+
+  // Clé Gemini (pour TTS Gemini)
+  const geminiLbl = labelEl('Clé Gemini API (GEMINI_API_KEY) — pour TTS Gemini');
+  const geminiInp = document.createElement('input');
+  geminiInp.type = 'password'; geminiInp.autocomplete = 'off';
+  Object.assign(geminiInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  geminiInp.placeholder = 'AIza...';
+  geminiInp.value = lsGet('GEMINI_API_KEY') || '';
+  geminiInp.onchange = () => { lsSet('GEMINI_API_KEY', geminiInp.value.trim()); showToast('Clé Gemini sauvegardée.'); };
+  const geminiStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
+  geminiStatus.textContent = hasGemini ? '✅ Clé Gemini présente' : 'ℹ️ Optionnel — voix navigateur utilisée si absent';
+  geminiStatus.style.color = hasGemini ? '#5a9' : '#777';
+  ttsCard.append(geminiLbl, geminiInp, geminiStatus);
+
+  // Bouton test TTS
+  const testBtn = btn('▶ Tester la voix', '', async () => {
+    testBtn.disabled = true;
+    const { speak: _speak } = await import('../api/tts.js');
+    await _speak('Bonjour, je suis Nestor. La voix fonctionne correctement.').catch(e => showToast('TTS erreur : ' + e.message, true));
+    testBtn.disabled = false;
+  });
+  Object.assign(testBtn.style, { marginTop:'8px' });
+  ttsCard.appendChild(testBtn);
+
+  list.appendChild(ttsCard);
   container.appendChild(list);
 }
 
