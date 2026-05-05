@@ -659,7 +659,7 @@ configTime(0, 0, "pool.ntp.org", "time.google.com");
 
 - `lv_tileview` horizontal, 4 tuiles (APP_COUNT)
 - Navigation : bouton gauche (prev), bouton droit court (next), bouton droit long (ouvrir), bouton gauche long (retour)
-- Chaque tuile : fond coloré + carte semi-transparente + icône 60 pt + nom 24 pt + sous-titre 12 pt + indicateur `x/4`
+- Chaque tuile : fond écran noir + carte coloré semi-transparente + icône 55 pt + nom 28 pt + sous-titre 14 pt + indicateur `x/4`
 - Swipe tactile natif LVGL activé
 
 | App | Icône | Fond | Texte |
