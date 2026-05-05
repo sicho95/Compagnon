@@ -1,12 +1,12 @@
 #include "ota.h"
 #include <ArduinoOTA.h>
+#include "../config/secrets.h"
 
 #define OTA_HOSTNAME  "compagnon"
-#define OTA_PASS      "nestor_ota"   // TODO V2: lire depuis NVS
 
 void net_ota_init() {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
-    ArduinoOTA.setPassword(OTA_PASS);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
 
     ArduinoOTA.onStart([]()  { Serial.println("[OTA] Mise a jour..."); });
     ArduinoOTA.onEnd([]()    { Serial.println("[OTA] Termine — reboot"); });
@@ -18,7 +18,7 @@ void net_ota_init() {
     });
 
     ArduinoOTA.begin();
-    Serial.println("[OTA] Pret — hostname: " OTA_HOSTNAME " port: 3232 mdp: " OTA_PASS);
+    Serial.println("[OTA] Pret — hostname: " OTA_HOSTNAME " port: 3232 mdp: " OTA_PASSWORD);
 }
 
 void net_ota_tick() {

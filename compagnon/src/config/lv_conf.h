@@ -15,7 +15,7 @@
 #define LV_LOG_LEVEL           LV_LOG_LEVEL_WARN
 
 // Polices
-#define LV_FONT_MONTSERRAT_12  1
+#define LV_FONT_MONTSERRAT_12  0
 #define LV_FONT_MONTSERRAT_14  1
 #define LV_FONT_MONTSERRAT_16  1
 #define LV_FONT_MONTSERRAT_24  1
