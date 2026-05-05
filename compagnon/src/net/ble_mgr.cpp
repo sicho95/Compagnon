@@ -33,8 +33,8 @@ class ConnCB : public BLEServerCallbacks {
 
 class GpsCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
-        std::string val = c->getValue();
-        if (val.empty()) return;
+        String val = c->getValue();       // String Arduino
+        if (val.length() == 0) return;    // API Arduino
         // Format attendu : "lat,lon"  ex "48.8566,2.3522"
         const char *s = val.c_str();
         char *comma = (char *)strchr(s, ',');
