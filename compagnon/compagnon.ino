@@ -20,6 +20,7 @@
 #include "src/system/orchestrator.h"
 #include "src/system/wifi_mgr.h"
 #include "src/net/ota.h"
+#include "src/net/ble_mgr.h"
 #include "src/ui/status_bar.h"
 #include "src/ui/launcher.h"
 
@@ -36,6 +37,7 @@ void setup() {
     ui_status_bar_init();  // Barre d'état (toujours au-dessus)
     wifi_mgr_init();       // Portail captif "Compagnon_Setup"
     net_ota_init();        // ArduinoOTA (hostname: compagnon, port 3232)
+    ble_mgr_init();        // BLE GATT : service GPS (push depuis téléphone)
 
     orchestrator_init();   // Planificateur + cerveau (stubs V1)
     ui_launcher_init();    // Carousel 4 apps → charge l'écran
@@ -52,6 +54,7 @@ void loop() {
     hal_pmu_tick();        // Lecture IRQ AXP2101 (short/long press)
     wifi_mgr_tick();       // Maintien connexion + portail captif
     net_ota_tick();        // Écoute OTA Arduino IDE
+    ble_mgr_tick();        // BLE events (GPS depuis téléphone)
 
     ui_status_bar_tick();  // Mise à jour heure + batterie (toutes les 10 s)
     hal_imu_tick();        // Lecture orientation (future rotation auto)
