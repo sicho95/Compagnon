@@ -270,7 +270,6 @@ Fetch via proxy CORS → supprime scripts/styles/nav/footer → extrait `<articl
 |---|---|---|---|---|
 | `groq-llama` | Groq — Llama 3.3 70B (rapide) | openai-compatible | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
 | `groq-llama-free` | Groq — Llama 3.1 8B (gratuit) | openai-compatible | `llama-3.1-8b-instant` | `GROQ_API_KEY` |
-| `perplexity-sonar` | Perplexity Sonar | openai-compatible | `sonar` | `PERPLEXITY_API_KEY` |
 | `openrouter-qwen-free` | Qwen Free (OpenRouter) | openai-compatible | `qwen/qwen3-coder:free` | `OPENROUTER_API_KEY` |
 | `puter-qwen` | Qwen (Puter.js — gratuit sans clé) | puter-qwen | — | ❌ aucune |
 
@@ -292,9 +291,10 @@ Fetch via proxy CORS → supprime scripts/styles/nav/footer → extrait `<articl
 ```
 1. Mode silence (setSilentMode(true)) → no-op total
 2. Gemini TTS (si engine='gemini' + GEMINI_API_KEY)
-   → Modèle : gemini-2.5-flash-preview-tts (free tier)
+   → Modèle : gemini-3.1-flash-tts-preview (free tier) puis gemini-2.5-flash-preview-tts (free tier) quand quota epuisé 3.1 epuisé 
+   → langue : fr
    → PCM 16-bit 24kHz → AudioContext
-   → Voix : Aoede
+   → Voix : Achird ou Sadaltager ou Aoede
    → Si échec → bascule silencieuse sur browser
 3. Browser speechSynthesis (défaut + fallback Gemini)
    → Voix française auto-sélectionnée
@@ -352,7 +352,6 @@ lsSet(key, value)   // localStorage.setItem(key, value)
 |---|---|
 | `NESTOR_AGENTS` | JSON array de tous les agents |
 | `GROQ_API_KEY` | Clé API Groq |
-| `PERPLEXITY_API_KEY` | Clé API Perplexity |
 | `OPENROUTER_API_KEY` | Clé API OpenRouter |
 | `GEMINI_API_KEY` | Clé API Gemini (TTS cloud) |
 | `SERPER_KEY` | Clé API Serper.dev |
@@ -467,7 +466,7 @@ Toutes les clés sont stockées **uniquement dans `localStorage`** du navigateur
 
 ### Hardware Nestor (device dédié)
 - Carte Waveshare ESP32 avec contrôleur batterie **AXP2101**
-- Batterie LiPo **AT103030** (3.7V ~450mAh, dimensions 10×30×30mm)
+- Batterie LiPo **AT103030** (3.7V ~1000mAh, dimensions 10×30×30mm)
 - Communication browser ↔ device : Bluetooth Web API (`src/bt/`)
 - Remontée données : niveau batterie, température, état charge
 
@@ -590,7 +589,7 @@ compagnon/
 
 | Action | Résultat |
 |---|---|
-| Appui court | Bascule écran ON/OFF (rétroéclairage AMOLED) |
+| Appui court | écran ON/OFF (rétroéclairage AMOLED) |
 | Appui long (>1 s) | Affiche le menu Alimentation (overlay modal) |
 
 ### Menu Alimentation (`ui_power_menu_show()`)
@@ -636,15 +635,15 @@ Affichage status bar :
 - Double buffer activé pour fluidité maximale
 - `rounder_cb` : force les coordonnées de flush à être paires
 - `swap16_buf()` avant chaque `draw16bitBeRGBBitmap()` (correction endianness)
-- Polices Montserrat activées : 12, 14, 16, 24, 48 (pas 10)
+- Polices Montserrat activées : 14, 16, 24, 48 (pas 10 ou 12)
 
 ### Barre de statut (status_bar.cpp)
 
-Hauteur 36 px, fixée sur `lv_layer_top()` (toujours visible).
+Hauteur 45 px, fixée sur `lv_layer_top()` (toujours visible).
 
 | Zone | Contenu | Position |
 |---|---|---|
-| Gauche | Date + heure (ex: `05 mai · 14:35`) | `LV_ALIGN_LEFT_MID, 8, 0` |
+| Gauche | Date + heure (ex: `05 juil 26 · 14:35`) | `LV_ALIGN_LEFT_MID, 8, 0` |
 | Droite | Icône BLE → WiFi → jauge batt → % | offsets -114, -90, -56, -8 |
 
 Mise à jour : toutes les 10 secondes dans `ui_status_bar_tick()`.
@@ -659,8 +658,8 @@ configTime(0, 0, "pool.ntp.org", "time.google.com");
 ### Launcher — Carousel 4 apps
 
 - `lv_tileview` horizontal, 4 tuiles (APP_COUNT)
-- Navigation : bouton gauche (prev), bouton droit court (next), bouton droit long (ouvrir)
-- Chaque tuile : fond coloré + carte semi-transparente + icône 48 pt + nom 24 pt + sous-titre 12 pt + indicateur `x/4`
+- Navigation : bouton gauche (prev), bouton droit court (next), bouton droit long (ouvrir), bouton gauche long (retour)
+- Chaque tuile : fond coloré + carte semi-transparente + icône 60 pt + nom 24 pt + sous-titre 12 pt + indicateur `x/4`
 - Swipe tactile natif LVGL activé
 
 | App | Icône | Fond | Texte |
@@ -715,7 +714,7 @@ V2 prévu : `src/net/ble_mgr.{h,cpp}`
 
 - Port de la PWA `index.html` (branche sicho95/Radars)
 - Alertes routières en temps réel
-- GPS : via BLE téléphone (V2) ou position fixe manuelle (V1)
+- GPS : via BLE téléphone
 - Données : API Radars (même source que PWA)
 
 ### Météo (meteo_app)
@@ -806,7 +805,7 @@ Stockage à terme : **NVS Preferences** (flash chiffrée ESP32), modifiables dep
 |---|---|
 | Board | ESP32S3 Dev Module |
 | Flash Size | 16 MB |
-| Partition Scheme | Huge APP (3 MB No OTA) ou 16M Flash (3 MB APP/9 MB FATFS) |
+| Partition Scheme | 16M Flash (3 MB APP/9 MB FATFS) |
 | PSRAM | OPI PSRAM (OPI 80 MHz) |
 | USB Mode | USB CDC On Boot: Enabled |
 | Upload Speed | 921600 |
