@@ -1,6 +1,7 @@
 # Nestor — Spécification Technique Complète
 
 > Version synchronisée avec le code source — mai 2026
+> Couvre la PWA **et** le Compagnon ESP32
 
 ---
 
@@ -18,6 +19,15 @@
 10. [UI — Dashboard & Companion](#10-ui--dashboard--companion)
 11. [Page Réglages](#11-page-réglages)
 12. [PWA & Service Worker](#12-pwa--service-worker)
+16. [Compagnon ESP32 — Matériel](#16-compagnon-esp32--matériel)
+17. [Compagnon ESP32 — Architecture logicielle](#17-compagnon-esp32--architecture-logicielle)
+18. [Gestion de l'alimentation (PMU)](#18-gestion-de-lalimentation-pmu)
+19. [Affichage & Interface LVGL](#19-affichage--interface-lvgl)
+20. [Connectivité (WiFi / OTA / BLE)](#20-connectivité-wifi--ota--ble)
+21. [Applications V1 — Catalogue](#21-applications-v1--catalogue)
+22. [Synchronisation PWA ↔ ESP32](#22-synchronisation-pwa--esp32)
+23. [Clés et secrets ESP32](#23-clés-et-secrets-esp32)
+24. [Procédure Arduino IDE](#24-procédure-arduino-ide)
 13. [Proxy CORS](#13-proxy-cors)
 14. [Clés et secrets](#14-clés-et-secrets)
 15. [Roadmap](#15-roadmap)
@@ -460,3 +470,362 @@ Toutes les clés sont stockées **uniquement dans `localStorage`** du navigateur
 - Batterie LiPo **AT103030** (3.7V ~450mAh, dimensions 10×30×30mm)
 - Communication browser ↔ device : Bluetooth Web API (`src/bt/`)
 - Remontée données : niveau batterie, température, état charge
+
+---
+
+## 16. Compagnon ESP32 — Matériel
+
+### Carte
+
+| Composant | Détail |
+|---|---|
+| SoC | ESP32-S3 (Xtensa LX7 dual-core 240 MHz) |
+| Flash | 16 MB (QSPI) |
+| PSRAM | 8 MB OPI (mode OPI_80M) |
+| Écran | AMOLED 2.16" QSPI, résolution **480×480** |
+| Pilote écran | CO5300 via `Arduino_CO5300` (Arduino_GFX_Library) |
+| Touch | CST9220 sur I2C (adresse 0x5A, fallback 0x1A) |
+| PMU | AXP2101 (AXP_INT = GPIO13) |
+| IMU | QMI8658 |
+| Codec audio | ES8311 (DAC/ampli) + ES7210 (ADC/mic) |
+| USB | USB-C (USB CDC On Boot Enabled) |
+
+### Broches (pin_config.h)
+
+| Signal | GPIO | Notes |
+|---|---|---|
+| LCD_CS | 12 | Chip select QSPI |
+| LCD_SCLK | 38 | Horloge QSPI |
+| LCD_SDIO0..3 | 4, 5, 6, 7 | Bus QSPI données |
+| LCD_RESET | 2 | **Partagé avec TOUCH_RES** |
+| IIC_SDA | 15 | I2C données (Touch, PMU, IMU) |
+| IIC_SCL | 14 | I2C horloge |
+| TOUCH_INT | 11 | Interrupt touch |
+| AXP_INT | 13 | Interrupt PMU |
+| BTN_LEFT | 18 | Bouton physique gauche (prev) |
+| BTN_RIGHT | 0 | Bouton physique droit (next + long=ouvrir) |
+| AUDIO_BCLK | 48 | I2S bit clock |
+| AUDIO_WS | 45 | I2S word select |
+| AUDIO_DOUT | 46 | I2S data out (vers ES8311) |
+| AUDIO_DIN | 47 | I2S data in (depuis ES7210) |
+
+### Rails d'alimentation AXP2101
+
+| Rail | Tension | Usage |
+|---|---|---|
+| ALDO1 | 2800 mV | Alimentation AMOLED |
+| ALDO3 | 3300 mV | Touch + logique |
+
+---
+
+## 17. Compagnon ESP32 — Architecture logicielle
+
+### Sketch principal
+
+`compagnon/compagnon.ino` — point d'entrée unique Arduino IDE.
+
+**Ordre d'init `setup()`** (critique — ne pas modifier) :
+1. `hal_pmu_init()` — rails ALDO1/ALDO3 + IRQ bouton power
+2. `hal_display_init()` — reset matériel pin 2, init LVGL
+3. `hal_touch_init()` — attente 500 ms post-reset + CST9220
+4. `hal_imu_init()` — QMI8658 orientation
+5. `ui_status_bar_init()` — barre fixe sur `lv_layer_top()`
+6. `wifi_mgr_init()` — portail captif non-bloquant
+7. `net_ota_init()` — ArduinoOTA
+8. `orchestrator_init()` — planificateur + cerveau
+9. `ui_launcher_init()` — carousel 4 apps, charge l'écran
+10. `hal_pmu_set_long_press_cb(ui_power_menu_show)` — relie PMU → UI
+
+**Boucle `loop()`** :
+```
+lv_timer_handler()     // LVGL events UI (priorité maximale)
+hal_pmu_tick()         // IRQ AXP2101 short/long press
+wifi_mgr_tick()        // maintien connexion + portail
+net_ota_tick()         // écoute OTA
+ui_status_bar_tick()   // refresh heure + batterie (10 s)
+hal_imu_tick()         // orientation
+orchestrator_tick()    // cerveau / sync agents
+delay(5)
+```
+
+### Structure des répertoires
+
+```
+compagnon/
+├── compagnon.ino           # Sketch principal
+└── src/
+    ├── config/
+    │   ├── pin_config.h    # Broches officielles Waveshare
+    │   ├── lv_conf.h       # Config LVGL 9 (copie dans ~/Arduino/libraries/)
+    │   └── secrets.h       # Clés API (gitignorée — créer depuis secrets.template.h)
+    ├── hal/
+    │   ├── display.{h,cpp} # AMOLED CO5300 + LVGL flush + swap16
+    │   ├── touch.{h,cpp}   # CST9220 via TouchDrvCSTXXX.hpp
+    │   ├── pmu.{h,cpp}     # AXP2101 : batterie, veille, arrêt
+    │   └── imu.{h,cpp}     # QMI8658 orientation (future auto-rotation)
+    ├── system/
+    │   ├── orchestrator.{h,cpp}  # Machine d'état APP_LAUNCHER → APP_*
+    │   ├── brain.{h,cpp}         # Planificateur agents (stub V1)
+    │   └── wifi_mgr.{h,cpp}      # WiFiManager non-bloquant
+    ├── net/
+    │   └── ota.{h,cpp}     # ArduinoOTA (hostname: compagnon)
+    ├── ui/
+    │   ├── status_bar.{h,cpp}  # Barre fixe : heure, BLE, WiFi, batterie
+    │   └── launcher.{h,cpp}    # Carousel tileview + menu power overlay
+    └── apps/
+        ├── app_base.h
+        ├── nestor/nestor_app.{h,cpp}
+        ├── radars/radar_app.{h,cpp}
+        ├── meteo/meteo_app.{h,cpp}
+        └── bourse/bourse_app.{h,cpp}
+```
+
+---
+
+## 18. Gestion de l'alimentation (PMU)
+
+**Fichier :** `src/hal/pmu.{h,cpp}`
+
+### Comportements bouton power
+
+| Action | Résultat |
+|---|---|
+| Appui court | Bascule écran ON/OFF (rétroéclairage AMOLED) |
+| Appui long (>1 s) | Affiche le menu Alimentation (overlay modal) |
+
+### Menu Alimentation (`ui_power_menu_show()`)
+
+Overlay centré sur `lv_layer_top()`, 3 boutons :
+
+| Bouton | Action | Couleur |
+|---|---|---|
+| Veille | `hal_pmu_enter_sleep()` → light sleep ESP32 | Vert sombre |
+| Arrêt complet | `hal_pmu_shutdown()` → coupure AXP2101 | Rouge sombre |
+| Annuler | Ferme l'overlay | Bleu sombre |
+
+### Modes d'alimentation
+
+**Veille (light sleep)**
+- Écran éteint (`gfx->displayOff()`)
+- Reconfiguration IRQ AXP_INT pour réveil sur flanc descendant
+- `esp_light_sleep_start()` — RAM et état LVGL préservés
+- Réveil sur appui court bouton power → `hal_pmu_screen_on()`
+
+**Arrêt complet**
+- Écran éteint, délai 200 ms
+- `pmu.shutdown()` (AXP2101 coupe l'alimentation)
+- Fallback : `esp_deep_sleep_start()` si shutdown échoue
+
+### Lecture batterie
+
+`int hal_pmu_battery_pct()` — retourne -1 si AXP2101 non disponible.
+
+Affichage status bar :
+- > 30% : vert `#44CC44`
+- 15–30% : orange `#F4A236`
+- < 15% : rouge `#F44336`
+
+---
+
+## 19. Affichage & Interface LVGL
+
+### Configuration LVGL 9
+
+- `LV_COLOR_DEPTH = 16` (RGB565)
+- Buffer DMA : 40 lignes × 480 px × 2 octets = 38 400 oct (PSRAM, `MALLOC_CAP_DMA`)
+- Double buffer activé pour fluidité maximale
+- `rounder_cb` : force les coordonnées de flush à être paires
+- `swap16_buf()` avant chaque `draw16bitBeRGBBitmap()` (correction endianness)
+- Polices Montserrat activées : 12, 14, 16, 24, 48 (pas 10)
+
+### Barre de statut (status_bar.cpp)
+
+Hauteur 36 px, fixée sur `lv_layer_top()` (toujours visible).
+
+| Zone | Contenu | Position |
+|---|---|---|
+| Gauche | Date + heure (ex: `05 mai · 14:35`) | `LV_ALIGN_LEFT_MID, 8, 0` |
+| Droite | Icône BLE → WiFi → jauge batt → % | offsets -114, -90, -56, -8 |
+
+Mise à jour : toutes les 10 secondes dans `ui_status_bar_tick()`.
+
+NTP : configuré à la première connexion WiFi avec TZ Europe/Paris DST auto :
+```cpp
+setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+tzset();
+configTime(0, 0, "pool.ntp.org", "time.google.com");
+```
+
+### Launcher — Carousel 4 apps
+
+- `lv_tileview` horizontal, 4 tuiles (APP_COUNT)
+- Navigation : bouton gauche (prev), bouton droit court (next), bouton droit long (ouvrir)
+- Chaque tuile : fond coloré + carte semi-transparente + icône 48 pt + nom 24 pt + sous-titre 12 pt + indicateur `x/4`
+- Swipe tactile natif LVGL activé
+
+| App | Icône | Fond | Texte |
+|---|---|---|---|
+| Nestor | `LV_SYMBOL_WIFI` | `#0D1B3E` | `#7EB8F7` |
+| Radars | `LV_SYMBOL_AUDIO` | `#0A0A1A` | `#7EB8F7` |
+| Bourse | `LV_SYMBOL_UP` | `#071A07` | `#66EE88` |
+| Météo | `LV_SYMBOL_WARNING` | `#0A0E1A` | `#FFCC44` |
+
+---
+
+## 20. Connectivité (WiFi / OTA / BLE)
+
+### WiFi — Portail captif (wifi_mgr.cpp)
+
+- Bibliothèque : WiFiManager (tzapu)
+- Mode non-bloquant (`startConfigPortalNonBlocking()`)
+- SSID portail : `Compagnon_Setup`, PSK : `compagnon`
+- Timeout portail : 180 s, puis abandon
+- Menu portail : wifi, info, sep, exit (**pas** de /update ni /erase — sécurité)
+- Rappel état connexion → `ui_status_bar_set_wifi(bool)`
+
+### OTA (ota.cpp)
+
+- Bibliothèque : ArduinoOTA (incluse ESP32 Arduino)
+- Hostname : `compagnon` (visible dans Arduino IDE → Port réseau)
+- Port : 3232 (TCP)
+- Mot de passe : `nestor_ota` (défini dans `src/config/secrets.h` V2)
+- Progression logguée sur Serial
+
+### BLE (V2)
+
+V1 : non implémenté.
+V2 prévu : `src/net/ble_mgr.{h,cpp}`
+- Appairage avec l'app PWA (Web Bluetooth API)
+- Services GATT : sync agents, GPS, remontée capteurs
+- Fallback internet si WiFi indisponible
+
+---
+
+## 21. Applications V1 — Catalogue
+
+### Nestor (nestor_app)
+
+- Interface chat LVGL natif (bulle messages + champ saisie)
+- Appel LLM : Groq API (`GROQ_API_KEY` depuis NVS)
+- TTS : ES8311 codec pour lecture vocale des réponses
+- Micro : ES7210, tap-to-speak, silence automatique si pas de réponse
+- Sync agents : déclenché à l'ouverture si WiFi/BLE disponible
+
+### Radars (radar_app)
+
+- Port de la PWA `index.html` (branche sicho95/Radars)
+- Alertes routières en temps réel
+- GPS : via BLE téléphone (V2) ou position fixe manuelle (V1)
+- Données : API Radars (même source que PWA)
+
+### Météo (meteo_app)
+
+- API : `api.meteo-concept.com`
+- Clé : `METEO_API_KEY` dans NVS
+- Prévisions J+3, affichage pictogrammes + températures
+
+### Bourse (bourse_app)
+
+- API primaire : Twelve Data (`TWELVE_DATA_KEY` dans NVS)
+- 4 symboles configurables (défaut : CAC40, BTC, EUR/USD, OR)
+- Rafraîchissement : toutes les 1,5 min entre 9h et 18h
+- Hors horaires : données figées avec indicateur
+- Fallback Finnhub (V2, configurable dans réglages)
+
+---
+
+## 22. Synchronisation PWA ↔ ESP32
+
+### Déclenchement (V1 — BLE non implémenté, prévu V2)
+
+| Événement | Action |
+|---|---|
+| Ouverture app Nestor (si WiFi LAN disponible) | Sync bidirectionnelle |
+| Toutes les 2 heures (si connecté) | Sync bidirectionnelle |
+| Modification locale d'un agent | Sync push vers pair |
+
+### Protocole (V2 — BLE GATT)
+
+```
+SYNC_HELLO  { version, deviceId, timestamp }
+SYNC_PLAN   { agentIds: [...], updatedAt: [...] }
+SYNC_DATA   { agents: [...] }   ← envoi des agents manquants/plus récents
+```
+
+### Résolution de conflit
+
+**Last-write-wins** par `agent.updatedAt` (timestamp ISO8601). Aucune fusion — l'agent le plus récent écrase l'autre.
+
+### Anti-collision Gardener
+
+Le Gardener (maintenance/compaction agents) tourne de façon autonome sur ESP32 et PWA. Un verrou logiciel (`gardener_lock`) empêche deux instances de tourner simultanément. Priorité au Gardener qui a posé le verrou en premier.
+
+---
+
+## 23. Clés et secrets ESP32
+
+**Fichier :** `src/config/secrets.h` (gitignorée — créer depuis `secrets.template.h`)
+
+| Constante | Service | Obligatoire |
+|---|---|---|
+| `WIFI_AP_PSK` | Mot de passe portail captif | Oui |
+| `OTA_PASSWORD` | Mot de passe OTA Arduino | Oui |
+| `GROQ_API_KEY` | LLM Groq (app Nestor) | Oui |
+| `GEMINI_API_KEY` | TTS cloud Gemini | Non |
+| `METEO_API_KEY` | api.meteo-concept.com | Oui (app Météo) |
+| `SERPER_KEY` | Recherche web Serper | Non |
+| `TWELVE_DATA_KEY` | Cours boursiers Twelve Data | Oui (app Bourse) |
+
+Stockage à terme : **NVS Preferences** (flash chiffrée ESP32), modifiables depuis l'app Nestor.
+
+---
+
+## 24. Procédure Arduino IDE
+
+### Bibliothèques requises (Gestionnaire de bibliothèques)
+
+| Bibliothèque | Version | Notes |
+|---|---|---|
+| Waveshare ESP32-S3 AMOLED | latest | Via URL board manager |
+| LVGL | 9.x (Waveshare patched) | `lv_conf.h` à copier |
+| Arduino_GFX_Library | latest | `Arduino_CO5300` driver |
+| SensorLib (lewisxhe) | latest | `TouchDrvCSTXXX.hpp` |
+| XPowersLib | 0.3.3 | `XPowersAXP2101` |
+| WiFiManager (tzapu) | latest | Portail captif |
+| ArduinoOTA | (incluse) | OTA WiFi |
+
+### Placement lv_conf.h
+
+```
+~/Documents/Arduino/libraries/lv_conf.h   ← copie depuis src/config/lv_conf.h
+```
+
+### Paramètres de compilation
+
+| Paramètre | Valeur |
+|---|---|
+| Board | ESP32S3 Dev Module |
+| Flash Size | 16 MB |
+| Partition Scheme | Huge APP (3 MB No OTA) ou 16M Flash (3 MB APP/9 MB FATFS) |
+| PSRAM | OPI PSRAM (OPI 80 MHz) |
+| USB Mode | USB CDC On Boot: Enabled |
+| Upload Speed | 921600 |
+| CPU Frequency | 240 MHz |
+
+### Premier flash (USB)
+
+1. Brancher ESP32 en USB-C
+2. Sélectionner le port COM/série
+3. Copier `secrets.template.h` → `secrets.h`, remplir les clés
+4. `Croquis → Téléverser`
+
+### Flash OTA (après premier flash)
+
+1. S'assurer que l'ESP32 est connecté au même réseau WiFi
+2. Dans Arduino IDE : `Outils → Port → compagnon (ESP32S3 Dev Module)`
+3. `Croquis → Téléverser` — le mot de passe OTA sera demandé (`nestor_ota`)
+
+### Débogage
+
+- `Outils → Moniteur série` à 115200 baud
+- Tous les modules loguent avec préfixe : `[HAL/DISPLAY]`, `[HAL/TOUCH]`, `[PMU]`, `[OTA]`, `[UI/LAUNCH]`, etc.
