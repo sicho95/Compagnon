@@ -59,7 +59,7 @@ static void build_ui() {
 
     lbl_url = lv_label_create(scr);
     lv_label_set_text(lbl_url, "");
-    lv_obj_set_style_text_font(lbl_url, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_url, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(lbl_url, lv_color_hex(0x6B75A0), 0);
     lv_obj_set_style_text_align(lbl_url, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(lbl_url, 420);
