@@ -1,4 +1,4 @@
-const CACHE = 'nestor-v3';
+const CACHE = 'nestor-v4';
 const PRECACHE = [
   './',
   './index.html',
@@ -7,13 +7,17 @@ const PRECACHE = [
   './src/app.js',
   './src/api/backends.js',
   './src/api/backends.json',
+  './src/api/search.js',
+  './src/api/tts.js',
   './src/storage/agents-db.js',
   './src/core/default-agents.js',
   './src/core/gardener.js',
+  './src/core/orchestrator-engine.js',
   './src/ui/dashboard.js',
+  './src/ui/radar-view.js',
+  './src/ui/bourse-view.js',
 ];
 
-// Installation : mise en cache forcée de tous les modules
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE).then(cache => cache.addAll(PRECACHE))
@@ -21,7 +25,6 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activation : supprimer les anciens caches (vide le cache iOS stale)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -31,10 +34,9 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch : cache-first pour les assets, network-first pour l'API
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Laisser passer les appels API LLM sans cache
+  // Laisser passer tous les appels API externes sans cache
   if (url.hostname !== location.hostname) {
     return;
   }

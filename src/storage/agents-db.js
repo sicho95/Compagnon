@@ -86,3 +86,24 @@ export async function importAgentsJson(json, gardenerMergeFn) {
 // localStorage sécurisé (PWA iOS peut bloquer)
 export function lsGet(key) { try { return localStorage.getItem(key) || ''; } catch { return ''; } }
 export function lsSet(key, val) { try { localStorage.setItem(key, val); } catch { console.warn('[Nestor] localStorage indisponible'); } }
+
+// ─── Historique de conversation par agent (localStorage) ─────────────────────
+const HIST_PREFIX = 'NESTOR_HIST_';
+const HIST_MAX_MESSAGES = 100;
+
+export function saveChatHistory(agentId, history) {
+  // Ne persiste pas le message system (index 0)
+  const toSave = history.filter(m => m.role !== 'system').slice(-HIST_MAX_MESSAGES);
+  lsSet(HIST_PREFIX + agentId, JSON.stringify(toSave));
+}
+
+export function loadChatHistory(agentId) {
+  try {
+    const raw = lsGet(HIST_PREFIX + agentId);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function clearChatHistory(agentId) {
+  try { localStorage.removeItem(HIST_PREFIX + agentId); } catch {}
+}

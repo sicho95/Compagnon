@@ -1,9 +1,13 @@
 import { listBackends, callLLM, loadGroqModels, resetGroqModelsCache } from '../api/backends.js';
-import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson, lsGet, lsSet } from '../storage/agents-db.js';
+import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson,
+         lsGet, lsSet, saveChatHistory, loadChatHistory, clearChatHistory } from '../storage/agents-db.js';
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
-import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled, listBrowserVoices } from '../api/tts.js';
+import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
+         listBrowserVoices, getTTSStatus } from '../api/tts.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
+import { renderRadarView, cleanupRadarView } from './radar-view.js';
+import { renderBourseView, cleanupBourseView } from './bourse-view.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
@@ -25,13 +29,9 @@ function splitReplyAndSources(text) {
   const match = text.match(sourcePattern);
   if (!match) return { main: text, sources: '' };
   const idx = text.indexOf(match[0]);
-  return {
-    main: text.slice(0, idx).trimEnd(),
-    sources: match[0].trim(),
-  };
+  return { main: text.slice(0, idx).trimEnd(), sources: match[0].trim() };
 }
 
-// ─── Texte pour TTS : retire les sources et les URLs ──────────────────────────
 function textForTTS(text) {
   const { main } = splitReplyAndSources(text);
   return main.replace(/https?:\/\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
@@ -43,6 +43,8 @@ export function renderDashboard(container, state, rerender) {
   if (state.view === 'chat' && state.activeAgent) { renderChatView(container, state, rerender); return; }
   if (state.view === 'edit' && state.editingAgent) { renderEditView(container, state, rerender); return; }
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
+  if (state.view === 'radar') { renderRadarSection(container, state, rerender); return; }
+  if (state.view === 'bourse') { renderBourseSection(container, state, rerender); return; }
 
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
@@ -87,6 +89,53 @@ export function renderDashboard(container, state, rerender) {
   else renderSettings(container, state, rerender);
 }
 
+// ─── Radar section ────────────────────────────────────────────────────────────
+function renderRadarSection(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '🚨 Radars — Surveillance';
+  header.appendChild(title);
+
+  const backBtn = btn('← Retour', '', () => {
+    cleanupRadarView();
+    state.view = state._radarPrevView || 'chat';
+    rerender();
+  });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const body = el('div', {});
+  container.appendChild(body);
+
+  renderRadarView(body, state, rerender, () => {
+    state.view = state._radarPrevView || 'chat';
+    rerender();
+  });
+}
+
+// ─── Bourse section ───────────────────────────────────────────────────────────
+function renderBourseSection(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '📈 Bourse & Marchés';
+  header.appendChild(title);
+
+  const backBtn = btn('← Retour', '', () => {
+    cleanupBourseView(container.querySelector('[data-bourse]'));
+    state.view = state._boursePrevView || 'chat';
+    rerender();
+  });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const body = el('div', {});
+  body.setAttribute('data-bourse', '1');
+  container.appendChild(body);
+
+  renderBourseView(body, state, rerender);
+}
+
+// ─── Agents List ──────────────────────────────────────────────────────────────
 function renderAgentsList(container, state, rerender) {
   if (!state.agents || state.agents.length === 0) {
     const empty = el('div', { textAlign:'center', padding:'40px 0', color:'#666' });
@@ -136,7 +185,9 @@ function renderAgentsList(container, state, rerender) {
     const btnChat = btn('💬 Parler', 'primary', () => {
       if (!agent.backendId) agent.backendId = 'groq-llama';
       state.activeAgent = agent;
-      state.chatHistory = [{ role: 'system', content: agent.system_prompt || '' }];
+      // Charge l'historique persisté
+      const hist = loadChatHistory(agent.id);
+      state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }, ...hist];
       state.view = 'chat';
       rerender();
     });
@@ -147,15 +198,27 @@ function renderAgentsList(container, state, rerender) {
       rerender();
     });
 
+    const btnClearHist = btn('🗑 Historique', '', async () => {
+      if (!confirm('Effacer l\'historique de ' + agent.name + ' ?')) return;
+      clearChatHistory(agent.id);
+      if (state.activeAgent?.id === agent.id) {
+        state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }];
+      }
+      showToast('Historique de ' + agent.name + ' effacé.');
+    });
+    btnClearHist.title = 'Effacer l\'historique de conversation';
+    btnClearHist.style.fontSize = '11px';
+
     const btnDel = btn('🗑', '', async () => {
       if (!confirm('Supprimer ' + agent.name + ' ?')) return;
       await deleteAgent(agent.id);
+      clearChatHistory(agent.id);
       state.agents = state.agents.filter(a => a.id !== agent.id);
       rerender();
     });
     btnDel.style.marginLeft = 'auto';
 
-    btnsRow.append(btnChat, btnEdit, btnDel);
+    btnsRow.append(btnChat, btnEdit, btnClearHist, btnDel);
     card.appendChild(btnsRow);
     list.appendChild(card);
   });
@@ -163,11 +226,16 @@ function renderAgentsList(container, state, rerender) {
   container.appendChild(list);
 }
 
-// ─── Chat View ───────────────────────────────────────────────────────────────
+// ─── Chat View ────────────────────────────────────────────────────────────────
 function renderChatView(container, state, rerender) {
   const agent = state.activeAgent;
   const isOrchestrator = agent.role === ROLES.ORCHESTRATOR;
-  state.chatHistory = state.chatHistory || [{ role:'system', content: agent.system_prompt || '' }];
+
+  // Initialise l'historique depuis la persistence si seulement le message système est présent
+  if (!state.chatHistory || state.chatHistory.filter(m => m.role !== 'system').length === 0) {
+    const hist = loadChatHistory(agent.id);
+    state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }, ...hist];
+  }
 
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
@@ -177,6 +245,21 @@ function renderChatView(container, state, rerender) {
     badge.style.color = '#7ef';
     title.appendChild(document.createTextNode(' '));
     title.appendChild(badge);
+  }
+
+  // Bouton historique : count des messages non-système
+  const histCount = state.chatHistory.filter(m => m.role !== 'system').length;
+  if (histCount > 0) {
+    const histBadge = el('div', { fontSize:'10px', color:'#555', cursor:'pointer' });
+    histBadge.textContent = histCount + ' msg';
+    histBadge.title = 'Effacer l\'historique';
+    histBadge.onclick = () => {
+      if (!confirm('Effacer l\'historique de conversation ?')) return;
+      clearChatHistory(agent.id);
+      state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }];
+      rerender();
+    };
+    header.appendChild(histBadge);
   }
 
   const silentBtn = btn(isSilentMode() ? '🔇' : '🔊', '', () => {
@@ -218,24 +301,15 @@ function renderChatView(container, state, rerender) {
       if (m.role === 'assistant') {
         const { main, sources } = splitReplyAndSources(m.content);
         bubble.textContent = main;
-
         if (sources) {
-          const srcEl = el('div', {
-            marginTop: '10px',
-            paddingTop: '8px',
-            borderTop: '1px solid #2a2a3a',
-            fontSize: '10px',
-            color: '#556',
-            lineHeight: '1.5',
-            whiteSpace: 'pre-wrap',
-          });
+          const srcEl = el('div', { marginTop:'10px', paddingTop:'8px', borderTop:'1px solid #2a2a3a',
+            fontSize:'10px', color:'#556', lineHeight:'1.5', whiteSpace:'pre-wrap' });
           srcEl.innerHTML = sources.replace(
             /(https?:\/\/[^\s<]+)/g,
             '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#558;word-break:break-all;">$1</a>'
           );
           bubble.appendChild(srcEl);
         }
-
       } else {
         bubble.textContent = m.content;
       }
@@ -267,8 +341,7 @@ function renderChatView(container, state, rerender) {
   feedbackInput.placeholder = 'Correction ou préférence pour cet agent…';
   feedbackInput.rows = 2;
   const feedbackSend = btn('✔ Enregistrer', 'primary', async () => {
-    const txt = feedbackInput.value.trim();
-    if (!txt) return;
+    const txt = feedbackInput.value.trim(); if (!txt) return;
     agent.preferences = agent.preferences || [];
     agent.preferences.push(txt);
     agent.metrics = agent.metrics || {};
@@ -290,7 +363,7 @@ function renderChatView(container, state, rerender) {
     flex:'1', background:'#111', color:'#fff', border:'1px solid #333',
     borderRadius:'8px', padding:'8px 10px', fontSize:'14px'
   });
-  input.placeholder = 'Ton message… (clavier ou dictée)';
+  input.placeholder = 'Ton message…';
   input.setAttribute('autocomplete', 'off');
 
   const sendBtn = btn('Envoyer', 'primary', send);
@@ -303,7 +376,6 @@ function renderChatView(container, state, rerender) {
     renderMessages();
 
     let reply = '';
-
     try {
       let strategy = '', traceSteps = [];
 
@@ -331,13 +403,11 @@ function renderChatView(container, state, rerender) {
             rerender();
           }
         }
-
         state.chatHistory.push({ role:'assistant', content: reply, _orchestrated: true, _strategy: strategy });
 
       } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
         const subQueries = splitIntoSubQueries(msg);
         let context;
-
         if (subQueries.length > 1) {
           const { allResults } = await searchWebMulti(subQueries, { maxResultsPerQuery: 3 });
           context = allResults.length
@@ -349,12 +419,10 @@ function renderChatView(container, state, rerender) {
             ? results.map((r, i) => `[${i+1}] ${r.title}\n${r.link}\n${r.snippet}`).join('\n\n')
             : 'Aucun résultat web disponible.';
         }
-
         const prefs = (agent.preferences || []).join('\n');
         const sysContent = agent.system_prompt
           + (prefs ? `\n\nPréférences :\n${prefs}` : '')
           + `\n\nRÉSULTATS WEB :\n${context}`;
-
         const choice = await callLLM(agent.backendId || 'groq-llama', {
           messages: [{ role:'system', content: sysContent }, { role:'user', content: msg }],
           agentConfig: agent,
@@ -385,6 +453,9 @@ function renderChatView(container, state, rerender) {
     agent.metrics.lastUsed = new Date().toISOString();
     await saveAgent(agent);
 
+    // Persiste l'historique
+    saveChatHistory(agent.id, state.chatHistory);
+
     if (reply && !isSilentMode()) {
       const ttsText = textForTTS(reply);
       if (ttsText) speak(ttsText).catch(e => console.warn('[Nestor/TTS]', e.message));
@@ -395,7 +466,7 @@ function renderChatView(container, state, rerender) {
   container.appendChild(inputRow);
 }
 
-// ─── Découpage de requête complexe en sous-requêtes ──────────────────────────
+// ─── Découpage de requête complexe ───────────────────────────────────────────
 const TV_CHAINS = ['TF1','France 2','France2','France 3','France3','Canal+','France 5','France5','M6','Arte','C8','CNews','BFM','TMC'];
 
 function splitIntoSubQueries(query) {
@@ -412,7 +483,7 @@ function splitIntoSubQueries(query) {
   return [query];
 }
 
-// ─── Fabrique View ───────────────────────────────────────────────────────────
+// ─── Fabrique View ────────────────────────────────────────────────────────────
 function renderFabriqueView(container, state, rerender) {
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
@@ -486,7 +557,6 @@ function renderFabriqueView(container, state, rerender) {
         + '<span style="color:#888">' + esc(newAgent.description || '') + '</span><br><br>'
         + '<details><summary style="cursor:pointer;color:#5a9">Voir le prompt</summary><pre style="white-space:pre-wrap;font-size:11px;color:#aaa;margin-top:6px">'
         + esc(newAgent.system_prompt) + '</pre></details>';
-
       const confirmBtn = btn('✔ Ajouter cet agent', 'primary', async () => {
         await saveAgent(newAgent);
         state.agents = state.agents.concat([newAgent]);
@@ -494,14 +564,13 @@ function renderFabriqueView(container, state, rerender) {
         state.view = 'agents'; rerender();
       });
       previewZone.append(previewTitle, preCard, confirmBtn);
-    } catch(e) {
-      showToast('Erreur Fabrique : ' + e.message, true);
-    }
+    } catch(e) { showToast('Erreur Fabrique : ' + e.message, true); }
     genBtn.textContent = '✨ Générer avec la Fabrique'; genBtn.disabled = false;
   });
   container.appendChild(genBtn);
 }
 
+// ─── Edit View ────────────────────────────────────────────────────────────────
 function renderEditView(container, state, rerender) {
   const agent = state.editingAgent;
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
@@ -608,7 +677,6 @@ function renderSettings(container, state, rerender) {
       inp.value = lsGet(b.envKey) || '';
       inp.onchange = () => { lsSet(b.envKey, inp.value.trim()); showToast('Clé ' + b.envKey + ' sauvegardée.'); };
       card.append(lEl, inp);
-
       const statusDot = el('div', { fontSize:'11px', marginTop:'4px' });
       const hasKey = !!(lsGet(b.envKey) || '').trim();
       statusDot.textContent = hasKey ? '✅ Clé présente' : '⚠️ Clé manquante';
@@ -626,21 +694,18 @@ function renderSettings(container, state, rerender) {
   const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
   const sTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
   sTitle.textContent = '🌐 Recherche Web';
-
   const status = getSearchStatus();
   const statusBadge = el('div', { fontSize:'11px', marginBottom:'8px', padding:'4px 8px', borderRadius:'6px',
     background: status.engine === 'serper' ? '#1a3a1a' : '#1a1a3a',
-    color: status.engine === 'serper' ? '#7ef' : '#88f',
-    display:'inline-block'
-  });
+    color: status.engine === 'serper' ? '#7ef' : '#88f', display:'inline-block' });
   statusBadge.textContent = (status.engine === 'serper' ? '🟢 Serper.dev actif' : '🔵 SearXNG fallback') + ' — ' + status.reason;
   searchCard.append(sTitle, statusBadge);
 
   const sDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> en 1er (2500 req/mois gratuites, vrai Google) → <b>SearXNG</b> en fallback (illimité, sans clé).<br>Crée un compte gratuit sur <a href="https://serper.dev" target="_blank" style="color:#5af">serper.dev</a> pour obtenir ta clé.';
+  sDesc.innerHTML = 'Stratégie : <b>Serper.dev</b> en 1er (2500 req/mois gratuites) → <b>SearXNG</b> en fallback (illimité, sans clé).<br>Crée un compte sur <a href="https://serper.dev" target="_blank" style="color:#5af">serper.dev</a>.';
   searchCard.appendChild(sDesc);
 
-  const serperLabel = labelEl('Clé Serper.dev (SERPER_KEY) — optionnelle mais recommandée');
+  const serperLabel = labelEl('Clé Serper.dev (SERPER_KEY) — optionnelle');
   const serperInput = document.createElement('input');
   Object.assign(serperInput.style, {
     width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
@@ -669,8 +734,125 @@ function renderSettings(container, state, rerender) {
   proxyInput.value = lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/';
   proxyInput.onchange = () => { lsSet('SEARCH_PROXY_URL', proxyInput.value.trim()); showToast('SEARCH_PROXY_URL sauvegardée.'); };
   searchCard.append(proxyLabel, proxyInput);
-
   list.appendChild(searchCard);
+
+  // ── Section Bourse ─────────────────────────────────────────────────────────
+  const bourseCard = el('div', { background:'#071407', border:'1px solid #1a3a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const bTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  bTitle.textContent = '📈 Bourse — Twelve Data';
+  bourseCard.appendChild(bTitle);
+
+  const bDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  bDesc.innerHTML = 'Cours en temps réel (CAC40, BTC, EUR/USD, Or). Clé gratuite sur <a href="https://twelvedata.com" target="_blank" style="color:#5af">twelvedata.com</a>.';
+  bourseCard.appendChild(bDesc);
+
+  const tdLabel = labelEl('Clé Twelve Data (TWELVE_DATA_KEY)');
+  const tdInput = document.createElement('input');
+  tdInput.type = 'password'; tdInput.autocomplete = 'off';
+  Object.assign(tdInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  tdInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  tdInput.value = lsGet('TWELVE_DATA_KEY') || '';
+  tdInput.onchange = () => { lsSet('TWELVE_DATA_KEY', tdInput.value.trim()); showToast('TWELVE_DATA_KEY sauvegardée.'); };
+  bourseCard.appendChild(tdLabel);
+  bourseCard.appendChild(tdInput);
+
+  const tdStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasTD = !!(lsGet('TWELVE_DATA_KEY') || '').trim();
+  tdStatus.textContent = hasTD ? '✅ Clé présente' : '⚠️ Clé manquante — la vue Bourse affichera un message';
+  tdStatus.style.color = hasTD ? '#5a9' : '#a66';
+  bourseCard.appendChild(tdStatus);
+  list.appendChild(bourseCard);
+
+  // ── Section TTS ────────────────────────────────────────────────────────────
+  const ttsCard = el('div', { background:'#0a0a1a', border:'1px solid #1a1a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const tTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  tTitle.textContent = '🔊 Text-to-Speech (TTS)';
+
+  const ttsStatus = getTTSStatus();
+  const ttsBadge = el('div', { fontSize:'11px', marginBottom:'10px', padding:'4px 8px', borderRadius:'6px',
+    background: ttsStatus.engine === 'gemini' ? '#1a2a3a' : ttsStatus.engine === 'silent' ? '#2a1a1a' : '#1a1a2a',
+    color: ttsStatus.engine === 'gemini' ? '#88f' : ttsStatus.engine === 'silent' ? '#f88' : '#aaf',
+    display: 'inline-block' });
+  const ttsEngineIcons = { gemini:'🌐', browser:'🗣', silent:'🔇', none:'❌' };
+  ttsBadge.textContent = (ttsEngineIcons[ttsStatus.engine] || '') + ' ' + ttsStatus.reason;
+
+  ttsCard.append(tTitle, ttsBadge);
+
+  // Moteur
+  const engLabel = labelEl('Moteur TTS');
+  const engSel = document.createElement('select');
+  Object.assign(engSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  [['browser', '🗣 Navigateur (offline, gratuit)'], ['gemini', '🌐 Gemini Cloud (voix naturelle)']].forEach(([val, lbl]) => {
+    const opt = document.createElement('option'); opt.value = val; opt.textContent = lbl;
+    if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === val) opt.selected = true;
+    engSel.appendChild(opt);
+  });
+  engSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engSel.value); showToast('Moteur TTS : ' + engSel.value); rerender(); };
+  ttsCard.append(engLabel, engSel);
+
+  // Voix (browser seulement)
+  const voiceWrap = el('div', {});
+  const voiceLabel = labelEl('Voix navigateur');
+  const voiceSel = document.createElement('select');
+  Object.assign(voiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedVoice = lsGet('NESTOR_TTS_VOICE') || '';
+  listBrowserVoices().then(voices => {
+    const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '— Auto (voix française)'; voiceSel.appendChild(defOpt);
+    voices.forEach(v => {
+      const opt = document.createElement('option'); opt.value = v.name;
+      opt.textContent = v.name + ' (' + v.lang + ')';
+      if (v.name === savedVoice) opt.selected = true;
+      voiceSel.appendChild(opt);
+    });
+  });
+  voiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE', voiceSel.value); showToast('Voix TTS sauvegardée.'); };
+  voiceWrap.append(voiceLabel, voiceSel);
+  ttsCard.appendChild(voiceWrap);
+
+  // Vitesse
+  const rateLabel = labelEl('Vitesse de lecture');
+  const rateRow = el('div', { display:'flex', alignItems:'center', gap:'10px' });
+  const rateSlider = document.createElement('input');
+  rateSlider.type = 'range'; rateSlider.min = '0.5'; rateSlider.max = '2.0'; rateSlider.step = '0.1';
+  rateSlider.value = lsGet('NESTOR_TTS_RATE') || '1.0';
+  rateSlider.style.flex = '1';
+  const rateDisplay = el('div', { fontSize:'12px', color:'#888', minWidth:'30px', textAlign:'right' });
+  rateDisplay.textContent = rateSlider.value + '×';
+  rateSlider.oninput = () => { rateDisplay.textContent = rateSlider.value + '×'; lsSet('NESTOR_TTS_RATE', rateSlider.value); };
+  rateRow.append(rateSlider, rateDisplay);
+  ttsCard.append(rateLabel, rateRow);
+
+  // Bouton test
+  const testBtn = btn('▶ Tester la voix', '', async () => {
+    testBtn.disabled = true; testBtn.textContent = '⏳ Lecture…';
+    try {
+      const { speak: spk } = await import('../api/tts.js');
+      await spk('Bonjour, je suis Nestor, votre assistant personnel.');
+    } catch(e) { showToast('Erreur TTS : ' + e.message, true); }
+    testBtn.disabled = false; testBtn.textContent = '▶ Tester la voix';
+  });
+  testBtn.style.marginTop = '8px';
+  ttsCard.appendChild(testBtn);
+
+  // Mode silence
+  const silentRow = el('div', { display:'flex', alignItems:'center', gap:'10px', marginTop:'8px' });
+  const silentLabel = el('div', { fontSize:'12px', color:'#888', flex:'1' });
+  silentLabel.textContent = '🔇 Mode silence global';
+  const silentToggle = document.createElement('input');
+  silentToggle.type = 'checkbox';
+  silentToggle.checked = isSilentMode();
+  silentToggle.onchange = () => {
+    setSilentMode(silentToggle.checked);
+    showToast(silentToggle.checked ? 'Silence activé.' : 'Voix réactivée.');
+    rerender();
+  };
+  silentRow.append(silentLabel, silentToggle);
+  ttsCard.appendChild(silentRow);
+  list.appendChild(ttsCard);
+
   container.appendChild(list);
 }
 
