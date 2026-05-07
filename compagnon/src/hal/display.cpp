@@ -4,6 +4,8 @@
 Arduino_DataBus *gfx_bus = nullptr;
 Arduino_CO5300  *gfx     = nullptr;
 
+static lv_display_t *s_disp = nullptr;
+
 #define BUF_LINES 40
 
 static lv_color_t *buf1 = nullptr;
@@ -69,9 +71,11 @@ void hal_display_init() {
   buf2 = (lv_color_t *)ps_malloc(bytes);
   if (!buf1) { buf1 = (lv_color_t *)malloc(bytes); buf2 = nullptr; }
 
-  lv_display_t *disp = lv_display_create(LCD_WIDTH, LCD_HEIGHT);
-  lv_display_set_buffers(disp, buf1, buf2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
-  lv_display_set_flush_cb(disp, flush_cb);
-  lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+  s_disp = lv_display_create(LCD_WIDTH, LCD_HEIGHT);
+  lv_display_set_buffers(s_disp, buf1, buf2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  lv_display_set_flush_cb(s_disp, flush_cb);
+  lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
   Serial.println("[HAL/DISP] LVGL OK");
 }
+
+lv_display_t *hal_display_get() { return s_disp; }

@@ -32,9 +32,19 @@ static lv_obj_t *tiles[APP_COUNT];
 static int8_t    cur_idx      = 0;
 
 // ── Boutons physiques ─────────────────────────────────────────────────
-struct BtnState { uint8_t pin; bool last; bool pressed; uint32_t t0; bool lf; };
-static BtnState btnLeft  = {BTN_LEFT,  true, false, 0, false};
-static BtnState btnRight = {BTN_RIGHT, true, false, 0, false};
+#define BTN_DEBOUNCE_MS 20
+
+struct BtnState {
+    uint8_t  pin;
+    bool     stable;      // état confirmé (true = relâché)
+    bool     raw;         // dernière lecture brute
+    uint32_t edge_t;      // instant de la dernière transition brute
+    bool     pressed;     // appui en cours (confirmé)
+    uint32_t press_t;     // instant de l'appui confirmé
+    bool     long_done;   // appui long déjà déclenché
+};
+static BtnState btnLeft  = {BTN_LEFT,  true, true, 0, false, 0, false};
+static BtnState btnRight = {BTN_RIGHT, true, true, 0, false, 0, false};
 
 static void go_to(int8_t idx) {
     cur_idx = (idx + APP_COUNT) % APP_COUNT;
@@ -52,15 +62,35 @@ static void on_tile_changed(lv_event_t *e) {
 }
 
 static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
-    bool raw = digitalRead(b.pin);
-    if (raw != b.last) {
-        b.last = raw;
-        if (!raw) { b.pressed = true; b.t0 = millis(); b.lf = false; }
-        else       { if (b.pressed && !b.lf && on_s) on_s(); b.pressed = false; }
+    bool cur = (bool)digitalRead(b.pin);
+
+    // Toute transition brute redémarre la fenêtre anti-rebond
+    if (cur != b.raw) {
+        b.raw    = cur;
+        b.edge_t = millis();
     }
-    if (b.pressed && !b.lf && millis() - b.t0 > LONG_MS) {
-        b.lf = true;
-        if (on_l) on_l();
+
+    // Ignorer pendant la fenêtre anti-rebond
+    if (millis() - b.edge_t < BTN_DEBOUNCE_MS) return;
+
+    // État stabilisé — traiter uniquement si différent du dernier état confirmé
+    if (cur == b.stable) {
+        // Détection appui long (le stable est déjà confirmé "pressé")
+        if (b.pressed && !b.long_done && millis() - b.press_t >= LONG_MS) {
+            b.long_done = true;
+            if (on_l) on_l();
+        }
+        return;
+    }
+
+    b.stable = cur;
+    if (!cur) {                               // front descendant : appui confirmé
+        b.pressed   = true;
+        b.press_t   = millis();
+        b.long_done = false;
+    } else {                                  // front montant : relâchement confirmé
+        if (b.pressed && !b.long_done && on_s) on_s();
+        b.pressed = false;
     }
 }
 
@@ -68,7 +98,9 @@ static void bl_s() { go_to(cur_idx - 1); }
 static void br_s() { go_to(cur_idx + 1); }
 static void br_l() { open_current(); }
 
-static void btn_timer_cb(lv_timer_t *) {
+// Appelée directement depuis loop() — hors timer LVGL pour éviter toute latence
+// liée au temps de rendu (lv_timer_handler() peut bloquer 30–100 ms).
+void ui_launcher_btn_tick() {
     if (orchestrator_get_app() != APP_LAUNCHER) return;
     poll_btn(btnLeft,  bl_s, nullptr);
     poll_btn(btnRight, br_s, br_l);
@@ -144,7 +176,6 @@ void ui_launcher_init() {
 
     pinMode(BTN_LEFT,  INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
-    lv_timer_create(btn_timer_cb, 20, NULL);
 
     lv_scr_load(scr_launcher);
     Serial.println("[UI/LAUNCH] Launcher OK");

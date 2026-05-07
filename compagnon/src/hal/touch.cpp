@@ -32,14 +32,21 @@ void hal_touch_init() {
     delay(500);
 
     if (TOUCH_INT >= 0) pinMode(TOUCH_INT, INPUT_PULLUP);
-    // -1 pour RST = pas de reset supplémentaire (évite de recasser l'écran)
-    touch.setPins(-1, TOUCH_INT);
+    // -1 pour RST et INT : active le mode polling I²C pur.
+    // Si INT est passé à SensorLib, getPoint() vérifie digitalRead(INT) == LOW
+    // avant chaque lecture — le CST9220 pulse INT ~5 ms, trop court pour être
+    // capturé à chaque tick LVGL (~16 ms), ce qui bloque systématiquement la lecture.
+    touch.setPins(-1, -1);
 
-    // Essai adresse 0x5A (Waveshare officiel) puis 0x1A
-    touch_ok = touch.begin(Wire, 0x5A, IIC_SDA, IIC_SCL);
+    // Essai des adresses 7 bits connues pour la famille CST : 0x1A, 0x15, 0x5A
+    touch_ok = touch.begin(Wire, 0x1A, IIC_SDA, IIC_SCL);
     if (!touch_ok) {
-        Serial.println("[HAL/TOUCH] 0x5A echoue, essai 0x1A...");
-        touch_ok = touch.begin(Wire, 0x1A, IIC_SDA, IIC_SCL);
+        Serial.println("[HAL/TOUCH] 0x1A echoue, essai 0x15...");
+        touch_ok = touch.begin(Wire, 0x15, IIC_SDA, IIC_SCL);
+    }
+    if (!touch_ok) {
+        Serial.println("[HAL/TOUCH] 0x15 echoue, essai 0x5A...");
+        touch_ok = touch.begin(Wire, 0x5A, IIC_SDA, IIC_SCL);
     }
 
     if (!touch_ok) {
