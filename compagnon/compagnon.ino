@@ -60,11 +60,13 @@ void loop() {
     hal_imu_tick();        // Lecture orientation + détection changement
     if (hal_imu_changed()) {
         // Correspondance orientation physique → rotation logique LVGL
+        // Rotation de base 270° (90° anti-horaire) pour l'orientation portrait,
+        // cohérente avec lv_display_set_rotation(270) dans hal_display_init()
         static const lv_display_rotation_t rot_map[] = {
-            LV_DISPLAY_ROTATION_0,    // ORIENT_PORTRAIT
-            LV_DISPLAY_ROTATION_270,  // ORIENT_LANDSCAPE_L
-            LV_DISPLAY_ROTATION_180,  // ORIENT_PORTRAIT_INV
-            LV_DISPLAY_ROTATION_90,   // ORIENT_LANDSCAPE_R
+            LV_DISPLAY_ROTATION_270,  // ORIENT_PORTRAIT     (défaut boot)
+            LV_DISPLAY_ROTATION_0,    // ORIENT_LANDSCAPE_L
+            LV_DISPLAY_ROTATION_90,   // ORIENT_PORTRAIT_INV
+            LV_DISPLAY_ROTATION_180,  // ORIENT_LANDSCAPE_R
         };
         lv_display_set_rotation(hal_display_get(), rot_map[hal_imu_orientation()]);
     }

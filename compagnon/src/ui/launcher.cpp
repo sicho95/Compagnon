@@ -7,9 +7,9 @@
 #include "../apps/bourse/bourse_app.h"
 #include "../apps/meteo/meteo_app.h"
 
-#define APP_COUNT  4
-#define LONG_MS    800
-#define BORDER_PX  5     // bordure noire pour boîtier arrondi
+#define APP_COUNT       4
+#define LONG_MS         800
+#define BTN_DEBOUNCE_MS 15   // debounce 15 ms pour latence minimale
 
 struct AppEntry {
     const char *label;
@@ -18,14 +18,14 @@ struct AppEntry {
     uint32_t    color_txt;
     const char *icon;
     void (*launch)();
-    void (*stop)();
+    void (*stop)();   // quitter proprement depuis le bouton matériel
 };
 
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",      0x000000, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nullptr         },
-    { "Radars",  "Alertes routieres", 0x000000, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop  },
-    { "Bourse",  "Marches & Actifs",  0x000000, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop },
-    { "Meteo",   "Previsions",        0x000000, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop  },
+    { "Nestor",  "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nestor_app_stop  },
+    { "Radars",  "Alertes routieres", 0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop   },
+    { "Bourse",  "Marches & Actifs",  0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop  },
+    { "Meteo",   "Previsions",        0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop   },
 };
 
 static lv_obj_t *scr_launcher = nullptr;
@@ -38,15 +38,18 @@ static int8_t    cur_idx      = 0;
 
 struct BtnState {
     uint8_t  pin;
-    bool     stable;      // état confirmé (true = relâché)
-    bool     raw;         // dernière lecture brute
-    uint32_t edge_t;      // instant de la dernière transition brute
-    bool     pressed;     // appui en cours (confirmé)
-    uint32_t press_t;     // instant de l'appui confirmé
-    bool     long_done;   // appui long déjà déclenché
+    bool     stable;
+    bool     raw;
+    uint32_t edge_t;
+    bool     pressed;
+    uint32_t press_t;
+    bool     long_done;
 };
-static BtnState btnLeft  = {BTN_LEFT,  true, true, 0, false, 0, false};
+
+// pin 0  (BTN_RIGHT) = physiquement à gauche → Préc
+// pin 18 (BTN_LEFT)  = physiquement à droite → Suiv
 static BtnState btnRight = {BTN_RIGHT, true, true, 0, false, 0, false};
+static BtnState btnLeft  = {BTN_LEFT,  true, true, 0, false, 0, false};
 
 static void go_to(int8_t idx) {
     cur_idx = (idx + APP_COUNT) % APP_COUNT;
@@ -72,6 +75,16 @@ static void stop_active_app() {
     }
 }
 
+// Appelle le stop de l'app active, puis revient au launcher
+static void stop_current_and_return() {
+    ActiveApp app = orchestrator_get_app();
+    if (app == APP_LAUNCHER) return;
+    // APP_NESTOR=1..APP_METEO=4 → APPS[0..3]
+    int idx = (int)app - 1;
+    if (idx >= 0 && idx < APP_COUNT && APPS[idx].stop) APPS[idx].stop();
+    ui_launcher_return();
+}
+
 static void on_tile_changed(lv_event_t *e) {
     lv_obj_t *tv     = (lv_obj_t *)lv_event_get_target(e);
     lv_obj_t *active = (lv_obj_t *)lv_tileview_get_tile_active(tv);
@@ -86,13 +99,10 @@ static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
         b.raw    = cur;
         b.edge_t = millis();
     }
-
-    // Ignorer pendant la fenêtre anti-rebond
     if (millis() - b.edge_t < BTN_DEBOUNCE_MS) return;
 
     // État stabilisé — traiter uniquement si différent du dernier état confirmé
     if (cur == b.stable) {
-        // Détection appui long (le stable est déjà confirmé "pressé")
         if (b.pressed && !b.long_done && millis() - b.press_t >= LONG_MS) {
             b.long_done = true;
             if (on_l) on_l();
@@ -105,31 +115,60 @@ static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
         b.pressed   = true;
         b.press_t   = millis();
         b.long_done = false;
-    } else {                                  // front montant : relâchement confirmé
+    } else {                                  // front montant : relâchement
         if (b.pressed && !b.long_done && on_s) on_s();
         b.pressed = false;
     }
 }
 
-// Après rotation 90°CCW : BTN_LEFT = next, BTN_RIGHT = prev
-static void bl_s() { go_to(cur_idx + 1); }   // BTN_LEFT court → suivant
-static void br_s() { go_to(cur_idx - 1); }   // BTN_RIGHT court → précédent
-static void br_l() { open_current(); }        // BTN_RIGHT long  → ouvrir (launcher)
-static void bl_l_app() {                      // BTN_LEFT long   → retour launcher (dans une app)
-    stop_active_app();
-    ui_launcher_return();
+// ── Callbacks bouton Préc (gauche, pin 0) ─────────────────────────────
+static void btn_prev_s() {
+    if (orchestrator_get_app() == APP_LAUNCHER) go_to(cur_idx - 1);
+}
+static void btn_prev_l() {
+    // Appui long = Retour : arrête proprement l'app et revient au launcher
+    stop_current_and_return();
 }
 
-// Appelée directement depuis loop() — hors timer LVGL pour éviter toute latence
-// liée au temps de rendu (lv_timer_handler() peut bloquer 30–100 ms).
-void ui_launcher_btn_tick() {
+// ── Callbacks bouton Suiv (droite, pin 18) ────────────────────────────
+static void btn_next_s() {
+    if (orchestrator_get_app() == APP_LAUNCHER) go_to(cur_idx + 1);
+}
+static void btn_next_l() {
     if (orchestrator_get_app() == APP_LAUNCHER) {
-        poll_btn(btnLeft,  bl_s,    nullptr);
-        poll_btn(btnRight, br_s,    br_l);
+        open_current();  // depuis launcher = ouvrir l'app sélectionnée
     } else {
-        // Dans une app : BTN_LEFT long = retour launcher
-        poll_btn(btnLeft,  nullptr, bl_l_app);
-        poll_btn(btnRight, nullptr, nullptr);
+        // Depuis une app : envoyer CLICKED à l'objet focusé (valider/confirmer)
+        lv_group_t *g = lv_group_get_default();
+        lv_obj_t   *f = g ? lv_group_get_focused(g) : nullptr;
+        if (f) lv_event_send(f, LV_EVENT_CLICKED, nullptr);
+    }
+}
+
+// Appelée en PREMIER dans loop() — hors timer LVGL pour latence minimale
+void ui_launcher_btn_tick() {
+    poll_btn(btnRight, btn_prev_s, btn_prev_l);  // pin 0  = gauche = Préc
+    poll_btn(btnLeft,  btn_next_s, btn_next_l);  // pin 18 = droite = Suiv
+}
+
+// ── Bordure noire 5 px sur les 4 bords ───────────────────────────────
+void ui_screen_border_init() {
+    static const struct { int16_t x; int16_t y; int16_t w; int16_t h; } BANDS[4] = {
+        { 0,              0,               LCD_WIDTH,  5          },
+        { 0,              LCD_HEIGHT - 5,  LCD_WIDTH,  5          },
+        { 0,              0,               5,          LCD_HEIGHT },
+        { LCD_WIDTH - 5,  0,               5,          LCD_HEIGHT },
+    };
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *b = lv_obj_create(lv_layer_top());
+        lv_obj_set_pos(b, BANDS[i].x, BANDS[i].y);
+        lv_obj_set_size(b, BANDS[i].w, BANDS[i].h);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_radius(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     }
 }
 
@@ -159,14 +198,16 @@ static void add_screen_border() {
 static void make_tile(int i) {
     const AppEntry &a = APPS[i];
     tiles[i] = lv_tileview_add_tile(tileview, i, 0, LV_DIR_HOR);
-    lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
+    // Fond de tuile noir pour que les cartes colorées ressortent
+    lv_obj_set_style_bg_color(tiles[i], lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(tiles[i], LV_OPA_COVER, 0);
 
     // Carte centrale
     lv_obj_t *card = lv_obj_create(tiles[i]);
     lv_obj_set_size(card, 220, 180);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0A), 0);
+    // Opacité pleine pour que la couleur de l'app soit bien visible
+    lv_obj_set_style_bg_color(card, lv_color_hex(a.color_bg), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(card, lv_color_hex(a.color_txt), 0);
     lv_obj_set_style_border_width(card, 1, 0);
@@ -174,7 +215,7 @@ static void make_tile(int i) {
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_shadow_width(card, 30, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(a.color_txt), 0);
-    lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_50, 0);
 
     lv_obj_t *ico = lv_label_create(card);
     lv_label_set_text(ico, a.icon);
@@ -206,7 +247,8 @@ static void make_tile(int i) {
 
 void ui_launcher_init() {
     scr_launcher = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(scr_launcher, lv_color_black(), 0);
+    // Fond noir pour que les cartes colorées ressortent
+    lv_obj_set_style_bg_color(scr_launcher, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 

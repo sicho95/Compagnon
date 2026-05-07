@@ -49,8 +49,8 @@ void hal_display_init() {
     LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3
   );
 
-  // Rotation 2 = 180° (90°CCW depuis rotation=3 précédente)
-  gfx = new Arduino_CO5300(gfx_bus, LCD_RESET, 2,
+  // Rotation 0 : pas de rotation hardware — LVGL gère la rotation logicielle (270°)
+  gfx = new Arduino_CO5300(gfx_bus, LCD_RESET, 0,
                             LCD_WIDTH, LCD_HEIGHT, 0, 0, 0, 0);
 
   if (!gfx->begin()) {
@@ -75,6 +75,8 @@ void hal_display_init() {
   lv_display_set_buffers(s_disp, buf1, buf2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_flush_cb(s_disp, flush_cb);
   lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+  // Rotation LVGL 270° (= 90° anti-horaire) — le CO5300 est en rotation 0 hardware
+  lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_270);
   Serial.println("[HAL/DISP] LVGL OK");
 }
 
