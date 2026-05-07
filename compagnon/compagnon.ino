@@ -57,9 +57,20 @@ void loop() {
     ble_mgr_tick();        // BLE events (GPS depuis téléphone)
 
     ui_status_bar_tick();  // Mise à jour heure + batterie (toutes les 10 s)
-    hal_imu_tick();        // Lecture orientation (future rotation auto)
+    hal_imu_tick();        // Lecture orientation + détection changement
+    if (hal_imu_changed()) {
+        // Correspondance orientation physique → rotation logique LVGL
+        static const lv_display_rotation_t rot_map[] = {
+            LV_DISPLAY_ROTATION_0,    // ORIENT_PORTRAIT
+            LV_DISPLAY_ROTATION_270,  // ORIENT_LANDSCAPE_L
+            LV_DISPLAY_ROTATION_180,  // ORIENT_PORTRAIT_INV
+            LV_DISPLAY_ROTATION_90,   // ORIENT_LANDSCAPE_R
+        };
+        lv_display_set_rotation(hal_display_get(), rot_map[hal_imu_orientation()]);
+    }
 
-    orchestrator_tick();   // Boucle cerveau / sync agents
+    orchestrator_tick();      // Boucle cerveau / sync agents
+    ui_launcher_btn_tick();   // Polling boutons hors timer LVGL (latence ~5 ms max)
 
     delay(5);
 }
