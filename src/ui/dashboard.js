@@ -4,7 +4,8 @@ import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJso
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
 import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
-         listBrowserVoices, getTTSStatus } from '../api/tts.js';
+         listBrowserVoices, getTTSStatus,
+         TTS_PROVIDERS, GEMINI_VOICES, GROQ_VOICES } from '../api/tts.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
 import { renderBourseView, cleanupBourseView } from './bourse-view.js';
@@ -768,52 +769,88 @@ function renderSettings(container, state, rerender) {
 
   // ── Section TTS ────────────────────────────────────────────────────────────
   const ttsCard = el('div', { background:'#0a0a1a', border:'1px solid #1a1a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const tTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  const tTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
   tTitle.textContent = '🔊 Text-to-Speech (TTS)';
 
   const ttsStatus = getTTSStatus();
+  const ttsBadgeColors = { gemini:'#1a2a3a', groq:'#1a1a2a', browser:'#101018', silent:'#2a1a1a', none:'#1a1a1a' };
+  const ttsBadgeText   = { gemini:'#88f',    groq:'#7af',    browser:'#aaf',    silent:'#f88',    none:'#666' };
+  const ttsIconMap     = { gemini:'🌐', groq:'🎙', browser:'🗣', silent:'🔇', none:'❌' };
   const ttsBadge = el('div', { fontSize:'11px', marginBottom:'10px', padding:'4px 8px', borderRadius:'6px',
-    background: ttsStatus.engine === 'gemini' ? '#1a2a3a' : ttsStatus.engine === 'silent' ? '#2a1a1a' : '#1a1a2a',
-    color: ttsStatus.engine === 'gemini' ? '#88f' : ttsStatus.engine === 'silent' ? '#f88' : '#aaf',
+    background: ttsBadgeColors[ttsStatus.engine] || '#1a1a2a',
+    color:      ttsBadgeText[ttsStatus.engine]   || '#aaf',
     display: 'inline-block' });
-  const ttsEngineIcons = { gemini:'🌐', browser:'🗣', silent:'🔇', none:'❌' };
-  ttsBadge.textContent = (ttsEngineIcons[ttsStatus.engine] || '') + ' ' + ttsStatus.reason;
-
+  ttsBadge.textContent = (ttsIconMap[ttsStatus.engine] || '') + ' ' + ttsStatus.reason;
   ttsCard.append(tTitle, ttsBadge);
 
-  // Moteur
-  const engLabel = labelEl('Moteur TTS');
-  const engSel = document.createElement('select');
-  Object.assign(engSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  [['browser', '🗣 Navigateur (offline, gratuit)'], ['gemini', '🌐 Gemini Cloud (voix naturelle)']].forEach(([val, lbl]) => {
-    const opt = document.createElement('option'); opt.value = val; opt.textContent = lbl;
-    if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === val) opt.selected = true;
-    engSel.appendChild(opt);
+  // Cascade providers — affichage informatif
+  const cascadeLabel = labelEl('Cascade active (par ordre de priorité)');
+  const cascadeList = el('div', { display:'flex', flexDirection:'column', gap:'4px', marginBottom:'6px' });
+  const gemKeyOk  = !!(lsGet('GEMINI_API_KEY') || '').trim();
+  const groqKeyOk = !!(lsGet('GROQ_API_KEY')   || '').trim();
+  TTS_PROVIDERS.forEach((p, i) => {
+    const available = p.keyName === 'GEMINI_API_KEY' ? gemKeyOk
+                    : p.keyName === 'GROQ_API_KEY'   ? groqKeyOk
+                    : true;
+    const row = el('div', { display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', padding:'3px 6px', borderRadius:'5px',
+      background: available ? '#0d1a0d' : '#141414',
+      color:      available ? '#7ef'    : '#555' });
+    row.innerHTML = `<span style="color:#555;min-width:14px">${i + 1}.</span>`
+      + `<span style="flex:1">${p.label}</span>`
+      + `<span style="font-size:10px;color:#555">${p.quota}</span>`
+      + `<span style="font-size:10px;${available ? 'color:#5a9' : 'color:#a55'}">${available ? '✅' : '🔴 clé manquante'}</span>`;
+    cascadeList.appendChild(row);
   });
-  engSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engSel.value); showToast('Moteur TTS : ' + engSel.value); rerender(); };
-  ttsCard.append(engLabel, engSel);
+  ttsCard.append(cascadeLabel, cascadeList);
 
-  // Voix (browser seulement)
-  const voiceWrap = el('div', {});
-  const voiceLabel = labelEl('Voix navigateur');
+  // Voix Gemini
+  const gemVoiceLabel = labelEl('Voix Gemini TTS');
+  const gemVoiceSel = document.createElement('select');
+  Object.assign(gemVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedGemVoice = lsGet('NESTOR_TTS_VOICE_GEMINI') || 'Charon';
+  GEMINI_VOICES.forEach(v => {
+    const opt = document.createElement('option'); opt.value = v.name;
+    opt.textContent = v.name + ' — ' + v.hint;
+    if (v.name === savedGemVoice) opt.selected = true;
+    gemVoiceSel.appendChild(opt);
+  });
+  gemVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GEMINI', gemVoiceSel.value); showToast('Voix Gemini : ' + gemVoiceSel.value); };
+  ttsCard.append(gemVoiceLabel, gemVoiceSel);
+
+  // Voix Groq PlayAI
+  const groqVoiceLabel = labelEl('Voix Groq PlayAI');
+  const groqVoiceSel = document.createElement('select');
+  Object.assign(groqVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedGroqVoice = lsGet('NESTOR_TTS_VOICE_GROQ') || 'Fritz-PlayAI';
+  GROQ_VOICES.forEach(v => {
+    const opt = document.createElement('option'); opt.value = v.name;
+    opt.textContent = v.name + ' — ' + v.hint;
+    if (v.name === savedGroqVoice) opt.selected = true;
+    groqVoiceSel.appendChild(opt);
+  });
+  groqVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GROQ', groqVoiceSel.value); showToast('Voix Groq : ' + groqVoiceSel.value); };
+  ttsCard.append(groqVoiceLabel, groqVoiceSel);
+
+  // Voix navigateur
+  const voiceLabel = labelEl('Voix navigateur (fallback offline)');
   const voiceSel = document.createElement('select');
   Object.assign(voiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  const savedVoice = lsGet('NESTOR_TTS_VOICE') || '';
+  const savedBrVoice = lsGet('NESTOR_TTS_VOICE') || '';
   listBrowserVoices().then(voices => {
-    const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '— Auto (voix française)'; voiceSel.appendChild(defOpt);
+    const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '— Auto (voix française)';
+    voiceSel.appendChild(defOpt);
     voices.forEach(v => {
       const opt = document.createElement('option'); opt.value = v.name;
       opt.textContent = v.name + ' (' + v.lang + ')';
-      if (v.name === savedVoice) opt.selected = true;
+      if (v.name === savedBrVoice) opt.selected = true;
       voiceSel.appendChild(opt);
     });
   });
-  voiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE', voiceSel.value); showToast('Voix TTS sauvegardée.'); };
-  voiceWrap.append(voiceLabel, voiceSel);
-  ttsCard.appendChild(voiceWrap);
+  voiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE', voiceSel.value); showToast('Voix navigateur sauvegardée.'); };
+  ttsCard.append(voiceLabel, voiceSel);
 
-  // Vitesse
-  const rateLabel = labelEl('Vitesse de lecture');
+  // Vitesse de lecture (browser)
+  const rateLabel = labelEl('Vitesse de lecture (navigateur)');
   const rateRow = el('div', { display:'flex', alignItems:'center', gap:'10px' });
   const rateSlider = document.createElement('input');
   rateSlider.type = 'range'; rateSlider.min = '0.5'; rateSlider.max = '2.0'; rateSlider.step = '0.1';
@@ -829,9 +866,8 @@ function renderSettings(container, state, rerender) {
   const testBtn = btn('▶ Tester la voix', '', async () => {
     testBtn.disabled = true; testBtn.textContent = '⏳ Lecture…';
     try {
-      const { speak: spk } = await import('../api/tts.js');
-      await spk('Bonjour, je suis Nestor, votre assistant personnel.');
-    } catch(e) { showToast('Erreur TTS : ' + e.message, true); }
+      await speak('Bonjour, je suis Nestor, votre assistant personnel.');
+    } catch (e) { showToast('Erreur TTS : ' + e.message, true); }
     testBtn.disabled = false; testBtn.textContent = '▶ Tester la voix';
   });
   testBtn.style.marginTop = '8px';
