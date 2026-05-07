@@ -10,9 +10,9 @@ import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
 import { getSTTStatus } from '../api/stt.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
-import { renderBourseView, cleanupBourseView } from './bourse-view.js';
-import { ALEXA_TOOLS, alexa_control, alexa_auth_url } from '../api/alexa.js';
-import { ECOVACS_TOOLS, ecovacs_control, ecovacs_login } from '../api/ecovacs.js';
+import { renderBourseView, cleanupBourseView, DEFAULT_SYMBOLS } from './bourse-view.js';
+import { bleAvailable, bleConnect, bleDisconnect, bleConnected, bleDeviceName } from '../bt/ble.js';
+import { setBleConnected, setBleDisconnected } from '../bt/ble_status.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
@@ -92,8 +92,29 @@ export function renderDashboard(container, state, rerender) {
   header.append(title, actions);
   container.appendChild(header);
 
-  if (state.view === 'agents') renderAgentsList(container, state, rerender);
-  else renderSettings(container, state, rerender);
+  if (isEnabled('bourse')) {
+    grid.appendChild(mkCard('📈', 'Bourse', 'Marchés financiers', () => {
+      state._bourseShowConfig = false;
+      state.view = 'bourse'; rerender();
+    }, '#0d150d'));
+  }
+
+  if (isEnabled('meteo')) {
+    grid.appendChild(mkCard('🌤', 'Météo', 'Bientôt disponible', () => {
+      showToast('Module Météo bientôt disponible.');
+    }, '#0d0d18'));
+  }
+
+  wrap.appendChild(grid);
+
+  // Actions secondaires
+  const quickRow = el('div', { display:'flex', gap:'8px', justifyContent:'center', flexWrap:'wrap' });
+  const agentsBtn = btn('🤖 Agents', '', () => { state.view = 'agents'; rerender(); });
+  const settBtn   = btn('⚙️ Réglages', '', () => { state.view = 'settings'; rerender(); });
+  quickRow.append(agentsBtn, settBtn);
+  wrap.appendChild(quickRow);
+
+  container.appendChild(wrap);
 }
 
 // ─── Radar section ────────────────────────────────────────────────────────────
@@ -1206,11 +1227,11 @@ function renderSettings(container, state, rerender) {
   ttsCard.appendChild(silentRow);
   list.appendChild(ttsCard);
 
-  // ── Section Maison / Domotique ─────────────────────────────────────────────
-  const maisonCard = el('div', { background:'#0a1a0a', border:'1px solid #1a3a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
-  mTitle.textContent = '🏠 Maison / Domotique';
-  maisonCard.appendChild(mTitle);
+  // ── Section Bluetooth / ESP32 ───────────────────────────────────────────────
+  list.appendChild(buildBleSection(rerender));
+
+  // ── Section WiFi ────────────────────────────────────────────────────────────
+  list.appendChild(buildWifiConfigSection());
 
   // ── Alexa Smart Home ──────────────────────────────────────────────────────
   const alexaSection = el('div', { marginBottom:'12px' });
@@ -1317,6 +1338,300 @@ function renderSettings(container, state, rerender) {
   list.appendChild(maisonCard);
 
   container.appendChild(list);
+}
+
+// ─── Bluetooth / Compagnon ESP32 ─────────────────────────────────────────────
+function buildBleSection(rerender) {
+  const card = el('div', { background:'#050b14', border:'1px solid #0d1f30', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
+  title.textContent = '🔵 Bluetooth / Compagnon ESP32';
+  card.appendChild(title);
+
+  if (!bleAvailable()) {
+    const msg = el('div', { fontSize:'12px', color:'#888', lineHeight:'1.6', padding:'6px 0' });
+    msg.innerHTML = '⚠️ Web Bluetooth non disponible sur ce navigateur.<br>'
+      + 'Utilise <b>Chrome</b> ou <b>Edge</b> sur Android / desktop (pas Safari).';
+    card.appendChild(msg);
+    return card;
+  }
+
+  const statusEl = el('div', { fontSize:'13px', padding:'6px 0', marginBottom:'8px' });
+  const connectBtn = document.createElement('button');
+  Object.assign(connectBtn.style, {
+    width:'100%', borderRadius:'8px', padding:'9px 14px',
+    fontSize:'12px', fontWeight:'600', cursor:'pointer',
+  });
+
+  function refreshStatus() {
+    const ok = bleConnected();
+    const name = bleDeviceName() || 'Nestor';
+    statusEl.textContent = ok ? '🟢 Connecté — ' + name : '⚫ Non connecté';
+    statusEl.style.color = ok ? '#7ef' : '#666';
+    connectBtn.textContent = ok ? 'Déconnecter' : '🔵 Appairer le Compagnon ESP32';
+    Object.assign(connectBtn.style, {
+      background: ok ? '#2a1a1a' : '#071828',
+      color:      ok ? '#e87'    : '#7af',
+      border: '1px solid ' + (ok ? '#4a2a2a' : '#0d3a5a'),
+    });
+  }
+
+  connectBtn.onclick = async () => {
+    if (bleConnected()) {
+      await bleDisconnect();
+      setBleDisconnected();
+      refreshStatus();
+      rerender();
+    } else {
+      connectBtn.textContent = '⏳ Connexion en cours…';
+      connectBtn.disabled = true;
+      try {
+        const name = await bleConnect();
+        setBleConnected(name);
+        showToast('✅ Compagnon connecté : ' + name);
+      } catch (e) {
+        showToast('Connexion échouée : ' + e.message, true);
+      } finally {
+        connectBtn.disabled = false;
+      }
+      refreshStatus();
+      rerender();
+    }
+  };
+
+  refreshStatus();
+  card.append(statusEl, connectBtn);
+
+  // Bouton "Oublier l'appareil" si l'API est disponible
+  if (navigator.bluetooth?.getDevices) {
+    const forgetBtn = el('button', '');
+    forgetBtn.textContent = '🗑 Oublier l\'appareil';
+    forgetBtn.style.cssText = 'background:none;border:none;color:#444;font-size:11px;cursor:pointer;padding:6px 0 0;display:block;';
+    forgetBtn.onclick = async () => {
+      try {
+        const devices = await navigator.bluetooth.getDevices();
+        for (const d of devices) { if (d.forget) await d.forget(); }
+        showToast('Appareils BLE oubliés.');
+      } catch (e) { showToast('Erreur : ' + e.message, true); }
+    };
+    card.appendChild(forgetBtn);
+  }
+
+  const note = el('div', { fontSize:'10px', color:'#2a3a4a', marginTop:'8px', lineHeight:'1.5' });
+  note.textContent = 'L\'ESP32 Compagnon doit s\'appeler "Nestor" et exposer le service BLE Nestor.';
+  card.appendChild(note);
+
+  return card;
+}
+
+// ─── WiFi config (stockage local, stub BLE) ───────────────────────────────────
+const LS_WIFI_NETWORKS = 'NESTOR_WIFI_NETWORKS';
+
+function loadWifiNetworks() {
+  return JSON.parse(lsGet(LS_WIFI_NETWORKS) || '[]');
+}
+
+function saveWifiNetworks(list) {
+  lsSet(LS_WIFI_NETWORKS, JSON.stringify(list));
+}
+
+function buildWifiConfigSection() {
+  const card = el('div', { background:'#0a0a14', border:'1px solid #1a1a2a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  title.textContent = '📶 WiFi — Réseaux enregistrés';
+  const desc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  desc.textContent = 'Ces réseaux seront envoyés au Compagnon ESP32 via BLE lors de la connexion. Mot de passe masqué par défaut.';
+  card.append(title, desc);
+
+  let networks = loadWifiNetworks();
+
+  // ── Liste des réseaux enregistrés ──────────────────────────────────────────
+  const networkList = el('div', { display:'flex', flexDirection:'column', gap:'6px' });
+  card.appendChild(networkList);
+
+  function refreshNetworkList() {
+    networkList.innerHTML = '';
+    networks = loadWifiNetworks();
+    if (networks.length === 0) {
+      const empty = el('div', { fontSize:'12px', color:'#444', padding:'4px 0' });
+      empty.textContent = 'Aucun réseau enregistré.';
+      networkList.appendChild(empty);
+    }
+    networks.forEach((net, i) => {
+      const row = el('div', { display:'flex', alignItems:'center', gap:'8px', background:'#111', border:'1px solid #1e1e1e', borderRadius:'8px', padding:'8px 10px' });
+      const ssidEl = el('div', { flex:'1', fontSize:'13px', color:'#ccc', fontWeight:'500' });
+      ssidEl.textContent = '📶 ' + net.ssid;
+      const pwdEl = el('div', { fontSize:'11px', color:'#555', fontFamily:'monospace' });
+      let shown = false;
+      pwdEl.textContent = net.password ? '••••••••' : '(aucun)';
+      const eyeBtn = el('button', '');
+      eyeBtn.textContent = '👁';
+      eyeBtn.style.cssText = 'background:none;border:none;color:#555;cursor:pointer;padding:2px 4px;font-size:14px;';
+      eyeBtn.onclick = () => {
+        shown = !shown;
+        pwdEl.textContent = shown ? (net.password || '') : '••••••••';
+        eyeBtn.textContent = shown ? '🙈' : '👁';
+      };
+      const delBtn = el('button', '');
+      delBtn.textContent = '✕';
+      delBtn.style.cssText = 'background:none;border:none;color:#f66;font-size:14px;cursor:pointer;padding:2px 6px;';
+      delBtn.onclick = () => {
+        networks.splice(i, 1);
+        saveWifiNetworks(networks);
+        showToast('Réseau supprimé.');
+        refreshNetworkList();
+        refreshChips();
+      };
+      row.append(ssidEl, pwdEl, eyeBtn, delBtn);
+      networkList.appendChild(row);
+    });
+  }
+
+  // ── Formulaire ajout / mise à jour ─────────────────────────────────────────
+  const formLabel = labelEl('Ajouter ou mettre à jour un réseau');
+  card.appendChild(formLabel);
+
+  // Chips de réseaux déjà enregistrés (pré-remplissage SSID)
+  const chipsWrap = el('div', { display:'flex', flexWrap:'wrap', gap:'5px', marginBottom:'6px' });
+  card.appendChild(chipsWrap);
+
+  const ssidInput = document.createElement('input');
+  ssidInput.type = 'text'; ssidInput.placeholder = 'Nom du réseau (SSID)';
+  Object.assign(ssidInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'7px 10px', fontSize:'13px', boxSizing:'border-box',
+  });
+  card.appendChild(ssidInput);
+
+  function refreshChips() {
+    chipsWrap.innerHTML = '';
+    networks = loadWifiNetworks();
+    for (const net of networks) {
+      const chip = el('button', '');
+      chip.textContent = '📶 ' + net.ssid;
+      chip.style.cssText = 'background:#111;border:1px solid #2a2a3a;color:#888;border-radius:12px;padding:3px 10px;font-size:11px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+      chip.onclick = () => { ssidInput.value = net.ssid; ssidInput.focus(); };
+      chip.title = 'Cliquer pour pré-remplir le SSID';
+      chipsWrap.appendChild(chip);
+    }
+  }
+
+  const pwdRow = el('div', { display:'flex', gap:'6px', alignItems:'center', marginTop:'6px' });
+  const pwdInput = document.createElement('input');
+  pwdInput.type = 'password'; pwdInput.placeholder = 'Mot de passe';
+  Object.assign(pwdInput.style, {
+    flex:'1', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'7px 10px', fontSize:'13px',
+  });
+  let pwdVisible = false;
+  const pwdEye = el('button', '');
+  pwdEye.textContent = '👁';
+  pwdEye.style.cssText = 'background:none;border:none;color:#555;cursor:pointer;font-size:16px;padding:4px;flex-shrink:0;';
+  pwdEye.onclick = () => {
+    pwdVisible = !pwdVisible;
+    pwdInput.type = pwdVisible ? 'text' : 'password';
+    pwdEye.textContent = pwdVisible ? '🙈' : '👁';
+  };
+  pwdRow.append(pwdInput, pwdEye);
+  card.appendChild(pwdRow);
+
+  const addBtn = btn('+ Enregistrer', 'primary', () => {
+    const ssid = ssidInput.value.trim();
+    const pwd  = pwdInput.value;
+    if (!ssid) { showToast('Le SSID est requis.', true); return; }
+    networks = loadWifiNetworks();
+    const existingIdx = networks.findIndex(n => n.ssid === ssid);
+    if (existingIdx >= 0) {
+      networks[existingIdx].password = pwd;
+      showToast('Réseau "' + ssid + '" mis à jour.');
+    } else {
+      networks.push({ ssid, password: pwd });
+      showToast('Réseau "' + ssid + '" enregistré.');
+    }
+    saveWifiNetworks(networks);
+    ssidInput.value = '';
+    pwdInput.value = '';
+    refreshNetworkList();
+    refreshChips();
+  });
+  addBtn.style.marginTop = '6px';
+  card.appendChild(addBtn);
+
+  const bleNote = el('div', { fontSize:'10px', color:'#333', marginTop:'6px', lineHeight:'1.4' });
+  bleNote.textContent = '⚡ Envoi au Compagnon ESP32 via BLE lors de l\'appairage.';
+  card.appendChild(bleNote);
+
+  refreshNetworkList();
+  refreshChips();
+  return card;
+}
+
+// ─── Toggles Applications ─────────────────────────────────────────────────────
+const LS_APP_TOGGLES = 'NESTOR_APP_TOGGLES';
+
+const APP_LIST = [
+  { key:'nestor', label:'Nestor', icon:'🧠', desc:'Chat avec l\'assistant IA' },
+  { key:'radar',  label:'Radars', icon:'🚨', desc:'Surveillance trafic' },
+  { key:'bourse', label:'Bourse', icon:'📈', desc:'Marchés financiers' },
+  { key:'meteo',  label:'Météo',  icon:'🌤', desc:'Prévisions météo' },
+];
+
+function buildAppTogglesSection(state, rerender) {
+  const card = el('div', { background:'#0e100e', border:'1px solid #1a2a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  title.textContent = '📱 Applications';
+  const desc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  desc.textContent = 'Activer ou désactiver chaque app dans la PWA (écran d\'accueil) et sur l\'ESP32.';
+  card.append(title, desc);
+
+  const toggles = JSON.parse(lsGet(LS_APP_TOGGLES) || '{}');
+  const save = () => lsSet(LS_APP_TOGGLES, JSON.stringify(toggles));
+
+  const header = el('div', { display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:'#444', marginBottom:'6px', paddingLeft:'4px' });
+  header.innerHTML = '<span style="flex:1"></span><span style="width:48px;text-align:center">PWA</span><span style="width:48px;text-align:center">ESP32</span>';
+  card.appendChild(header);
+
+  for (const app of APP_LIST) {
+    const row = el('div', { display:'flex', alignItems:'center', gap:'8px', padding:'6px 4px', borderBottom:'1px solid #111' });
+    const iconEl = el('span', { fontSize:'18px', flexShrink:'0' }); iconEl.textContent = app.icon;
+    const labelCol = el('div', { flex:'1', minWidth:'0' });
+    const lblEl = el('div', { fontSize:'13px', color:'#ccc' }); lblEl.textContent = app.label;
+    const subEl = el('div', { fontSize:'10px', color:'#444' }); subEl.textContent = app.desc;
+    labelCol.append(lblEl, subEl);
+
+    const mkToggle = (stateKey) => {
+      const isOn = () => toggles[stateKey] !== false;
+      const togBtn = el('button', '');
+      const refresh = () => {
+        togBtn.textContent = isOn() ? 'ON' : 'OFF';
+        Object.assign(togBtn.style, {
+          width:'44px', padding:'4px 0', border:'none', borderRadius:'10px', fontSize:'11px',
+          fontWeight:'600', cursor:'pointer',
+          background: isOn() ? '#1a3a1a' : '#1a1a1a',
+          color:      isOn() ? '#7ef'    : '#555',
+        });
+      };
+      togBtn.onclick = () => {
+        toggles[stateKey] = !isOn();
+        save();
+        refresh();
+        rerender();
+      };
+      refresh();
+      return togBtn;
+    };
+
+    const pwaToggle  = mkToggle(app.key + '_pwa');
+    const espToggle  = mkToggle(app.key + '_esp32');
+    const pwaWrap  = el('div', { width:'48px', display:'flex', justifyContent:'center' });
+    const espWrap  = el('div', { width:'48px', display:'flex', justifyContent:'center' });
+    pwaWrap.appendChild(pwaToggle);
+    espWrap.appendChild(espToggle);
+
+    row.append(iconEl, labelCol, pwaWrap, espWrap);
+    card.appendChild(row);
+  }
+
+  return card;
 }
 
 // ─── Utilitaires DOM ──────────────────────────────────────────────────────────

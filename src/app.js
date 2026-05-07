@@ -45,9 +45,7 @@ async function main() {
       ? [{ role: 'system', content: orchestrator.system_prompt || '' }]
       : [],
     menuOpen: false,
-    _radarPrevView:   'chat',
-    _boursePrevView:  'chat',
-    _musiquePrevView: 'chat',
+    _bourseShowConfig: false,
   };
 
   renderFrame(root, state);
@@ -57,9 +55,13 @@ export function renderFrame(root, state) {
   const safeViews = ['agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'musique'];
   if (!safeViews.includes(state.view)) state.view = 'chat';
 
-  // Nettoyage vues spéciales à la sortie
-  if (state._prevView === 'radar'   && state.view !== 'radar')   cleanupRadarView();
-  if (state._prevView === 'musique' && state.view !== 'musique') cleanupMusiqueView();
+  // Fermer le drawer si on quitte le chat
+  if (state.view !== 'chat') state.menuOpen = false;
+
+  // Nettoyage radar si on quitte la vue
+  if (state._prevView === 'radar' && state.view !== 'radar') {
+    cleanupRadarView();
+  }
   state._prevView = state.view;
 
   root.innerHTML = '';
@@ -71,7 +73,7 @@ export function renderFrame(root, state) {
   statusBar.className = 'lvgl-status-bar';
 
   const titleEl = document.createElement('span');
-  titleEl.style.cssText = 'font-weight:600;font-size:13px;';
+  titleEl.style.cssText = 'font-weight:600;font-size:13px;flex:1;';
   const titles = {
     chat: state.activeAgent ? '🧠 ' + state.activeAgent.name : '🧠 Nestor',
     settings: '⚙️ Réglages',
@@ -83,28 +85,43 @@ export function renderFrame(root, state) {
     agents: '🤖 Agents',
     musique: '🎵 Musique',
   };
-  titleEl.textContent = titles[state.view] || '🤖 Agents';
-
-  const hamburger = document.createElement('button');
-  hamburger.innerHTML = state.menuOpen
-    ? '✕'
-    : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
-  hamburger.style.cssText = 'background:none;border:none;color:#aaa;padding:4px 8px;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
-  hamburger.onclick = () => {
-    state.menuOpen = !state.menuOpen;
-    renderFrame(root, state);
-  };
-
-  statusBar.append(titleEl, hamburger);
+  titleEl.textContent = titles[state.view] || '🏠 Nestor';
+  statusBar.appendChild(titleEl);
 
   const rerender = () => renderFrame(root, state);
 
+  const mkStatusBtn = (label, onClick) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'background:none;border:none;color:#888;padding:4px 10px;font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent;white-space:nowrap;';
+    b.onclick = onClick;
+    return b;
+  };
+
+  // Bouton droit de la barre de statut — contexte selon la vue
+  if (state.view === 'chat') {
+    // Hamburger pour basculer entre agents (uniquement dans Nestor/chat)
+    const hamburger = document.createElement('button');
+    hamburger.innerHTML = state.menuOpen
+      ? '✕'
+      : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+    hamburger.style.cssText = 'background:none;border:none;color:#aaa;padding:4px 8px;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+    hamburger.onclick = () => { state.menuOpen = !state.menuOpen; rerender(); };
+    statusBar.appendChild(hamburger);
+  } else if (state.view === 'settings' || state.view === 'agents') {
+    statusBar.appendChild(mkStatusBtn('← Hub', () => { state.view = 'hub'; rerender(); }));
+  } else if (state.view === 'fabrique' || state.view === 'edit') {
+    statusBar.appendChild(mkStatusBtn('← Agents', () => { state.view = 'agents'; rerender(); }));
+  }
+  // hub, radar, bourse : pas de bouton (back dans le contenu pour radar/bourse)
+
+  // Drawer agents — visible seulement en vue chat quand le menu est ouvert
   let drawer = null;
   let drawerOverlay = null;
-  if (state.menuOpen) {
+  if (state.menuOpen && state.view === 'chat') {
     drawerOverlay = document.createElement('div');
     drawerOverlay.style.cssText = 'position:absolute;inset:0;background:rgba(0,0,0,0.55);z-index:10;';
-    drawerOverlay.onclick = () => { state.menuOpen = false; renderFrame(root, state); };
+    drawerOverlay.onclick = () => { state.menuOpen = false; rerender(); };
 
     drawer = document.createElement('div');
     drawer.style.cssText = [
@@ -117,7 +134,7 @@ export function renderFrame(root, state) {
 
     const drawerTitle = document.createElement('div');
     drawerTitle.style.cssText = 'padding:8px 16px 12px;font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #1a1a1a;margin-bottom:8px;';
-    drawerTitle.textContent = 'Nestor v2';
+    drawerTitle.textContent = 'Conversations';
     drawer.appendChild(drawerTitle);
 
     const mkItem = (icon, label, action, isActive) => {
@@ -134,6 +151,15 @@ export function renderFrame(root, state) {
       b.onclick = action;
       return b;
     };
+
+    // ── Retour Hub ─────────────────────────────────────────────────────────
+    drawer.appendChild(mkItem('🏠', 'Accueil', () => {
+      state.view = 'hub'; state.menuOpen = false; rerender();
+    }, false));
+
+    const sep0 = document.createElement('div');
+    sep0.style.cssText = 'height:1px;background:#1a1a1a;margin:6px 0;';
+    drawer.appendChild(sep0);
 
     // ── Orchestrateur ──────────────────────────────────────────────────────
     const orch = state.agents.find(a => a.role === 'orchestrator');
@@ -184,46 +210,6 @@ export function renderFrame(root, state) {
         ));
       });
     }
-
-    const sep2 = document.createElement('div');
-    sep2.style.cssText = 'height:1px;background:#1a1a1a;margin:6px 0;';
-    drawer.appendChild(sep2);
-
-    // ── Apps v2 ────────────────────────────────────────────────────────────
-    const appsLabel = document.createElement('div');
-    appsLabel.style.cssText = 'padding:4px 16px 6px;font-size:10px;color:#444;text-transform:uppercase;letter-spacing:0.08em;';
-    appsLabel.textContent = 'Applications';
-    drawer.appendChild(appsLabel);
-
-    drawer.appendChild(mkItem('🚨', 'Radars', () => {
-      state._radarPrevView = state.view;
-      state.view = 'radar';
-      state.menuOpen = false;
-      rerender();
-    }, state.view === 'radar'));
-
-    drawer.appendChild(mkItem('📈', 'Bourse & Marchés', () => {
-      state._boursePrevView = state.view;
-      state.view = 'bourse';
-      state.menuOpen = false;
-      rerender();
-    }, state.view === 'bourse'));
-
-    drawer.appendChild(mkItem('🎵', 'Musique', () => {
-      state._musiquePrevView = state.view;
-      state.view = 'musique';
-      state.menuOpen = false;
-      rerender();
-    }, state.view === 'musique'));
-
-    const sep3 = document.createElement('div');
-    sep3.style.cssText = 'height:1px;background:#1a1a1a;margin:6px 0;';
-    drawer.appendChild(sep3);
-
-    // ── Navigation ─────────────────────────────────────────────────────────
-    drawer.appendChild(mkItem('🤖', 'Gérer les agents', () => { state.view = 'agents'; state.menuOpen = false; rerender(); }, state.view === 'agents'));
-    drawer.appendChild(mkItem('🏭', 'Fabrique', () => { state.view = 'fabrique'; state.menuOpen = false; rerender(); }, state.view === 'fabrique'));
-    drawer.appendChild(mkItem('⚙️', 'Réglages', () => { state.view = 'settings'; state.menuOpen = false; rerender(); }, state.view === 'settings'));
   }
 
   const mainEl = document.createElement('div');
