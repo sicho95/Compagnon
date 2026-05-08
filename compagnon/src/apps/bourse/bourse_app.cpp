@@ -211,19 +211,17 @@ static void back_cb(lv_event_t *) { bourse_app_stop(); ui_launcher_return(); }
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void bourse_app_start() {
     orchestrator_set_app(APP_BOURSE);
-    _app_active = true;
-    _last_fetch = 0;
+    _scr_bourse = lv_obj_create(NULL);
+    // fond noir AMOLED — pixel éteint économise la batterie
+    lv_obj_set_style_bg_color(_scr_bourse, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(_scr_bourse, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(_scr_bourse, LV_OBJ_FLAG_SCROLLABLE);
 
-    _scr = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(_scr, lv_color_hex(C_BG), 0);
-    lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Bouton retour
-    lv_obj_t *btn = lv_btn_create(_scr);
+    // bouton retour — fond noir transparent
+    lv_obj_t *btn = lv_btn_create(_scr_bourse);
     lv_obj_set_size(btn, 52, 36);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lb = lv_label_create(btn);
@@ -238,12 +236,23 @@ void bourse_app_start() {
     lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
 
-    // Statut (heure de mise à jour ou erreur)
-    _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, "En attente...");
-    lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 84);
+    // carte principale — or sombre semi-transparent
+    lv_obj_t *card = lv_obj_create(_scr_bourse);
+    lv_obj_set_size(card, 380, 140);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x4a3000), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *body = lv_label_create(card);
+    lv_label_set_text(body, "Marches & Portefeuille\n\n(en cours de developpement)");
+    lv_obj_set_style_text_font(body, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(body, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(body, 340);
+    lv_obj_align(body, LV_ALIGN_CENTER, 0, 0);
 
     // 4 lignes tickers (hauteur 76 px, espacées de 8 px, centrées verticalement)
     static const int ROW_H = 76;

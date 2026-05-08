@@ -26,7 +26,8 @@ void ui_status_bar_init() {
     bar = lv_obj_create(lv_layer_top());
     lv_obj_set_size(bar, LCD_WIDTH, STATUS_H);
     lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(0x0D0D0D), 0);
+    // fond pur noir AMOLED — pixel éteint
+    lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);

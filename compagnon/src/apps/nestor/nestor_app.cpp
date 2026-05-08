@@ -9,6 +9,7 @@
 #define WIFI_TIMEOUT_MS   12000
 
 static lv_obj_t *scr        = nullptr;
+static lv_obj_t *_bubble    = nullptr;  // bulle centrale bleu nuit
 static lv_obj_t *lbl_status = nullptr;
 static lv_obj_t *lbl_url    = nullptr;
 static lv_obj_t *spinner    = nullptr;
@@ -25,14 +26,16 @@ static void set_status(const char *msg, uint32_t col) {
 
 static void build_ui() {
     scr = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x06060F), 0);
+    // fond noir AMOLED — pixel éteint économise la batterie
+    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
+    // bouton retour — fond noir pour ne pas gâcher de pixels
     lv_obj_t *btn = lv_btn_create(scr);
     lv_obj_set_size(btn, 52, 36);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x141830), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_b = lv_label_create(btn);
@@ -46,24 +49,34 @@ static void build_ui() {
     lv_obj_set_style_text_color(title, lv_color_hex(0x7EB8F7), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 46);
 
-    spinner = lv_spinner_create(scr);
+    // bulle centrale — bleu nuit semi-transparent
+    _bubble = lv_obj_create(scr);
+    lv_obj_set_size(_bubble, 380, 180);
+    lv_obj_align(_bubble, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_style_bg_color(_bubble, lv_color_hex(0x1a237e), 0);
+    lv_obj_set_style_bg_opa(_bubble, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(_bubble, 0, 0);
+    lv_obj_set_style_radius(_bubble, 16, 0);
+    lv_obj_clear_flag(_bubble, LV_OBJ_FLAG_SCROLLABLE);
+
+    spinner = lv_spinner_create(_bubble);
     lv_obj_set_size(spinner, 80, 80);
-    lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -30);
+    lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -40);
     lv_obj_set_style_arc_color(spinner, lv_color_hex(0x7EB8F7), LV_PART_INDICATOR);
 
-    lbl_status = lv_label_create(scr);
+    lbl_status = lv_label_create(_bubble);
     lv_label_set_text(lbl_status, "Connexion WiFi...");
     lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xE8EAF6), 0);
-    lv_obj_align(lbl_status, LV_ALIGN_CENTER, 0, 70);
+    lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_align(lbl_status, LV_ALIGN_CENTER, 0, 42);
 
-    lbl_url = lv_label_create(scr);
+    lbl_url = lv_label_create(_bubble);
     lv_label_set_text(lbl_url, "");
     lv_obj_set_style_text_font(lbl_url, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lbl_url, lv_color_hex(0x6B75A0), 0);
+    lv_obj_set_style_text_color(lbl_url, lv_color_hex(0xB0BEC5), 0);
     lv_obj_set_style_text_align(lbl_url, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_url, 420);
-    lv_obj_align(lbl_url, LV_ALIGN_CENTER, 0, 110);
+    lv_obj_set_width(lbl_url, 340);
+    lv_obj_align(lbl_url, LV_ALIGN_CENTER, 0, 72);
 
     lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
 }
@@ -97,6 +110,6 @@ void nestor_app_start() {
 
 void nestor_app_stop() {
     if (srv) { srv->stop(); delete srv; srv = nullptr; }
-    lbl_status = nullptr; lbl_url = nullptr; spinner = nullptr;
+    lbl_status = nullptr; lbl_url = nullptr; spinner = nullptr; _bubble = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
 }

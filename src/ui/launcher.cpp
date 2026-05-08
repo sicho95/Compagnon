@@ -19,17 +19,19 @@ struct AppEntry {
     void (*launch)();
 };
 
+// palette AMOLED cohérente avec les apps respectives
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",     0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
-    { "Radars",  "Alertes routieres",0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
-    { "Bourse",  "Marches & Actifs", 0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
-    { "Meteo",   "Previsions",       0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
+    { "Nestor",  "IA Compagnon",     0x1a237e, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
+    { "Radars",  "Alertes routieres",0x7f0000, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
+    { "Bourse",  "Marches & Actifs", 0x4a3000, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
+    { "Meteo",   "Previsions",       0x1b5e20, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
 };
 
-static lv_obj_t *scr_launcher = nullptr;
-static lv_obj_t *tileview     = nullptr;
+static lv_obj_t *scr_launcher   = nullptr;
+static lv_obj_t *tileview       = nullptr;
 static lv_obj_t *tiles[APP_COUNT];
-static int8_t    cur_idx      = 0;
+static lv_obj_t *_cards[APP_COUNT];  // cartes pour l'opacité dynamique
+static int8_t    cur_idx        = 0;
 
 // ── Boutons physiques ─────────────────────────────────────────────────
 struct BtnState { uint8_t pin; bool last; bool pressed; uint32_t t0; bool lf; };
@@ -45,10 +47,20 @@ static void open_current() {
     if (APPS[cur_idx].launch) APPS[cur_idx].launch();
 }
 
+// mettre à jour l'opacité des cartes selon la tuile active
+static void update_tile_opacities(int8_t focus) {
+    for (int i = 0; i < APP_COUNT; i++) {
+        if (!_cards[i]) continue;
+        lv_obj_set_style_bg_opa(_cards[i],
+            i == focus ? LV_OPA_70 : LV_OPA_30, 0);
+    }
+}
+
 static void on_tile_changed(lv_event_t *e) {
     lv_obj_t *tv = (lv_obj_t *)lv_event_get_target(e);
     lv_obj_t *active = (lv_obj_t *)lv_tileview_get_tile_active(tv);
     cur_idx = (int8_t)lv_obj_get_index(active);
+    update_tile_opacities(cur_idx);
 }
 
 static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
@@ -89,14 +101,17 @@ static void btn_timer_cb(lv_timer_t *) {
 static void make_tile(int i) {
     const AppEntry &a = APPS[i];
     tiles[i] = lv_tileview_add_tile(tileview, i, 0, LV_DIR_HOR);
-    lv_obj_set_style_bg_color(tiles[i], lv_color_hex(0x000000), 0);
+    // fond tuile noir — pixels noirs = éteints sur AMOLED
+    lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tiles[i], LV_OPA_COVER, 0);
 
     lv_obj_t *card = lv_obj_create(tiles[i]);
     lv_obj_set_size(card, 220, 180);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(a.color_bg), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_40, 0);
+    // opacité mise à jour dynamiquement (30 = voisin, 70 = focus)
+    lv_obj_set_style_bg_opa(card, LV_OPA_30, 0);
+    _cards[i] = card;
     lv_obj_set_style_border_color(card, lv_color_hex(a.color_txt), 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_radius(card, 20, 0);
@@ -158,6 +173,8 @@ void ui_launcher_init() {
     pinMode(BTN_RIGHT, INPUT_PULLUP);
     lv_timer_create(btn_timer_cb, 20, NULL);
 
+    // activer l'opacité focus sur la tuile 0 au démarrage
+    update_tile_opacities(0);
     lv_scr_load(scr_launcher);
     Serial.println("[UI/LAUNCH] Launcher OK");
 }

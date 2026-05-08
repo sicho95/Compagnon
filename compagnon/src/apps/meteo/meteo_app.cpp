@@ -15,12 +15,11 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-// ─── Thème ────────────────────────────────────────────────────────────────────
-#define C_BG    0x000000
+// ─── Couleurs thème Météo ──────────────────────────────────────────────
+#define C_BG    0x000000  // fond noir AMOLED
 #define C_TXT   0xFFCC44
 #define C_MUTED 0xAA8822
-#define C_CARD  0x0A0A0A
-#define C_ERR   0xFF6644
+#define C_CARD  0x1b5e20  // vert sombre semi-transparent
 
 // ─── NVS pour la dernière position GPS connue ──────────────────────────────────
 static Preferences _prefs;
@@ -292,9 +291,10 @@ void meteo_app_start() {
     for (int i = 0; i < 3; i++) {
         _cards[i] = lv_obj_create(_scr);
         lv_obj_set_size(_cards[i], CARD_W, CARD_H);
-        lv_obj_set_pos(_cards[i], start_x + i * (CARD_W + GAP), 130);
+        lv_obj_set_pos(_cards[i], start_x + i * (CARD_W + GAP), card_y);
+        // carte vert sombre semi-transparent
         lv_obj_set_style_bg_color(_cards[i], lv_color_hex(C_CARD), 0);
-        lv_obj_set_style_bg_opa(_cards[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(_cards[i], LV_OPA_50, 0);
         lv_obj_set_style_border_color(_cards[i], lv_color_hex(C_TXT), 0);
         lv_obj_set_style_border_width(_cards[i], 1, 0);
         lv_obj_set_style_border_opa(_cards[i], LV_OPA_40, 0);
