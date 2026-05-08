@@ -4,15 +4,23 @@
 import { bleWrite, bleRead, bleSubscribe } from './ble.js';
 
 export async function bleRequestWifiScan() {
-  await bleWrite('WIFI_SCAN', JSON.stringify({ cmd: 'scan' }));
+  // Déclencher le scan en envoyant l'octet 0x01
+  await bleWrite('WIFI_SCAN', new Uint8Array([0x01]));
   return new Promise(resolve => {
-    const t = setTimeout(() => resolve([]), 10000);
+    let done = false;
+    const t = setTimeout(() => { done = true; resolve([]); }, 10000);
     bleSubscribe('WIFI_SCAN', raw => {
+      if (done) return;
       try {
         const d = JSON.parse(raw);
-        if (Array.isArray(d.networks)) { clearTimeout(t); resolve(d.networks); }
+        if (Array.isArray(d)) {
+          done = true;
+          clearTimeout(t);
+          // Normaliser le format compact {s, r} en {ssid, rssi} pour l'interface
+          resolve(d.map(n => ({ ssid: n.s, rssi: n.r })));
+        }
       } catch {}
-    }).catch(() => resolve([]));
+    }).catch(() => { if (!done) resolve([]); });
   });
 }
 

@@ -33,11 +33,15 @@ void hal_imu_tick() {
     float ax, ay, az;
     if (!imu.getAccelerometer(ax, ay, az)) return;
     ScreenOrientation n = cur_or;
+    // Orientation physique Waveshare AMOLED 2.16" :
+    //   axe Y pointe vers le HAUT du board → gravité = +ay en portrait (USB en bas)
+    //   axe X pointe vers la DROITE du board → gravité = +ax en landscape_R
+    //   Zone morte ±0.5 g assure l'hystérésis autour des transitions à 45°
     const float T = 0.5f;
-    if      (ay >  T) n = ORIENT_PORTRAIT;
-    else if (ay < -T) n = ORIENT_PORTRAIT_INV;
-    else if (ax >  T) n = ORIENT_LANDSCAPE_R;
-    else if (ax < -T) n = ORIENT_LANDSCAPE_L;
+    if      (ay >  T) n = ORIENT_PORTRAIT;       // tenu à la verticale, USB en bas
+    else if (ay < -T) n = ORIENT_PORTRAIT_INV;   // retourné, USB en haut
+    else if (ax >  T) n = ORIENT_LANDSCAPE_R;    // couché, côté droit vers le bas
+    else if (ax < -T) n = ORIENT_LANDSCAPE_L;    // couché, côté gauche vers le bas
     if (n != cur_or) { cur_or = n; changed = true; }
 }
 

@@ -1,23 +1,27 @@
 #pragma once
 // ─────────────────────────────────────────────────────────────────────
-// BLE Manager V1 — service GATT "GPS Position" (push depuis téléphone)
+// BLE Manager — service GATT Nestor
 //
-// UUID Service   : 4FAFC201-1FB5-459E-8FCC-C5C9C331914B
-// UUID Charact.  : BEB5483E-36E1-4688-B7F5-EA07361B26A8
-//   → writable + notify
-//   → format  : "lat,lon"  ex "48.8566,2.3522"
+// UUID Service        : 12345678-1234-5678-1234-56789ABCDEF0
 //
-// La PWA écrit cette caractéristique via Web Bluetooth après avoir
-// récupéré la position via Geolocation API du navigateur.
+// UUID GPS            : 6E400003-B5A3-F393-E0A9-E50E24DCCA9E   WRITE
+//   → 8 octets float32 little-endian : latitude (4) + longitude (4)
+//   → La PWA envoie la position via watchPosition() toutes les ≤1 s
+//
+// UUID WIFI_SCAN      : 12345678-0001-5678-1234-56789ABCDEF0   WRITE + NOTIFY
+//   → écrire 0x01 pour déclencher WiFi.scanNetworks(async=true)
+//   → notification JSON : [{"s":"SSID","r":-65},...]  (triés par RSSI, max 10)
+//
+// UUID WIFI_PROVISION : 12345678-0002-5678-1234-56789ABCDEF0   WRITE
+//   → JSON : {"ssid":"MonRéseau","password":"monMotDePasse"}
+//   → appelle WiFi.begin() avec les nouvelles credentials
 // ─────────────────────────────────────────────────────────────────────
 #include <stdbool.h>
 
 void ble_mgr_init();
 void ble_mgr_tick();
 bool ble_mgr_connected();
-
-// Dernière position reçue via BLE (retourne false si aucune position connue)
-bool ble_mgr_get_gps(double *lat, double *lon);
-
-// Statut pour la status bar
 bool ble_mgr_is_active();
+
+// Dernière position GPS reçue (retourne false si aucun fix)
+bool ble_mgr_get_gps(double *lat, double *lon);

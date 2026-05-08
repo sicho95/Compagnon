@@ -10,12 +10,17 @@ export const CHAR = {
   TEXT_INPUT:     '12345678-0004-5678-1234-56789abcdef0',
   LLM_RELAY:      '12345678-0005-5678-1234-56789abcdef0',
   DEVICE_STATUS:  '12345678-0006-5678-1234-56789abcdef0',
+  GPS:            '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
 };
 
 let _device = null, _server = null, _chars = {};
 let _onDisconnect = null, _onStatusChange = null;
+let _gpsWatchId = null;
 
-const enc = v => new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
+// Encoder en bytes — Uint8Array transmis tel quel, string/objet sérialisé en UTF-8
+const enc = v => v instanceof Uint8Array
+  ? v
+  : new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
 const dec = v => new TextDecoder().decode(v instanceof DataView ? v.buffer : v);
 
 export const bleAvailable   = () => !!(navigator.bluetooth);
@@ -31,6 +36,7 @@ export async function bleConnect() {
     optionalServices: [NESTOR_SERVICE],
   });
   _device.addEventListener('gattserverdisconnected', () => {
+    stopGpsWatch();
     _chars = {}; _server = null;
     if (_onDisconnect) _onDisconnect();
   });
@@ -46,10 +52,13 @@ export async function bleConnect() {
       try { if (_onStatusChange) _onStatusChange(JSON.parse(dec(e.target.value))); } catch {}
     });
   }
+  // Démarrer la surveillance GPS dès que la connexion BLE est établie
+  startGpsWatch();
   return _device.name;
 }
 
 export async function bleDisconnect() {
+  stopGpsWatch();
   if (_device?.gatt?.connected) _device.gatt.disconnect();
   _chars = {}; _server = null; _device = null;
 }
@@ -84,4 +93,30 @@ export async function bleSubscribe(charKey, callback) {
   char.addEventListener('characteristicvaluechanged', e => {
     try { callback(dec(e.target.value)); } catch {}
   });
+}
+
+// Surveiller la géolocalisation et envoyer lat/lon via BLE toutes les ≤1 s
+// Encodage : 8 octets float32 little-endian (lat 0-3, lon 4-7)
+export function startGpsWatch() {
+  if (_gpsWatchId !== null || !('geolocation' in navigator) || !bleConnected()) return;
+  _gpsWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      if (!_chars.GPS) return;
+      const buf  = new ArrayBuffer(8);
+      const view = new DataView(buf);
+      view.setFloat32(0, pos.coords.latitude,  true);
+      view.setFloat32(4, pos.coords.longitude, true);
+      bleWrite('GPS', new Uint8Array(buf)).catch(e => console.warn('[GPS]', e.message));
+    },
+    err => console.warn('[GPS] watchPosition:', err.message),
+    { maximumAge: 0, timeout: 1000, enableHighAccuracy: true }
+  );
+}
+
+// Arrêter la surveillance GPS et libérer la ressource
+export function stopGpsWatch() {
+  if (_gpsWatchId !== null) {
+    navigator.geolocation.clearWatch(_gpsWatchId);
+    _gpsWatchId = null;
+  }
 }

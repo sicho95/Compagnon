@@ -1,6 +1,8 @@
 import { listBackends, callLLM, loadGroqModels, resetGroqModelsCache } from '../api/backends.js';
 import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJson,
          lsGet, lsSet, saveChatHistory, loadChatHistory, clearChatHistory } from '../storage/agents-db.js';
+import { deviceStatus } from '../bt/ble_status.js';
+import { scanWifiNetworks, provisionWifi } from '../device/provisioning.js';
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
 import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
@@ -795,6 +797,93 @@ function renderSettings(container, state, rerender) {
   searchCard.append(proxyLabel, proxyInput);
   list.appendChild(searchCard);
 
+  // ── Section WiFi BLE ──────────────────────────────────────────────────────
+  const wifiCard = el('div', { background:'#070a14', border:'1px solid #1a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const wTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  wTitle.textContent = '📶 WiFi via BLE';
+  wifiCard.appendChild(wTitle);
+
+  const wDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  wDesc.textContent = 'Scanner les réseaux WiFi depuis l\'ESP32 et envoyer les identifiants via BLE.';
+  wifiCard.appendChild(wDesc);
+
+  const bleBadge = el('div', { fontSize:'11px', marginBottom:'10px', padding:'4px 8px', borderRadius:'6px', display:'inline-block',
+    background: deviceStatus.connected ? '#0d1a0d' : '#1a0d0d',
+    color:      deviceStatus.connected ? '#5a9'    : '#a55' });
+  bleBadge.textContent = deviceStatus.connected ? '✅ ESP32 connecté — ' + (deviceStatus.deviceName || 'Nestor') : '⚠️ ESP32 non connecté — connectez via le menu BLE';
+  wifiCard.appendChild(bleBadge);
+
+  const netListEl = el('div', { display:'flex', flexDirection:'column', gap:'4px', marginBottom:'8px', minHeight:'0' });
+
+  const scanBtn = btn('🔍 Scanner les réseaux WiFi', '', async () => {
+    scanBtn.disabled = true;
+    scanBtn.textContent = '⏳ Scan en cours…';
+    netListEl.innerHTML = '';
+    try {
+      const nets = await scanWifiNetworks();
+      if (nets.length === 0) {
+        const empty = el('div', { fontSize:'12px', color:'#666', padding:'6px', textAlign:'center' });
+        empty.textContent = 'Aucun réseau trouvé';
+        netListEl.appendChild(empty);
+      } else {
+        for (const net of nets) {
+          const row = el('div', { display:'flex', alignItems:'center', gap:'8px', padding:'6px 8px',
+            borderRadius:'6px', cursor:'pointer', background:'#111', border:'1px solid #1a1a1a' });
+          const ssidEl = el('span', { flex:'1', fontSize:'12px', color:'#ccc', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' });
+          ssidEl.textContent = net.ssid || '(masqué)';
+          const barEl = el('span', { fontFamily:'monospace', fontSize:'11px',
+            color: net.rssi >= -60 ? '#5a9' : net.rssi >= -70 ? '#aa5' : '#a55' });
+          barEl.textContent = net.rssi >= -50 ? '████' : net.rssi >= -60 ? '███░' : net.rssi >= -70 ? '██░░' : '█░░░';
+          const rssiEl = el('span', { fontSize:'10px', color:'#555', flexShrink:'0' });
+          rssiEl.textContent = net.rssi + ' dBm';
+          row.append(ssidEl, barEl, rssiEl);
+          row.onclick = () => { ssidInput.value = net.ssid || ''; };
+          row.addEventListener('mouseenter', () => row.style.background = '#1a1a2a');
+          row.addEventListener('mouseleave', () => row.style.background = '#111');
+          netListEl.appendChild(row);
+        }
+      }
+    } catch (e) {
+      showToast('Erreur scan WiFi : ' + e.message, true);
+    }
+    scanBtn.disabled = !deviceStatus.connected;
+    scanBtn.textContent = '🔍 Scanner les réseaux WiFi';
+  });
+  scanBtn.disabled = !deviceStatus.connected;
+
+  const ssidLabel  = labelEl('SSID (cliquer sur un réseau pour pré-remplir)');
+  const ssidInput  = document.createElement('input');
+  ssidInput.type   = 'text'; ssidInput.autocomplete = 'off';
+  Object.assign(ssidInput.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box' });
+  ssidInput.placeholder = 'MonRéseau';
+  ssidInput.value = '';
+
+  const pwdLabel  = labelEl('Mot de passe WiFi');
+  const pwdInput  = document.createElement('input');
+  pwdInput.type   = 'password'; pwdInput.autocomplete = 'off';
+  Object.assign(pwdInput.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box' });
+  pwdInput.placeholder = '••••••••';
+
+  const sendWifiBtn = btn('📶 Envoyer à l\'ESP32', 'primary', async () => {
+    const ssid = ssidInput.value.trim();
+    if (!ssid) { showToast('SSID requis', true); return; }
+    sendWifiBtn.disabled = true; sendWifiBtn.textContent = '⏳ Envoi…';
+    try {
+      await provisionWifi(ssid, pwdInput.value);
+      showToast('WiFi envoyé. Connexion ESP32 en cours…');
+      pwdInput.value = '';
+    } catch (e) {
+      showToast('Erreur provision WiFi : ' + e.message, true);
+    }
+    sendWifiBtn.disabled = false; sendWifiBtn.textContent = '📶 Envoyer à l\'ESP32';
+  });
+  sendWifiBtn.style.marginTop = '8px';
+
+  wifiCard.append(scanBtn, netListEl, ssidLabel, ssidInput, pwdLabel, pwdInput, sendWifiBtn);
+  list.appendChild(wifiCard);
+
   // ── Section Bourse ─────────────────────────────────────────────────────────
   const bourseCard = el('div', { background:'#071407', border:'1px solid #1a3a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
   const bTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
@@ -818,11 +907,113 @@ function renderSettings(container, state, rerender) {
   bourseCard.appendChild(tdLabel);
   bourseCard.appendChild(tdInput);
 
-  const tdStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const tdStatus = el('div', { fontSize:'11px', marginTop:'4px', marginBottom:'12px' });
   const hasTD = !!(lsGet('TWELVE_DATA_KEY') || '').trim();
   tdStatus.textContent = hasTD ? '✅ Clé présente' : '⚠️ Clé manquante — la vue Bourse affichera un message';
   tdStatus.style.color = hasTD ? '#5a9' : '#a66';
   bourseCard.appendChild(tdStatus);
+
+  // ── Ajout d'un instrument (symbole ou code ISIN) ───────────────────────────
+  const addInstTitle = el('div', { fontWeight:'600', fontSize:'12px', color:'#ccc', marginBottom:'6px' });
+  addInstTitle.textContent = '➕ Ajouter un instrument';
+  bourseCard.appendChild(addInstTitle);
+
+  const isinInputWrap = el('div', { display:'flex', gap:'6px', alignItems:'flex-start', marginBottom:'6px' });
+  const isinInput = document.createElement('input');
+  isinInput.type = 'text'; isinInput.autocomplete = 'off';
+  Object.assign(isinInput.style, { flex:'1', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box' });
+  isinInput.placeholder = 'Symbole (SAN.PA) ou ISIN (FR0003500008)';
+
+  const isinStatus = el('div', { fontSize:'11px', color:'#888', marginBottom:'6px', minHeight:'16px' });
+  let _resolvedSym = null;   // symbole résolu depuis un ISIN
+
+  // Détecter si la saisie est un ISIN (12 caractères, 2 premières lettres)
+  const isIsin = v => /^[A-Z]{2}[A-Z0-9]{10}$/.test(v.toUpperCase());
+
+  // Construire l'URL de proxy pour les appels Twelve Data
+  const proxyTd = url => {
+    const p = (lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/').replace(/\/$/, '');
+    return p + '?url=' + encodeURIComponent(url);
+  };
+
+  let _isinTimer = null;
+  isinInput.oninput = () => {
+    const v = isinInput.value.trim().toUpperCase();
+    _resolvedSym = null;
+    clearTimeout(_isinTimer);
+    if (!v) { isinStatus.textContent = ''; return; }
+    if (!isIsin(v)) { isinStatus.textContent = ''; return; }
+    isinStatus.textContent = '⏳ Résolution ISIN…';
+    const apiKey = (lsGet('TWELVE_DATA_KEY') || '').trim();
+    if (!apiKey) { isinStatus.textContent = '⚠️ Clé Twelve Data requise pour résoudre un ISIN'; return; }
+    // Debounce 600 ms pour éviter les appels excessifs pendant la frappe
+    _isinTimer = setTimeout(async () => {
+      try {
+        const url = `https://api.twelvedata.com/isin?isin=${v}&apikey=${apiKey}`;
+        const res = await fetch(proxyTd(url), { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (data.code && data.code >= 400) throw new Error(data.message || 'ISIN non trouvé');
+        const first = Array.isArray(data.data) ? data.data[0] : null;
+        if (!first || !first.symbol) throw new Error('ISIN non trouvé');
+        _resolvedSym = { symbol: first.symbol, label: first.instrument_name || first.symbol };
+        isinStatus.textContent = `✅ Symbole résolu : ${_resolvedSym.symbol} — ${_resolvedSym.label}`;
+        isinStatus.style.color = '#5a9';
+      } catch (e) {
+        isinStatus.textContent = '⚠️ ' + e.message;
+        isinStatus.style.color = '#a55';
+      }
+    }, 600);
+  };
+
+  const addInstBtn = btn('Ajouter', '', () => {
+    const raw = isinInput.value.trim().toUpperCase();
+    if (!raw) return;
+    const entry = _resolvedSym || { symbol: raw, label: raw };
+    const customs = (() => { try { return JSON.parse(lsGet('NESTOR_BOURSE_CUSTOM') || '[]'); } catch { return []; } })();
+    if (customs.find(c => c.symbol === entry.symbol)) {
+      showToast(`${entry.symbol} déjà dans la liste.`); return;
+    }
+    customs.push(entry);
+    lsSet('NESTOR_BOURSE_CUSTOM', JSON.stringify(customs));
+    isinInput.value = ''; isinStatus.textContent = ''; _resolvedSym = null;
+    showToast(`${entry.symbol} ajouté à la Bourse.`);
+    renderCustomSymList();
+  });
+  isinInputWrap.append(isinInput, addInstBtn);
+  bourseCard.append(isinInputWrap, isinStatus);
+
+  // Afficher la liste des instruments personnalisés avec suppression
+  const customSymListEl = el('div', { display:'flex', flexDirection:'column', gap:'4px' });
+  bourseCard.appendChild(customSymListEl);
+
+  function renderCustomSymList() {
+    customSymListEl.innerHTML = '';
+    const customs = (() => { try { return JSON.parse(lsGet('NESTOR_BOURSE_CUSTOM') || '[]'); } catch { return []; } })();
+    if (customs.length === 0) return;
+    const lbl = el('div', { fontSize:'11px', color:'#666', marginBottom:'4px' });
+    lbl.textContent = 'Instruments personnalisés :';
+    customSymListEl.appendChild(lbl);
+    for (const c of customs) {
+      const row = el('div', { display:'flex', alignItems:'center', gap:'6px', padding:'4px 8px',
+        background:'#0d1a0d', border:'1px solid #1a3a1a', borderRadius:'6px', fontSize:'12px' });
+      const symEl = el('span', { flex:'1', color:'#7ef', fontWeight:'600' }); symEl.textContent = c.symbol;
+      const lblEl = el('span', { color:'#888', flex:'2' }); lblEl.textContent = c.label || '';
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.style.cssText = 'background:none;color:#f66;border:none;cursor:pointer;font-size:12px;padding:0;flex-shrink:0';
+      delBtn.onclick = () => {
+        const updated = customs.filter(x => x.symbol !== c.symbol);
+        lsSet('NESTOR_BOURSE_CUSTOM', JSON.stringify(updated));
+        showToast(`${c.symbol} retiré.`);
+        renderCustomSymList();
+      };
+      row.append(symEl, lblEl, delBtn);
+      customSymListEl.appendChild(row);
+    }
+  }
+  renderCustomSymList();
   list.appendChild(bourseCard);
 
   // ── Section Météo ─────────────────────────────────────────────────────────

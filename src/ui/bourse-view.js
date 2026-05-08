@@ -4,8 +4,8 @@
 
 import { lsGet, lsSet } from '../storage/agents-db.js';
 
-const LS_SYMBOLS   = 'NESTOR_BOURSE_SYMBOLS';
 const LS_LAST_DATA = 'NESTOR_BOURSE_CACHE';
+const LS_CUSTOM    = 'NESTOR_BOURSE_CUSTOM';
 
 const DEFAULT_SYMBOLS = [
   { symbol: 'CAC40',   label: 'CAC 40',    flag: '🇫🇷' },
@@ -93,8 +93,12 @@ export function renderBourseView(container, _state, _rerender) {
     return;
   }
 
-  // ── Carte pour chaque symbole ──────────────────────────────────────────────
-  const symbols = DEFAULT_SYMBOLS;
+  // ── Fusionner les symboles par défaut avec les instruments personnalisés ──
+  const customs = (() => { try { return JSON.parse(lsGet(LS_CUSTOM) || '[]'); } catch { return []; } })();
+  const symbols = [
+    ...DEFAULT_SYMBOLS,
+    ...customs.map(c => ({ symbol: c.symbol, label: c.label || c.symbol, flag: '📊' })),
+  ];
   const cards = {};
   const grid = el('div', { display: 'flex', flexDirection: 'column', gap: '8px' });
 
