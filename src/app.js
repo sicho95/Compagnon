@@ -56,11 +56,11 @@ export function renderFrame(root, state) {
   const safeViews = ['hub', 'agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'meteo', 'musique'];
   if (!safeViews.includes(state.view)) state.view = 'hub';
 
-  // Nettoyage des vues avec ressources à libérer
-  if (state._prevView === 'radar'   && state.view !== 'radar')   cleanupRadarView();
-  if (state._prevView === 'musique' && state.view !== 'musique') cleanupMusiqueView();
-
-  // Drawer visible uniquement dans la vue chat Nestor
+  // Nettoyage radar si on quitte la vue
+  if (state._prevView === 'radar' && state.view !== 'radar') {
+    cleanupRadarView();
+  }
+  // Fermer le drawer si on quitte le chat
   if (state.view !== 'chat') state.menuOpen = false;
   state._prevView = state.view;
 
@@ -75,19 +75,34 @@ export function renderFrame(root, state) {
   const titleEl = document.createElement('span');
   titleEl.style.cssText = 'font-weight:600;font-size:13px;flex:1;';
   const titles = {
-    hub:      '🏠 Compagnon',
-    chat:     state.activeAgent ? '🧠 ' + state.activeAgent.name : '🧠 Nestor',
+    hub: '🏠 Compagnon',
+    chat: state.activeAgent ? '🧠 ' + state.activeAgent.name : '🧠 Nestor',
     settings: '⚙️ Réglages',
     fabrique: '🏭 Fabrique',
-    edit:     '✏️ Édition',
-    radar:    '🚨 Radars',
-    bourse:   '📈 Bourse',
-    agents:   '🤖 Agents',
-    meteo:    '🌤 Météo',
-    musique:  '🎵 Musique',
+    edit: '✏️ Édition',
+    radar: '🚨 Radars',
+    bourse: '📈 Bourse',
+    agents: '🤖 Agents',
+    meteo: '🌤 Météo',
+    musique: '🎵 Musique',
   };
   titleEl.textContent = titles[state.view] || '🏠 Compagnon';
+
   statusBar.appendChild(titleEl);
+
+  // Hamburger uniquement dans la vue Nestor/chat
+  if (state.view === 'chat') {
+    const hamburger = document.createElement('button');
+    hamburger.innerHTML = state.menuOpen
+      ? '✕'
+      : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+    hamburger.style.cssText = 'background:none;border:none;color:#aaa;padding:4px 8px;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+    hamburger.onclick = () => {
+      state.menuOpen = !state.menuOpen;
+      renderFrame(root, state);
+    };
+    statusBar.appendChild(hamburger);
+  }
 
   const rerender = () => renderFrame(root, state);
 

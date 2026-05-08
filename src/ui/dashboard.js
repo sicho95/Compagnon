@@ -46,14 +46,14 @@ function textForTTS(text) {
 export function renderDashboard(container, state, rerender) {
   container.innerHTML = '';
 
-  if (state.view === 'hub')     { renderHubView(container, state, rerender); return; }
+  if (state.view === 'hub')    { renderHubView(container, state, rerender); return; }
   if (state.view === 'chat' && state.activeAgent) { renderChatView(container, state, rerender); return; }
   if (state.view === 'edit' && state.editingAgent) { renderEditView(container, state, rerender); return; }
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
-  if (state.view === 'radar')   { renderRadarSection(container, state, rerender); return; }
-  if (state.view === 'bourse')  { renderBourseSection(container, state, rerender); return; }
-  if (state.view === 'meteo')   { renderMeteoSection(container, state, rerender); return; }
-  if (state.view === 'musique') { renderMusiqueSection(container, state, rerender); return; }
+  if (state.view === 'radar')  { renderRadarSection(container, state, rerender); return; }
+  if (state.view === 'bourse') { renderBourseSection(container, state, rerender); return; }
+  if (state.view === 'meteo')  { renderMeteoView(container, state, rerender); return; }
+  if (state.view === 'musique'){ renderMusiqueView(container, state, rerender); return; }
 
   // Vues agents et réglages — bouton retour hub + actions agents
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
@@ -148,9 +148,10 @@ function renderMusiqueSection(container, state, rerender) {
   const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
   title.textContent = '🎵 Musique — AirPlay & SD';
   header.appendChild(title);
-  const backBtn = btn('← Retour', '', () => {
-    cleanupMusiqueView();
-    state.view = state._musiquePrevView || 'chat';
+
+  const backBtn = btn('← Hub', '', () => {
+    cleanupRadarView();
+    state.view = state._radarPrevView || 'hub';
     rerender();
   });
   header.appendChild(backBtn);
@@ -158,11 +159,20 @@ function renderMusiqueSection(container, state, rerender) {
 
   const body = el('div', {});
   container.appendChild(body);
-  renderMusiqueView(body, state, rerender);
+
+  renderRadarView(body, state, rerender, () => {
+    state.view = state._radarPrevView || 'hub';
+    rerender();
+  });
 }
 
 // ─── Bourse section ───────────────────────────────────────────────────────────
 function renderBourseSection(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '📈 Bourse & Marchés';
+  header.appendChild(title);
+
   const backBtn = btn('← Hub', '', () => {
     cleanupBourseView(container.querySelector('[data-bourse]'));
     state.view = state._boursePrevView || 'hub';
@@ -307,6 +317,8 @@ function renderChatView(container, state, rerender) {
   hubBackBtn.style.fontSize = '12px'; hubBackBtn.style.padding = '4px 8px';
   header.appendChild(hubBackBtn);
 
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = roleIcon(agent.role) + ' ' + agent.name;
   if (isOrchestrator) {
     const badge = tag('Moteur actif', '#1a3a2a');
     badge.style.color = '#7ef'; badge.style.flex = '1';
@@ -1412,8 +1424,14 @@ function renderSettings(container, state, rerender) {
 
 // ─── Hub View ─────────────────────────────────────────────────────────────────
 function renderHubView(container, state, rerender) {
+  const greeting = el('div', { fontWeight:'700', fontSize:'15px', textAlign:'center',
+    marginBottom:'20px', marginTop:'4px', color:'#ddd' });
+  greeting.textContent = '🏠 Compagnon';
+  container.appendChild(greeting);
+
   const grid = el('div', { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' });
 
+  // Fabriquer une carte cliquable
   const mkCard = (icon, label, desc, onClick) => {
     const card = el('div', {
       background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px',
@@ -1433,6 +1451,7 @@ function renderHubView(container, state, rerender) {
     return card;
   };
 
+  // Nestor — ouvre la vue chat sur l'orchestrateur
   const orchestrator = state.agents.find(a => a.role === 'orchestrator');
   grid.appendChild(mkCard('🧠', 'Nestor', 'Votre assistant IA', () => {
     if (orchestrator) {
@@ -1444,17 +1463,20 @@ function renderHubView(container, state, rerender) {
     rerender();
   }));
 
+  // Radars
   grid.appendChild(mkCard('🚨', 'Radars', 'Surveillance & alertes', () => {
     state._radarPrevView = 'hub';
     state.view = 'radar';
     rerender();
   }));
 
+  // Météo
   grid.appendChild(mkCard('🌤', 'Météo', 'Prévisions météo', () => {
     state.view = 'meteo';
     rerender();
   }));
 
+  // Bourse
   grid.appendChild(mkCard('📈', 'Bourse', 'Marchés financiers', () => {
     state._boursePrevView = 'hub';
     state.view = 'bourse';
@@ -1463,20 +1485,43 @@ function renderHubView(container, state, rerender) {
 
   container.appendChild(grid);
 
-  const musiqueCard = mkCard('🎵', 'Musique', 'Lecteur AirPlay / SD / Spotify', () => {
+  // Musique — carte pleine largeur
+  const musiqueCard = mkCard('🎵', 'Musique', 'Lecteur musical', () => {
     state.view = 'musique';
     rerender();
   });
   musiqueCard.style.marginTop = '12px';
   container.appendChild(musiqueCard);
+}
 
-  // Carte Réglages — accès depuis le hub (bug #5)
-  const settingsCard = mkCard('⚙️', 'Réglages', 'Clés API, TTS, préférences', () => {
-    state.view = 'settings';
-    rerender();
-  });
-  settingsCard.style.marginTop = '8px';
-  container.appendChild(settingsCard);
+// ─── Météo View (placeholder) ─────────────────────────────────────────────────
+function renderMeteoView(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '🌤 Météo';
+  header.appendChild(title);
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const placeholder = el('div', { textAlign:'center', padding:'40px 0', color:'#666' });
+  placeholder.textContent = '🌤 Météo — bientôt disponible.';
+  container.appendChild(placeholder);
+}
+
+// ─── Musique View (placeholder) ───────────────────────────────────────────────
+function renderMusiqueView(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '🎵 Musique';
+  header.appendChild(title);
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const placeholder = el('div', { textAlign:'center', padding:'40px 0', color:'#666' });
+  placeholder.textContent = '🎵 Musique — bientôt disponible.';
+  container.appendChild(placeholder);
 }
 
 // ─── Utilitaires DOM ──────────────────────────────────────────────────────────
