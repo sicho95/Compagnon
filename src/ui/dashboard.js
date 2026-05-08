@@ -10,9 +10,9 @@ import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
 import { getSTTStatus } from '../api/stt.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
-import { renderBourseView, cleanupBourseView, DEFAULT_SYMBOLS } from './bourse-view.js';
-import { bleAvailable, bleConnect, bleDisconnect, bleConnected, bleDeviceName } from '../bt/ble.js';
-import { setBleConnected, setBleDisconnected } from '../bt/ble_status.js';
+import { renderBourseView, cleanupBourseView } from './bourse-view.js';
+import { renderMeteoView as renderMeteoContent } from './meteo-view.js';
+import { renderMusiqueView as renderMusiqueContent } from './musique-view.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
@@ -46,20 +46,26 @@ function textForTTS(text) {
 export function renderDashboard(container, state, rerender) {
   container.innerHTML = '';
 
+  if (state.view === 'hub')     { renderHubView(container, state, rerender); return; }
   if (state.view === 'chat' && state.activeAgent) { renderChatView(container, state, rerender); return; }
   if (state.view === 'edit' && state.editingAgent) { renderEditView(container, state, rerender); return; }
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
   if (state.view === 'radar')   { renderRadarSection(container, state, rerender); return; }
   if (state.view === 'bourse')  { renderBourseSection(container, state, rerender); return; }
+  if (state.view === 'meteo')   { renderMeteoSection(container, state, rerender); return; }
   if (state.view === 'musique') { renderMusiqueSection(container, state, rerender); return; }
 
+  // Vues agents et réglages — bouton retour hub + actions agents
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px' });
-  title.textContent = state.view === 'settings' ? '⚙️ Réglages' : '🤖 Agents';
 
-  const actions = el('div', { display:'flex', gap:'8px', flexWrap:'wrap' });
+  const leftRow = el('div', { display:'flex', alignItems:'center', gap:'8px' });
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  backBtn.style.fontSize = '12px'; backBtn.style.padding = '4px 8px';
+  leftRow.appendChild(backBtn);
+  header.appendChild(leftRow);
 
   if (state.view === 'agents') {
+    const actions = el('div', { display:'flex', gap:'8px', flexWrap:'wrap' });
     const btnFabrique = btn('+ Fabrique', 'primary', () => { state.view = 'fabrique'; rerender(); });
     const btnJardinier = btn('🌿 Jardinier', '', async () => {
       btnJardinier.textContent = '⏳ En cours…';
@@ -87,9 +93,9 @@ export function renderDashboard(container, state, rerender) {
       input.click();
     });
     actions.append(btnFabrique, btnJardinier, btnExportAll, btnImport);
+    header.appendChild(actions);
   }
 
-  header.append(title, actions);
   container.appendChild(header);
 
   if (isEnabled('bourse')) {
@@ -119,24 +125,19 @@ export function renderDashboard(container, state, rerender) {
 
 // ─── Radar section ────────────────────────────────────────────────────────────
 function renderRadarSection(container, state, rerender) {
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
-  title.textContent = '🚨 Radars — Surveillance';
-  header.appendChild(title);
-
-  const backBtn = btn('← Retour', '', () => {
+  const backBtn = btn('← Hub', '', () => {
     cleanupRadarView();
-    state.view = state._radarPrevView || 'chat';
+    state.view = state._radarPrevView || 'hub';
     rerender();
   });
-  header.appendChild(backBtn);
-  container.appendChild(header);
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
 
   const body = el('div', {});
   container.appendChild(body);
 
   renderRadarView(body, state, rerender, () => {
-    state.view = state._radarPrevView || 'chat';
+    state.view = state._radarPrevView || 'hub';
     rerender();
   });
 }
@@ -162,18 +163,13 @@ function renderMusiqueSection(container, state, rerender) {
 
 // ─── Bourse section ───────────────────────────────────────────────────────────
 function renderBourseSection(container, state, rerender) {
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
-  title.textContent = '📈 Bourse & Marchés';
-  header.appendChild(title);
-
-  const backBtn = btn('← Retour', '', () => {
+  const backBtn = btn('← Hub', '', () => {
     cleanupBourseView(container.querySelector('[data-bourse]'));
-    state.view = state._boursePrevView || 'chat';
+    state.view = state._boursePrevView || 'hub';
     rerender();
   });
-  header.appendChild(backBtn);
-  container.appendChild(header);
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
 
   const body = el('div', {});
   body.setAttribute('data-bourse', '1');
@@ -184,22 +180,24 @@ function renderBourseSection(container, state, rerender) {
 
 // ─── Météo section ────────────────────────────────────────────────────────────
 function renderMeteoSection(container, state, rerender) {
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
-  title.textContent = '🌤 Météo — Prévisions';
-  header.appendChild(title);
-
-  const backBtn = btn('← Retour', '', () => {
-    cleanupMeteoView();
-    state.view = state._meteoPrevView || 'chat';
-    rerender();
-  });
-  header.appendChild(backBtn);
-  container.appendChild(header);
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
 
   const body = el('div', {});
   container.appendChild(body);
-  renderMeteoView(body, state, rerender);
+  renderMeteoContent(body, state, rerender);
+}
+
+// ─── Musique section ──────────────────────────────────────────────────────────
+function renderMusiqueSection(container, state, rerender) {
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
+
+  const body = el('div', {});
+  container.appendChild(body);
+  renderMusiqueContent(body, state, rerender);
 }
 
 // ─── Agents List ──────────────────────────────────────────────────────────────
@@ -252,7 +250,6 @@ function renderAgentsList(container, state, rerender) {
     const btnChat = btn('💬 Parler', 'primary', () => {
       if (!agent.backendId) agent.backendId = 'groq-llama';
       state.activeAgent = agent;
-      // Charge l'historique persisté
       const hist = loadChatHistory(agent.id);
       state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }, ...hist];
       state.view = 'chat';
@@ -298,23 +295,27 @@ function renderChatView(container, state, rerender) {
   const agent = state.activeAgent;
   const isOrchestrator = agent.role === ROLES.ORCHESTRATOR;
 
-  // Initialise l'historique depuis la persistence si seulement le message système est présent
   if (!state.chatHistory || state.chatHistory.filter(m => m.role !== 'system').length === 0) {
     const hist = loadChatHistory(agent.id);
     state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }, ...hist];
   }
 
+  // En-tête : retour hub + badge orchestrateur + compteur historique + silence
   const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
-  title.textContent = roleIcon(agent.role) + ' ' + agent.name;
+
+  const hubBackBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  hubBackBtn.style.fontSize = '12px'; hubBackBtn.style.padding = '4px 8px';
+  header.appendChild(hubBackBtn);
+
   if (isOrchestrator) {
     const badge = tag('Moteur actif', '#1a3a2a');
-    badge.style.color = '#7ef';
-    title.appendChild(document.createTextNode(' '));
-    title.appendChild(badge);
+    badge.style.color = '#7ef'; badge.style.flex = '1';
+    header.appendChild(badge);
+  } else {
+    const spacer = el('div', { flex: '1' });
+    header.appendChild(spacer);
   }
 
-  // Bouton historique : count des messages non-système
   const histCount = state.chatHistory.filter(m => m.role !== 'system').length;
   if (histCount > 0) {
     const histBadge = el('div', { fontSize:'10px', color:'#555', cursor:'pointer' });
@@ -339,8 +340,8 @@ function renderChatView(container, state, rerender) {
   });
   silentBtn.title = isSilentMode() ? 'Mode silencieux actif' : 'Voix activée';
   Object.assign(silentBtn.style, { fontSize:'16px', padding:'4px 8px', background:'#222', border:'1px solid #333' });
+  header.appendChild(silentBtn);
 
-  header.append(title, silentBtn);
   container.appendChild(header);
 
   const msgArea = el('div', {
@@ -560,7 +561,6 @@ function renderChatView(container, state, rerender) {
     agent.metrics.lastUsed = new Date().toISOString();
     await saveAgent(agent);
 
-    // Persiste l'historique
     saveChatHistory(agent.id, state.chatHistory);
 
     if (reply && !isSilentMode()) {
@@ -629,11 +629,9 @@ async function runMaisonAgent(agent, chatHistory) {
 
 // ─── Fabrique View ────────────────────────────────────────────────────────────
 function renderFabriqueView(container, state, rerender) {
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px' });
-  title.textContent = '🏭 Fabrique d\'agents';
-  header.append(title);
-  container.appendChild(header);
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
 
   const desc = el('div', { fontSize:'12px', color:'#888', marginBottom:'12px', lineHeight:'1.5' });
   desc.textContent = 'Décris l\'agent en quelques mots. La Fabrique choisira automatiquement le bon rôle.';
@@ -717,11 +715,10 @@ function renderFabriqueView(container, state, rerender) {
 // ─── Edit View ────────────────────────────────────────────────────────────────
 function renderEditView(container, state, rerender) {
   const agent = state.editingAgent;
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'14px', flex:'1' });
-  title.textContent = '✏️ ' + agent.name;
-  header.append(title);
-  container.appendChild(header);
+
+  const backBtn = btn('← Agents', '', () => { state.view = 'agents'; state.editingAgent = null; rerender(); });
+  backBtn.style.marginBottom = '10px';
+  container.appendChild(backBtn);
 
   const form = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
   const fields = [
@@ -833,6 +830,36 @@ function renderSettings(container, state, rerender) {
     }
     list.appendChild(card);
   });
+
+  // ── Section Météo ──────────────────────────────────────────────────────────
+  const meteoCard = el('div', { background:'#0a1218', border:'1px solid #1a3a4a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  mTitle.textContent = '🌤 Météo — Meteo-Concept';
+  meteoCard.appendChild(mTitle);
+
+  const mDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  mDesc.innerHTML = 'Prévisions météo quotidiennes par GPS BLE ou Paris par défaut.<br>Clé gratuite sur <a href="https://api.meteo-concept.com" target="_blank" style="color:#5af">api.meteo-concept.com</a>.';
+  meteoCard.appendChild(mDesc);
+
+  const mcLabel = labelEl('Clé Meteo-Concept (METEO_CONCEPT_KEY)');
+  const mcInput = document.createElement('input');
+  mcInput.type = 'password'; mcInput.autocomplete = 'off';
+  Object.assign(mcInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  mcInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  mcInput.value = lsGet('METEO_CONCEPT_KEY') || '';
+  mcInput.onchange = () => { lsSet('METEO_CONCEPT_KEY', mcInput.value.trim()); showToast('METEO_CONCEPT_KEY sauvegardée.'); };
+  meteoCard.appendChild(mcLabel);
+  meteoCard.appendChild(mcInput);
+
+  const mcStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasMC = !!(lsGet('METEO_CONCEPT_KEY') || '').trim();
+  mcStatus.textContent = hasMC ? '✅ Clé présente' : '⚠️ Clé manquante — la vue Météo affichera un message';
+  mcStatus.style.color = hasMC ? '#5a9' : '#a66';
+  meteoCard.appendChild(mcStatus);
+  list.appendChild(meteoCard);
 
   // ── Section Recherche Web ──────────────────────────────────────────────────
   const searchCard = el('div', { background:'#101018', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
@@ -1099,38 +1126,60 @@ function renderSettings(container, state, rerender) {
   renderCustomSymList();
   list.appendChild(bourseCard);
 
-  // ── Section Musique / Spotify ──────────────────────────────────────────────
-  const musCard = el('div', { background:'#0a0015', border:'1px solid #9933FF33', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  mTitle.textContent = '🎵 Musique — Spotify Connect';
-  musCard.appendChild(mTitle);
-  const mDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  mDesc.innerHTML = 'Créer une app sur <a href="https://developer.spotify.com" target="_blank" style="color:#CC99FF">developer.spotify.com</a>. '
-    + 'OAuth PKCE côté PWA, SpotifyArduino côté ESP32.';
-  musCard.appendChild(mDesc);
+  // ── Section Musique — Spotify ──────────────────────────────────────────────
+  const spotifyCard = el('div', { background:'#001a0a', border:'1px solid #1DB95444', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const spTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px', color:'#1DB954' });
+  spTitle.textContent = '🎵 Spotify — Connexion OAuth';
+  spotifyCard.appendChild(spTitle);
 
-  [
-    { key: 'SPOTIFY_CLIENT_ID',     label: 'Client ID Spotify',     ph: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
-    { key: 'SPOTIFY_CLIENT_SECRET', label: 'Client Secret Spotify', ph: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
-  ].forEach(({ key, label, ph }) => {
-    const lEl = labelEl(label + ' (' + key + ')');
-    const inp = document.createElement('input');
-    inp.type = 'password'; inp.autocomplete = 'off';
-    Object.assign(inp.style, {
-      width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-      borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box',
-    });
-    inp.placeholder = ph;
-    inp.value = lsGet(key) || '';
-    inp.onchange = () => { lsSet(key, inp.value.trim()); showToast(key + ' sauvegardée.'); };
-    musCard.append(lEl, inp);
-    const statusDot = el('div', { fontSize:'11px', marginTop:'4px' });
-    const has = !!(lsGet(key) || '').trim();
-    statusDot.textContent = has ? '✅ Clé présente' : '⚠️ Clé manquante';
-    statusDot.style.color = has ? '#9933FF' : '#a66';
-    musCard.appendChild(statusDot);
+  const spDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  spDesc.innerHTML = 'Crée une application sur <a href="https://developer.spotify.com/dashboard" target="_blank" style="color:#1DB954">developer.spotify.com/dashboard</a>, '
+    + 'puis renseigne le Client ID et le Client Secret ci-dessous. '
+    + 'L\'URI de redirection à configurer dans le dashboard Spotify est l\'URL de cette page.';
+  spotifyCard.appendChild(spDesc);
+
+  const spIdLabel = labelEl('Client ID Spotify (SPOTIFY_CLIENT_ID)');
+  const spIdInput = document.createElement('input');
+  spIdInput.type = 'text'; spIdInput.autocomplete = 'off';
+  Object.assign(spIdInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
   });
-  list.appendChild(musCard);
+  spIdInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  spIdInput.value = lsGet('SPOTIFY_CLIENT_ID') || '';
+  spIdInput.onchange = () => { lsSet('SPOTIFY_CLIENT_ID', spIdInput.value.trim()); showToast('SPOTIFY_CLIENT_ID sauvegardé.'); };
+  spotifyCard.appendChild(spIdLabel);
+  spotifyCard.appendChild(spIdInput);
+
+  const spSecretLabel = labelEl('Client Secret Spotify (SPOTIFY_CLIENT_SECRET)');
+  const spSecretInput = document.createElement('input');
+  spSecretInput.type = 'password'; spSecretInput.autocomplete = 'off';
+  Object.assign(spSecretInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  spSecretInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  spSecretInput.value = lsGet('SPOTIFY_CLIENT_SECRET') || '';
+  spSecretInput.onchange = () => { lsSet('SPOTIFY_CLIENT_SECRET', spSecretInput.value.trim()); showToast('SPOTIFY_CLIENT_SECRET sauvegardé.'); };
+  spotifyCard.appendChild(spSecretLabel);
+  spotifyCard.appendChild(spSecretInput);
+
+  const spStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasSpId = !!(lsGet('SPOTIFY_CLIENT_ID') || '').trim();
+  spStatus.textContent = hasSpId ? '✅ Client ID présent — accès à l\'appli Musique pour lier le compte' : '⚠️ Clés manquantes — Spotify désactivé dans l\'app Musique';
+  spStatus.style.color = hasSpId ? '#1DB954' : '#a66';
+  spotifyCard.appendChild(spStatus);
+  list.appendChild(spotifyCard);
+
+  // ── Section Musique — Amazon Music ─────────────────────────────────────────
+  const amCard = el('div', { background:'#111', border:'1px solid #333', borderRadius:'10px', padding:'12px', marginTop:'4px', opacity:'0.6' });
+  const amTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px', color:'#666' });
+  amTitle.textContent = '📦 Amazon Music';
+  amCard.appendChild(amTitle);
+  const amDesc = el('div', { fontSize:'12px', color:'#555', lineHeight:'1.5' });
+  amDesc.textContent = 'Non disponible — DRM propriétaire, aucune API publique accessible aux développeurs tiers.';
+  amCard.appendChild(amDesc);
+  list.appendChild(amCard);
 
   // ── Section TTS ────────────────────────────────────────────────────────────
   const ttsCard = el('div', { background:'#0a0a1a', border:'1px solid #1a1a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
@@ -1147,21 +1196,53 @@ function renderSettings(container, state, rerender) {
 
   ttsCard.append(tTitle, ttsBadge);
 
-  // Moteur
-  const engLabel = labelEl('Moteur TTS');
-  const engSel = document.createElement('select');
-  Object.assign(engSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  [['browser', '🗣 Navigateur (offline, gratuit)'], ['gemini', '🌐 Gemini Cloud (voix naturelle)']].forEach(([val, lbl]) => {
-    const opt = document.createElement('option'); opt.value = val; opt.textContent = lbl;
-    if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === val) opt.selected = true;
-    engSel.appendChild(opt);
+  const cascadeLabel = labelEl('Cascade active (par ordre de priorité)');
+  const cascadeList = el('div', { display:'flex', flexDirection:'column', gap:'4px', marginBottom:'6px' });
+  const gemKeyOk  = !!(lsGet('GEMINI_API_KEY') || '').trim();
+  const groqKeyOk = !!(lsGet('GROQ_API_KEY')   || '').trim();
+  TTS_PROVIDERS.forEach((p, i) => {
+    const available = p.keyName === 'GEMINI_API_KEY' ? gemKeyOk
+                    : p.keyName === 'GROQ_API_KEY'   ? groqKeyOk
+                    : true;
+    const row = el('div', { display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', padding:'3px 6px', borderRadius:'5px',
+      background: available ? '#0d1a0d' : '#141414',
+      color:      available ? '#7ef'    : '#555' });
+    row.innerHTML = `<span style="color:#555;min-width:14px">${i + 1}.</span>`
+      + `<span style="flex:1">${p.label}</span>`
+      + `<span style="font-size:10px;color:#555">${p.quota}</span>`
+      + `<span style="font-size:10px;${available ? 'color:#5a9' : 'color:#a55'}">${available ? '✅' : '🔴 clé manquante'}</span>`;
+    cascadeList.appendChild(row);
   });
   engSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engSel.value); showToast('Moteur TTS : ' + engSel.value); rerender(); };
   ttsCard.append(engLabel, engSel);
 
-  // Voix browser
-  const voiceWrap = el('div', {});
-  const voiceLabel = labelEl('Voix navigateur (fallback)');
+  const gemVoiceLabel = labelEl('Voix Gemini TTS');
+  const gemVoiceSel = document.createElement('select');
+  Object.assign(gemVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedGemVoice = lsGet('NESTOR_TTS_VOICE_GEMINI') || 'Charon';
+  GEMINI_VOICES.forEach(v => {
+    const opt = document.createElement('option'); opt.value = v.name;
+    opt.textContent = v.name + ' — ' + v.hint;
+    if (v.name === savedGemVoice) opt.selected = true;
+    gemVoiceSel.appendChild(opt);
+  });
+  gemVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GEMINI', gemVoiceSel.value); showToast('Voix Gemini : ' + gemVoiceSel.value); };
+  ttsCard.append(gemVoiceLabel, gemVoiceSel);
+
+  const groqVoiceLabel = labelEl('Voix Groq PlayAI');
+  const groqVoiceSel = document.createElement('select');
+  Object.assign(groqVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedGroqVoice = lsGet('NESTOR_TTS_VOICE_GROQ') || 'Fritz-PlayAI';
+  GROQ_VOICES.forEach(v => {
+    const opt = document.createElement('option'); opt.value = v.name;
+    opt.textContent = v.name + ' — ' + v.hint;
+    if (v.name === savedGroqVoice) opt.selected = true;
+    groqVoiceSel.appendChild(opt);
+  });
+  groqVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GROQ', groqVoiceSel.value); showToast('Voix Groq : ' + groqVoiceSel.value); };
+  ttsCard.append(groqVoiceLabel, groqVoiceSel);
+
+  const voiceLabel = labelEl('Voix navigateur (fallback offline)');
   const voiceSel = document.createElement('select');
   Object.assign(voiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
   const savedVoice = lsGet('NESTOR_TTS_VOICE') || '';
@@ -1178,16 +1259,7 @@ function renderSettings(container, state, rerender) {
   voiceWrap.append(voiceLabel, voiceSel);
   ttsCard.appendChild(voiceWrap);
 
-  // ── STT (Groq Whisper) ────────────────────────────────────────────────────
-  const sttBadge = el('div', { fontSize:'11px', marginTop:'10px', padding:'4px 8px', borderRadius:'6px', display:'inline-block' });
-  const sttSt = getSTTStatus();
-  sttBadge.textContent = (sttSt.available ? '🎙 STT actif — ' : '⚠️ STT — ') + sttSt.reason;
-  sttBadge.style.background = sttSt.available ? '#0a1a10' : '#1a0a0a';
-  sttBadge.style.color       = sttSt.available ? '#5d9' : '#a66';
-  ttsCard.appendChild(sttBadge);
-
-  // Vitesse
-  const rateLabel = labelEl('Vitesse de lecture');
+  const rateLabel = labelEl('Vitesse de lecture (navigateur)');
   const rateRow = el('div', { display:'flex', alignItems:'center', gap:'10px' });
   const rateSlider = document.createElement('input');
   rateSlider.type = 'range'; rateSlider.min = '0.5'; rateSlider.max = '2.0'; rateSlider.step = '0.1';
@@ -1199,7 +1271,6 @@ function renderSettings(container, state, rerender) {
   rateRow.append(rateSlider, rateDisplay);
   ttsCard.append(rateLabel, rateRow);
 
-  // Bouton test
   const testBtn = btn('▶ Tester la voix', '', async () => {
     testBtn.disabled = true; testBtn.textContent = '⏳ Lecture…';
     try {
@@ -1211,7 +1282,6 @@ function renderSettings(container, state, rerender) {
   testBtn.style.marginTop = '8px';
   ttsCard.appendChild(testBtn);
 
-  // Mode silence
   const silentRow = el('div', { display:'flex', alignItems:'center', gap:'10px', marginTop:'8px' });
   const silentLabel = el('div', { fontSize:'12px', color:'#888', flex:'1' });
   silentLabel.textContent = '🔇 Mode silence global';
@@ -1340,298 +1410,73 @@ function renderSettings(container, state, rerender) {
   container.appendChild(list);
 }
 
-// ─── Bluetooth / Compagnon ESP32 ─────────────────────────────────────────────
-function buildBleSection(rerender) {
-  const card = el('div', { background:'#050b14', border:'1px solid #0d1f30', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
-  title.textContent = '🔵 Bluetooth / Compagnon ESP32';
-  card.appendChild(title);
+// ─── Hub View ─────────────────────────────────────────────────────────────────
+function renderHubView(container, state, rerender) {
+  const grid = el('div', { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' });
 
-  if (!bleAvailable()) {
-    const msg = el('div', { fontSize:'12px', color:'#888', lineHeight:'1.6', padding:'6px 0' });
-    msg.innerHTML = '⚠️ Web Bluetooth non disponible sur ce navigateur.<br>'
-      + 'Utilise <b>Chrome</b> ou <b>Edge</b> sur Android / desktop (pas Safari).';
-    card.appendChild(msg);
+  const mkCard = (icon, label, desc, onClick) => {
+    const card = el('div', {
+      background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px',
+      padding:'18px 10px', display:'flex', flexDirection:'column',
+      alignItems:'center', gap:'8px', cursor:'pointer', textAlign:'center',
+      userSelect:'none',
+    });
+    card.setAttribute('role', 'button');
+    const iconEl = el('span', { fontSize:'30px' }); iconEl.textContent = icon;
+    const lbl = el('div', { fontWeight:'600', fontSize:'13px', color:'#ddd' }); lbl.textContent = label;
+    const dsc = el('div', { fontSize:'11px', color:'#666', lineHeight:'1.3' }); dsc.textContent = desc;
+    card.append(iconEl, lbl, dsc);
+    card.addEventListener('pointerdown', () => { card.style.background = '#252525'; });
+    card.addEventListener('pointerleave', () => { card.style.background = '#1a1a1a'; });
+    card.addEventListener('pointerup', () => { card.style.background = '#1a1a1a'; onClick(); });
+    card.onclick = onClick;
     return card;
-  }
-
-  const statusEl = el('div', { fontSize:'13px', padding:'6px 0', marginBottom:'8px' });
-  const connectBtn = document.createElement('button');
-  Object.assign(connectBtn.style, {
-    width:'100%', borderRadius:'8px', padding:'9px 14px',
-    fontSize:'12px', fontWeight:'600', cursor:'pointer',
-  });
-
-  function refreshStatus() {
-    const ok = bleConnected();
-    const name = bleDeviceName() || 'Nestor';
-    statusEl.textContent = ok ? '🟢 Connecté — ' + name : '⚫ Non connecté';
-    statusEl.style.color = ok ? '#7ef' : '#666';
-    connectBtn.textContent = ok ? 'Déconnecter' : '🔵 Appairer le Compagnon ESP32';
-    Object.assign(connectBtn.style, {
-      background: ok ? '#2a1a1a' : '#071828',
-      color:      ok ? '#e87'    : '#7af',
-      border: '1px solid ' + (ok ? '#4a2a2a' : '#0d3a5a'),
-    });
-  }
-
-  connectBtn.onclick = async () => {
-    if (bleConnected()) {
-      await bleDisconnect();
-      setBleDisconnected();
-      refreshStatus();
-      rerender();
-    } else {
-      connectBtn.textContent = '⏳ Connexion en cours…';
-      connectBtn.disabled = true;
-      try {
-        const name = await bleConnect();
-        setBleConnected(name);
-        showToast('✅ Compagnon connecté : ' + name);
-      } catch (e) {
-        showToast('Connexion échouée : ' + e.message, true);
-      } finally {
-        connectBtn.disabled = false;
-      }
-      refreshStatus();
-      rerender();
-    }
   };
 
-  refreshStatus();
-  card.append(statusEl, connectBtn);
-
-  // Bouton "Oublier l'appareil" si l'API est disponible
-  if (navigator.bluetooth?.getDevices) {
-    const forgetBtn = el('button', '');
-    forgetBtn.textContent = '🗑 Oublier l\'appareil';
-    forgetBtn.style.cssText = 'background:none;border:none;color:#444;font-size:11px;cursor:pointer;padding:6px 0 0;display:block;';
-    forgetBtn.onclick = async () => {
-      try {
-        const devices = await navigator.bluetooth.getDevices();
-        for (const d of devices) { if (d.forget) await d.forget(); }
-        showToast('Appareils BLE oubliés.');
-      } catch (e) { showToast('Erreur : ' + e.message, true); }
-    };
-    card.appendChild(forgetBtn);
-  }
-
-  const note = el('div', { fontSize:'10px', color:'#2a3a4a', marginTop:'8px', lineHeight:'1.5' });
-  note.textContent = 'L\'ESP32 Compagnon doit s\'appeler "Nestor" et exposer le service BLE Nestor.';
-  card.appendChild(note);
-
-  return card;
-}
-
-// ─── WiFi config (stockage local, stub BLE) ───────────────────────────────────
-const LS_WIFI_NETWORKS = 'NESTOR_WIFI_NETWORKS';
-
-function loadWifiNetworks() {
-  return JSON.parse(lsGet(LS_WIFI_NETWORKS) || '[]');
-}
-
-function saveWifiNetworks(list) {
-  lsSet(LS_WIFI_NETWORKS, JSON.stringify(list));
-}
-
-function buildWifiConfigSection() {
-  const card = el('div', { background:'#0a0a14', border:'1px solid #1a1a2a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  title.textContent = '📶 WiFi — Réseaux enregistrés';
-  const desc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  desc.textContent = 'Ces réseaux seront envoyés au Compagnon ESP32 via BLE lors de la connexion. Mot de passe masqué par défaut.';
-  card.append(title, desc);
-
-  let networks = loadWifiNetworks();
-
-  // ── Liste des réseaux enregistrés ──────────────────────────────────────────
-  const networkList = el('div', { display:'flex', flexDirection:'column', gap:'6px' });
-  card.appendChild(networkList);
-
-  function refreshNetworkList() {
-    networkList.innerHTML = '';
-    networks = loadWifiNetworks();
-    if (networks.length === 0) {
-      const empty = el('div', { fontSize:'12px', color:'#444', padding:'4px 0' });
-      empty.textContent = 'Aucun réseau enregistré.';
-      networkList.appendChild(empty);
+  const orchestrator = state.agents.find(a => a.role === 'orchestrator');
+  grid.appendChild(mkCard('🧠', 'Nestor', 'Votre assistant IA', () => {
+    if (orchestrator) {
+      state.activeAgent = orchestrator;
+      const hist = loadChatHistory(orchestrator.id);
+      state.chatHistory = [{ role:'system', content: orchestrator.system_prompt || '' }, ...hist];
     }
-    networks.forEach((net, i) => {
-      const row = el('div', { display:'flex', alignItems:'center', gap:'8px', background:'#111', border:'1px solid #1e1e1e', borderRadius:'8px', padding:'8px 10px' });
-      const ssidEl = el('div', { flex:'1', fontSize:'13px', color:'#ccc', fontWeight:'500' });
-      ssidEl.textContent = '📶 ' + net.ssid;
-      const pwdEl = el('div', { fontSize:'11px', color:'#555', fontFamily:'monospace' });
-      let shown = false;
-      pwdEl.textContent = net.password ? '••••••••' : '(aucun)';
-      const eyeBtn = el('button', '');
-      eyeBtn.textContent = '👁';
-      eyeBtn.style.cssText = 'background:none;border:none;color:#555;cursor:pointer;padding:2px 4px;font-size:14px;';
-      eyeBtn.onclick = () => {
-        shown = !shown;
-        pwdEl.textContent = shown ? (net.password || '') : '••••••••';
-        eyeBtn.textContent = shown ? '🙈' : '👁';
-      };
-      const delBtn = el('button', '');
-      delBtn.textContent = '✕';
-      delBtn.style.cssText = 'background:none;border:none;color:#f66;font-size:14px;cursor:pointer;padding:2px 6px;';
-      delBtn.onclick = () => {
-        networks.splice(i, 1);
-        saveWifiNetworks(networks);
-        showToast('Réseau supprimé.');
-        refreshNetworkList();
-        refreshChips();
-      };
-      row.append(ssidEl, pwdEl, eyeBtn, delBtn);
-      networkList.appendChild(row);
-    });
-  }
+    state.view = 'chat';
+    rerender();
+  }));
 
-  // ── Formulaire ajout / mise à jour ─────────────────────────────────────────
-  const formLabel = labelEl('Ajouter ou mettre à jour un réseau');
-  card.appendChild(formLabel);
+  grid.appendChild(mkCard('🚨', 'Radars', 'Surveillance & alertes', () => {
+    state._radarPrevView = 'hub';
+    state.view = 'radar';
+    rerender();
+  }));
 
-  // Chips de réseaux déjà enregistrés (pré-remplissage SSID)
-  const chipsWrap = el('div', { display:'flex', flexWrap:'wrap', gap:'5px', marginBottom:'6px' });
-  card.appendChild(chipsWrap);
+  grid.appendChild(mkCard('🌤', 'Météo', 'Prévisions météo', () => {
+    state.view = 'meteo';
+    rerender();
+  }));
 
-  const ssidInput = document.createElement('input');
-  ssidInput.type = 'text'; ssidInput.placeholder = 'Nom du réseau (SSID)';
-  Object.assign(ssidInput.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'7px 10px', fontSize:'13px', boxSizing:'border-box',
+  grid.appendChild(mkCard('📈', 'Bourse', 'Marchés financiers', () => {
+    state._boursePrevView = 'hub';
+    state.view = 'bourse';
+    rerender();
+  }));
+
+  container.appendChild(grid);
+
+  const musiqueCard = mkCard('🎵', 'Musique', 'Lecteur AirPlay / SD / Spotify', () => {
+    state.view = 'musique';
+    rerender();
   });
-  card.appendChild(ssidInput);
+  musiqueCard.style.marginTop = '12px';
+  container.appendChild(musiqueCard);
 
-  function refreshChips() {
-    chipsWrap.innerHTML = '';
-    networks = loadWifiNetworks();
-    for (const net of networks) {
-      const chip = el('button', '');
-      chip.textContent = '📶 ' + net.ssid;
-      chip.style.cssText = 'background:#111;border:1px solid #2a2a3a;color:#888;border-radius:12px;padding:3px 10px;font-size:11px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
-      chip.onclick = () => { ssidInput.value = net.ssid; ssidInput.focus(); };
-      chip.title = 'Cliquer pour pré-remplir le SSID';
-      chipsWrap.appendChild(chip);
-    }
-  }
-
-  const pwdRow = el('div', { display:'flex', gap:'6px', alignItems:'center', marginTop:'6px' });
-  const pwdInput = document.createElement('input');
-  pwdInput.type = 'password'; pwdInput.placeholder = 'Mot de passe';
-  Object.assign(pwdInput.style, {
-    flex:'1', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'7px 10px', fontSize:'13px',
+  // Carte Réglages — accès depuis le hub (bug #5)
+  const settingsCard = mkCard('⚙️', 'Réglages', 'Clés API, TTS, préférences', () => {
+    state.view = 'settings';
+    rerender();
   });
-  let pwdVisible = false;
-  const pwdEye = el('button', '');
-  pwdEye.textContent = '👁';
-  pwdEye.style.cssText = 'background:none;border:none;color:#555;cursor:pointer;font-size:16px;padding:4px;flex-shrink:0;';
-  pwdEye.onclick = () => {
-    pwdVisible = !pwdVisible;
-    pwdInput.type = pwdVisible ? 'text' : 'password';
-    pwdEye.textContent = pwdVisible ? '🙈' : '👁';
-  };
-  pwdRow.append(pwdInput, pwdEye);
-  card.appendChild(pwdRow);
-
-  const addBtn = btn('+ Enregistrer', 'primary', () => {
-    const ssid = ssidInput.value.trim();
-    const pwd  = pwdInput.value;
-    if (!ssid) { showToast('Le SSID est requis.', true); return; }
-    networks = loadWifiNetworks();
-    const existingIdx = networks.findIndex(n => n.ssid === ssid);
-    if (existingIdx >= 0) {
-      networks[existingIdx].password = pwd;
-      showToast('Réseau "' + ssid + '" mis à jour.');
-    } else {
-      networks.push({ ssid, password: pwd });
-      showToast('Réseau "' + ssid + '" enregistré.');
-    }
-    saveWifiNetworks(networks);
-    ssidInput.value = '';
-    pwdInput.value = '';
-    refreshNetworkList();
-    refreshChips();
-  });
-  addBtn.style.marginTop = '6px';
-  card.appendChild(addBtn);
-
-  const bleNote = el('div', { fontSize:'10px', color:'#333', marginTop:'6px', lineHeight:'1.4' });
-  bleNote.textContent = '⚡ Envoi au Compagnon ESP32 via BLE lors de l\'appairage.';
-  card.appendChild(bleNote);
-
-  refreshNetworkList();
-  refreshChips();
-  return card;
-}
-
-// ─── Toggles Applications ─────────────────────────────────────────────────────
-const LS_APP_TOGGLES = 'NESTOR_APP_TOGGLES';
-
-const APP_LIST = [
-  { key:'nestor', label:'Nestor', icon:'🧠', desc:'Chat avec l\'assistant IA' },
-  { key:'radar',  label:'Radars', icon:'🚨', desc:'Surveillance trafic' },
-  { key:'bourse', label:'Bourse', icon:'📈', desc:'Marchés financiers' },
-  { key:'meteo',  label:'Météo',  icon:'🌤', desc:'Prévisions météo' },
-];
-
-function buildAppTogglesSection(state, rerender) {
-  const card = el('div', { background:'#0e100e', border:'1px solid #1a2a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const title = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  title.textContent = '📱 Applications';
-  const desc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  desc.textContent = 'Activer ou désactiver chaque app dans la PWA (écran d\'accueil) et sur l\'ESP32.';
-  card.append(title, desc);
-
-  const toggles = JSON.parse(lsGet(LS_APP_TOGGLES) || '{}');
-  const save = () => lsSet(LS_APP_TOGGLES, JSON.stringify(toggles));
-
-  const header = el('div', { display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:'#444', marginBottom:'6px', paddingLeft:'4px' });
-  header.innerHTML = '<span style="flex:1"></span><span style="width:48px;text-align:center">PWA</span><span style="width:48px;text-align:center">ESP32</span>';
-  card.appendChild(header);
-
-  for (const app of APP_LIST) {
-    const row = el('div', { display:'flex', alignItems:'center', gap:'8px', padding:'6px 4px', borderBottom:'1px solid #111' });
-    const iconEl = el('span', { fontSize:'18px', flexShrink:'0' }); iconEl.textContent = app.icon;
-    const labelCol = el('div', { flex:'1', minWidth:'0' });
-    const lblEl = el('div', { fontSize:'13px', color:'#ccc' }); lblEl.textContent = app.label;
-    const subEl = el('div', { fontSize:'10px', color:'#444' }); subEl.textContent = app.desc;
-    labelCol.append(lblEl, subEl);
-
-    const mkToggle = (stateKey) => {
-      const isOn = () => toggles[stateKey] !== false;
-      const togBtn = el('button', '');
-      const refresh = () => {
-        togBtn.textContent = isOn() ? 'ON' : 'OFF';
-        Object.assign(togBtn.style, {
-          width:'44px', padding:'4px 0', border:'none', borderRadius:'10px', fontSize:'11px',
-          fontWeight:'600', cursor:'pointer',
-          background: isOn() ? '#1a3a1a' : '#1a1a1a',
-          color:      isOn() ? '#7ef'    : '#555',
-        });
-      };
-      togBtn.onclick = () => {
-        toggles[stateKey] = !isOn();
-        save();
-        refresh();
-        rerender();
-      };
-      refresh();
-      return togBtn;
-    };
-
-    const pwaToggle  = mkToggle(app.key + '_pwa');
-    const espToggle  = mkToggle(app.key + '_esp32');
-    const pwaWrap  = el('div', { width:'48px', display:'flex', justifyContent:'center' });
-    const espWrap  = el('div', { width:'48px', display:'flex', justifyContent:'center' });
-    pwaWrap.appendChild(pwaToggle);
-    espWrap.appendChild(espToggle);
-
-    row.append(iconEl, labelCol, pwaWrap, espWrap);
-    card.appendChild(row);
-  }
-
-  return card;
+  settingsCard.style.marginTop = '8px';
+  container.appendChild(settingsCard);
 }
 
 // ─── Utilitaires DOM ──────────────────────────────────────────────────────────
