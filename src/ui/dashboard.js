@@ -11,7 +11,7 @@ import { getSTTStatus } from '../api/stt.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
 import { renderBourseView, cleanupBourseView } from './bourse-view.js';
-import { renderMeteoView, cleanupMeteoView } from './meteo-view.js';
+import { renderMusiqueView, cleanupMusiqueView } from './musique-view.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
@@ -47,9 +47,9 @@ export function renderDashboard(container, state, rerender) {
   if (state.view === 'chat' && state.activeAgent) { renderChatView(container, state, rerender); return; }
   if (state.view === 'edit' && state.editingAgent) { renderEditView(container, state, rerender); return; }
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
-  if (state.view === 'radar') { renderRadarSection(container, state, rerender); return; }
-  if (state.view === 'bourse') { renderBourseSection(container, state, rerender); return; }
-  if (state.view === 'meteo') { renderMeteoSection(container, state, rerender); return; }
+  if (state.view === 'radar')   { renderRadarSection(container, state, rerender); return; }
+  if (state.view === 'bourse')  { renderBourseSection(container, state, rerender); return; }
+  if (state.view === 'musique') { renderMusiqueSection(container, state, rerender); return; }
 
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
@@ -116,6 +116,25 @@ function renderRadarSection(container, state, rerender) {
     state.view = state._radarPrevView || 'chat';
     rerender();
   });
+}
+
+// ─── Musique section ──────────────────────────────────────────────────────────
+function renderMusiqueSection(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '🎵 Musique — AirPlay & SD';
+  header.appendChild(title);
+  const backBtn = btn('← Retour', '', () => {
+    cleanupMusiqueView();
+    state.view = state._musiquePrevView || 'chat';
+    rerender();
+  });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const body = el('div', {});
+  container.appendChild(body);
+  renderMusiqueView(body, state, rerender);
 }
 
 // ─── Bourse section ───────────────────────────────────────────────────────────
@@ -1016,82 +1035,38 @@ function renderSettings(container, state, rerender) {
   renderCustomSymList();
   list.appendChild(bourseCard);
 
-  // ── Section Météo ─────────────────────────────────────────────────────────
-  const meteoCard = el('div', { background:'#070d14', border:'1px solid #1a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  // ── Section Musique / Spotify ──────────────────────────────────────────────
+  const musCard = el('div', { background:'#0a0015', border:'1px solid #9933FF33', borderRadius:'10px', padding:'12px', marginTop:'4px' });
   const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  mTitle.textContent = '🌤 Météo — Meteo-Concept';
-  meteoCard.appendChild(mTitle);
-
+  mTitle.textContent = '🎵 Musique — Spotify Connect';
+  musCard.appendChild(mTitle);
   const mDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  mDesc.innerHTML = 'Prévisions quotidiennes France. Clé gratuite sur <a href="https://api.meteo-concept.com" target="_blank" style="color:#5af">api.meteo-concept.com</a>.';
-  meteoCard.appendChild(mDesc);
+  mDesc.innerHTML = 'Créer une app sur <a href="https://developer.spotify.com" target="_blank" style="color:#CC99FF">developer.spotify.com</a>. '
+    + 'OAuth PKCE côté PWA, SpotifyArduino côté ESP32.';
+  musCard.appendChild(mDesc);
 
-  const mcLabel = labelEl('Clé API Meteo-Concept (METEO_CONCEPT_KEY)');
-  const mcInput = document.createElement('input');
-  mcInput.type = 'password'; mcInput.autocomplete = 'off';
-  Object.assign(mcInput.style, {
-    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  [
+    { key: 'SPOTIFY_CLIENT_ID',     label: 'Client ID Spotify',     ph: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
+    { key: 'SPOTIFY_CLIENT_SECRET', label: 'Client Secret Spotify', ph: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
+  ].forEach(({ key, label, ph }) => {
+    const lEl = labelEl(label + ' (' + key + ')');
+    const inp = document.createElement('input');
+    inp.type = 'password'; inp.autocomplete = 'off';
+    Object.assign(inp.style, {
+      width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+      borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box',
+    });
+    inp.placeholder = ph;
+    inp.value = lsGet(key) || '';
+    inp.onchange = () => { lsSet(key, inp.value.trim()); showToast(key + ' sauvegardée.'); };
+    musCard.append(lEl, inp);
+    const statusDot = el('div', { fontSize:'11px', marginTop:'4px' });
+    const has = !!(lsGet(key) || '').trim();
+    statusDot.textContent = has ? '✅ Clé présente' : '⚠️ Clé manquante';
+    statusDot.style.color = has ? '#9933FF' : '#a66';
+    musCard.appendChild(statusDot);
   });
-  mcInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
-  mcInput.value = lsGet('METEO_CONCEPT_KEY') || '';
-  mcInput.onchange = () => { lsSet('METEO_CONCEPT_KEY', mcInput.value.trim()); showToast('METEO_CONCEPT_KEY sauvegardée.'); };
-  meteoCard.appendChild(mcLabel);
-  meteoCard.appendChild(mcInput);
-
-  const mcStatus = el('div', { fontSize:'11px', marginTop:'4px' });
-  const hasMC = !!(lsGet('METEO_CONCEPT_KEY') || '').trim();
-  mcStatus.textContent = hasMC ? '✅ Clé présente' : '⚠️ Clé manquante — la vue Météo affichera un message';
-  mcStatus.style.color = hasMC ? '#5a9' : '#a66';
-  meteoCard.appendChild(mcStatus);
-  list.appendChild(meteoCard);
-
-  // ── Section Gemini API ────────────────────────────────────────────────────
-  const geminiCard = el('div', { background:'#0a0e18', border:'1px solid #1a2a4a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const gTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
-  gTitle.textContent = '✨ Gemini API (TTS + LLM)';
-  geminiCard.appendChild(gTitle);
-
-  const gDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
-  gDesc.innerHTML = 'Utilisé pour TTS naturel (3.1 → 2.5-pro → 2.5-flash) et optionnellement LLM.<br>'
-    + 'Clé gratuite sur <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#5af">aistudio.google.com</a>.';
-  geminiCard.appendChild(gDesc);
-
-  const gkLabel = labelEl('Clé API Gemini (GEMINI_API_KEY)');
-  const gkInput = document.createElement('input');
-  gkInput.type = 'password'; gkInput.autocomplete = 'off';
-  Object.assign(gkInput.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box' });
-  gkInput.placeholder = 'AIzaSy...';
-  gkInput.value = lsGet('GEMINI_API_KEY') || '';
-  gkInput.onchange = () => { lsSet('GEMINI_API_KEY', gkInput.value.trim()); showToast('GEMINI_API_KEY sauvegardée.'); rerender(); };
-  geminiCard.append(gkLabel, gkInput);
-
-  const gkStatus = el('div', { fontSize:'11px', marginTop:'4px', marginBottom:'10px' });
-  const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
-  gkStatus.textContent = hasGemini ? '✅ Clé présente' : '⚠️ Clé manquante — TTS Gemini désactivé';
-  gkStatus.style.color = hasGemini ? '#5a9' : '#a66';
-  geminiCard.appendChild(gkStatus);
-
-  // Voix Gemini
-  const gvLabel = labelEl('Voix Gemini TTS (NESTOR_GEMINI_VOICE)');
-  const gvSel = document.createElement('select');
-  Object.assign(gvSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
-    borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  const savedGVoice = lsGet('NESTOR_GEMINI_VOICE') || 'Charon';
-  GEMINI_VOICES.forEach(v => {
-    const opt = document.createElement('option'); opt.value = v.name;
-    opt.textContent = v.label;
-    if (v.name === savedGVoice) opt.selected = true;
-    gvSel.appendChild(opt);
-  });
-  gvSel.onchange = () => { lsSet('NESTOR_GEMINI_VOICE', gvSel.value); showToast('Voix Gemini : ' + gvSel.value); };
-  geminiCard.append(gvLabel, gvSel);
-
-  const gvHint = el('div', { fontSize:'10px', color:'#555', marginTop:'4px' });
-  gvHint.textContent = 'Chain : gemini-3.1-flash-preview-tts → 2.5-pro → 2.5-flash (quotas distincts) → navigateur';
-  geminiCard.appendChild(gvHint);
-  list.appendChild(geminiCard);
+  list.appendChild(musCard);
 
   // ── Section TTS ────────────────────────────────────────────────────────────
   const ttsCard = el('div', { background:'#0a0a1a', border:'1px solid #1a1a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });

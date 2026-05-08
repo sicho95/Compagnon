@@ -2,6 +2,7 @@ import { loadAgents, loadChatHistory } from './storage/agents-db.js';
 import { initBackends } from './api/backends.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { cleanupRadarView } from './ui/radar-view.js';
+import { cleanupMusiqueView } from './ui/musique-view.js';
 
 async function main() {
   const root = document.getElementById('app-root');
@@ -30,22 +31,21 @@ async function main() {
       ? [{ role: 'system', content: orchestrator.system_prompt || '' }]
       : [],
     menuOpen: false,
-    _radarPrevView: 'chat',
-    _boursePrevView: 'chat',
-    _meteoPrevView: 'chat',
+    _radarPrevView:   'chat',
+    _boursePrevView:  'chat',
+    _musiquePrevView: 'chat',
   };
 
   renderFrame(root, state);
 }
 
 export function renderFrame(root, state) {
-  const safeViews = ['agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'meteo'];
+  const safeViews = ['agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'musique'];
   if (!safeViews.includes(state.view)) state.view = 'chat';
 
-  // Nettoyage radar si on quitte la vue
-  if (state._prevView === 'radar' && state.view !== 'radar') {
-    cleanupRadarView();
-  }
+  // Nettoyage vues spéciales à la sortie
+  if (state._prevView === 'radar'   && state.view !== 'radar')   cleanupRadarView();
+  if (state._prevView === 'musique' && state.view !== 'musique') cleanupMusiqueView();
   state._prevView = state.view;
 
   root.innerHTML = '';
@@ -67,6 +67,7 @@ export function renderFrame(root, state) {
     bourse: '📈 Bourse',
     meteo: '🌤 Météo',
     agents: '🤖 Agents',
+    musique: '🎵 Musique',
   };
   titleEl.textContent = titles[state.view] || '🤖 Agents';
 
@@ -193,12 +194,12 @@ export function renderFrame(root, state) {
       rerender();
     }, state.view === 'bourse'));
 
-    drawer.appendChild(mkItem('🌤', 'Météo', () => {
-      state._meteoPrevView = state.view;
-      state.view = 'meteo';
+    drawer.appendChild(mkItem('🎵', 'Musique', () => {
+      state._musiquePrevView = state.view;
+      state.view = 'musique';
       state.menuOpen = false;
       rerender();
-    }, state.view === 'meteo'));
+    }, state.view === 'musique'));
 
     const sep3 = document.createElement('div');
     sep3.style.cssText = 'height:1px;background:#1a1a1a;margin:6px 0;';

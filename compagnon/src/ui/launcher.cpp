@@ -6,10 +6,11 @@
 #include "../apps/radars/radar_app.h"
 #include "../apps/bourse/bourse_app.h"
 #include "../apps/meteo/meteo_app.h"
+#include "../apps/musique/musique_app.h"
+#include "../net/ble_mgr.h"
 
-#define APP_COUNT       4
-#define LONG_MS         800
-#define BTN_DEBOUNCE_MS 15   // debounce 15 ms pour latence minimale
+#define APP_COUNT 5
+#define LONG_MS   800
 
 struct AppEntry {
     const char *label;
@@ -23,10 +24,11 @@ struct AppEntry {
 
 // palette AMOLED cohérente avec les apps respectives
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",     0x1a237e, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
-    { "Radars",  "Alertes routieres",0x7f0000, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
-    { "Bourse",  "Marches & Actifs", 0x4a3000, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
-    { "Meteo",   "Previsions",       0x1b5e20, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
+    { "Nestor",  "IA Compagnon",     0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
+    { "Radars",  "Alertes routieres",0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
+    { "Bourse",  "Marches & Actifs", 0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
+    { "Meteo",   "Previsions",       0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
+    { "Musique", "AirPlay & SD",     0x1b0030, 0xCC99FF, LV_SYMBOL_AUDIO,   musique_app_start },
 };
 
 static lv_obj_t *scr_launcher   = nullptr;
@@ -325,8 +327,9 @@ void ui_launcher_init() {
     pinMode(BTN_LEFT,  INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
 
-    // activer l'opacité focus sur la tuile 0 au démarrage
-    update_tile_opacities(0);
+    // Relier les commandes BLE music: à l'app Musique
+    ble_mgr_set_music_cb(musique_ble_cmd);
+
     lv_scr_load(scr_launcher);
     add_screen_border();   // bordure noire par-dessus tout (lv_layer_sys)
 

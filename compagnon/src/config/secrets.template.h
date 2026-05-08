@@ -11,19 +11,15 @@
 #define WIFI_AP_SSID "Compagnon_Setup"
 #define WIFI_AP_PSK "compagnon"
 
-// OTA (Over-The-Air)
-#define OTA_PASSWORD "nestor_ota"
+// Clés API — peuvent aussi être saisies via le portail captif
+// et seront stockées en NVS chiffré sur l'ESP32
+#define API_KEY_GROQ        ""   // console.groq.com
+#define API_KEY_GEMINI      ""   // aistudio.google.com (TTS)
+#define API_KEY_METEO       ""   // api.meteo-concept.com
+#define API_KEY_SERPER      ""   // serper.dev (recherche web)
+#define API_KEY_TWELVEDATA  ""   // twelvedata.com (bourse)
 
-// CLÉS API — LLM & TTS
-#define GROQ_API_KEY "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"
-#define GEMINI_API_KEY "AIzaSyDMBEwJgGppWbTJTFF8_MAWgE7XdxYtB-g"
-
-// CLÉS API — RECHERCHE & MÉTÉO
-#define SERPER_KEY "6fd048bcdbe579b4ec53204dd2fb3be0e578c917"
-#define API_KEY_METEO "7600de4c129fda32c9b2ba08daf3e7a66bb46267d3da08ba0287ce7d4f046748"
-
-// CLÉS API — FINANCIER
-#define TWELVE_DATA_KEY "efdaf662ac614e4288bea0c5de0bdf77"
-#define FINNHUB_KEY "YOUR_FINNHUB_KEY_HERE"
-
-#endif // __SECRETS_H__
+// Spotify Connect — créer une app sur developer.spotify.com
+// Redirect URI à déclarer : http://localhost / ou l'URL de la PWA
+#define SPOTIFY_CLIENT_ID     ""
+#define SPOTIFY_CLIENT_SECRET ""
