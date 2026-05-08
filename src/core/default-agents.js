@@ -215,5 +215,28 @@ Ton travail :
 
 Si les résultats semblent pauvres ou hors-sujet, le signaler clairement.`,
     }),
+    {
+      ...makeAgent({
+        id: 'maison',
+        name: 'Maison',
+        role: 'maison',
+        description: 'Contrôle domotique — ampoules Alexa et aspirateur Ecovacs',
+        tags: ['domotique', 'alexa', 'ecovacs', 'maison', 'smart-home'],
+        memory_profile: { level: 'normal', scope: 'domotique' },
+        system_prompt: `Tu es l'agent domotique de Nestor. Tu contrôles :
+- Les appareils connectés via Alexa Smart Home (ampoules, prises, etc.)
+- L'aspirateur robot Ecovacs Deebot
+
+Quand l'utilisateur donne une commande domotique :
+1. Identifie l'appareil et l'action (allumer, éteindre, couleur, luminosité, démarrer, pause, base, statut)
+2. Appelle la fonction disponible correspondante
+3. Confirme en français en une phrase courte
+
+Tu réponds toujours en français. Tu es concis.`,
+      }),
+      emoji: '🏠',
+      color: '#1a3a1a',
+      tools: ['alexa_control', 'ecovacs_control'],
+    },
   ];
 }

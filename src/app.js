@@ -2,7 +2,7 @@ import { loadAgents, loadChatHistory } from './storage/agents-db.js';
 import { initBackends } from './api/backends.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { cleanupRadarView } from './ui/radar-view.js';
-import { cleanupMusiqueView } from './ui/musique-view.js';
+import { alexa_exchange_code } from './api/alexa.js';
 
 async function main() {
   const root = document.getElementById('app-root');
@@ -11,6 +11,20 @@ async function main() {
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('./service-worker.js'); }
     catch (e) { console.warn('[Nestor] SW:', e); }
+  }
+
+  // Callback OAuth Alexa : échange le code si présent dans l'URL
+  const _urlParams  = new URLSearchParams(window.location.search);
+  const _alexaCode  = _urlParams.get('code');
+  const _alexaState = _urlParams.get('state');
+  if (_alexaCode && _alexaState?.startsWith('nestor-alexa-')) {
+    try {
+      await alexa_exchange_code(_alexaCode);
+      window.history.replaceState({}, '', window.location.pathname);
+      console.info('[Nestor] Alexa OAuth : tokens reçus et stockés.');
+    } catch (e) {
+      console.warn('[Nestor] OAuth Alexa callback :', e.message);
+    }
   }
 
   try { await initBackends(); }
@@ -154,6 +168,7 @@ export function renderFrame(root, state) {
       const ICONS = {
         'monthly-payments': '📅', 'pea-portfolio': '📈', stories: '📚',
         research: '🔍', 'web-search': '🌐', 'web-analyst': '🔎', generic: '🤖',
+        maison: '🏠',
       };
       otherAgents.forEach(a => {
         drawer.appendChild(mkItem(

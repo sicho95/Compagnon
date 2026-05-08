@@ -150,7 +150,7 @@ function waitForPuter(timeout = 8000) {
 
 // ─── callLLM ──────────────────────────────────────────────────────────────────
 
-export async function callLLM(backendId, { messages, agentConfig }) {
+export async function callLLM(backendId, { messages, agentConfig, tools }) {
   const cfg = activeBackends[backendId] || activeBackends['groq-llama'];
   if (!cfg) throw new Error('Aucun backend LLM disponible.');
 
@@ -177,7 +177,7 @@ export async function callLLM(backendId, { messages, agentConfig }) {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: 'Bearer ' + apiKey } : {}),
       },
-      body:   JSON.stringify({ model: cfg.model, messages }),
+      body:   JSON.stringify({ model: cfg.model, messages, ...(tools?.length ? { tools } : {}) }),
       signal: AbortSignal.timeout(30000),
     });
 

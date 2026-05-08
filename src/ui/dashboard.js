@@ -11,12 +11,14 @@ import { getSTTStatus } from '../api/stt.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
 import { renderBourseView, cleanupBourseView } from './bourse-view.js';
-import { renderMusiqueView, cleanupMusiqueView } from './musique-view.js';
+import { ALEXA_TOOLS, alexa_control, alexa_auth_url } from '../api/alexa.js';
+import { ECOVACS_TOOLS, ecovacs_control, ecovacs_login } from '../api/ecovacs.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
   'monthly-payments': '📅', 'pea-portfolio': '📈', stories: '📚',
   research: '🔍', 'web-search': '🌐', 'web-analyst': '🔎', generic: '🤖',
+  maison: '🏠',
 };
 function roleIcon(role) { return ROLE_ICONS[role] || '🤖'; }
 function tag(text, color) {
@@ -485,6 +487,10 @@ function renderChatView(container, state, rerender) {
         }
         state.chatHistory.push({ role:'assistant', content: reply, _orchestrated: true, _strategy: strategy });
 
+      } else if (agent.role === 'maison') {
+        reply = await runMaisonAgent(agent, state.chatHistory);
+        state.chatHistory.push({ role:'assistant', content: reply });
+
       } else if (agent.role === ROLES.WEB_ANALYST || agent.role === ROLES.WEB_SEARCH) {
         const subQueries = splitIntoSubQueries(msg);
         let context;
@@ -561,6 +567,43 @@ function splitIntoSubQueries(query) {
     if (parts.length >= 2) return parts;
   }
   return [query];
+}
+
+// ─── Agent Maison — boucle tool-calling Alexa/Ecovacs ────────────────────────
+async function runMaisonAgent(agent, chatHistory) {
+  const prefs      = (agent.preferences || []).join('\n');
+  const sysContent = agent.system_prompt + (prefs ? `\n\nPréférences :\n${prefs}` : '');
+  const tools      = [...ALEXA_TOOLS, ...ECOVACS_TOOLS];
+
+  // Construit les messages avec l'historique multi-tours (sans le message system dupliqué)
+  const messages = [
+    { role: 'system', content: sysContent },
+    ...chatHistory.filter(m => m.role !== 'system'),
+  ];
+
+  let choice = await callLLM(agent.backendId || 'groq-llama', { messages, agentConfig: agent, tools });
+
+  // Boucle d'exécution des tool_calls jusqu'à réponse texte finale
+  while (choice?.message?.tool_calls?.length) {
+    messages.push(choice.message);
+
+    for (const tc of choice.message.tool_calls) {
+      let result;
+      try {
+        const args = JSON.parse(tc.function.arguments || '{}');
+        if      (tc.function.name === 'alexa_control')    result = await alexa_control(args);
+        else if (tc.function.name === 'ecovacs_control')  result = await ecovacs_control(args);
+        else result = { error: 'Outil inconnu : ' + tc.function.name };
+      } catch (e) {
+        result = { error: e.message };
+      }
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+    }
+
+    choice = await callLLM(agent.backendId || 'groq-llama', { messages, agentConfig: agent });
+  }
+
+  return choice?.message?.content || '(pas de réponse)';
 }
 
 // ─── Fabrique View ────────────────────────────────────────────────────────────
@@ -1162,6 +1205,116 @@ function renderSettings(container, state, rerender) {
   silentRow.append(silentLabel, silentToggle);
   ttsCard.appendChild(silentRow);
   list.appendChild(ttsCard);
+
+  // ── Section Maison / Domotique ─────────────────────────────────────────────
+  const maisonCard = el('div', { background:'#0a1a0a', border:'1px solid #1a3a1a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
+  mTitle.textContent = '🏠 Maison / Domotique';
+  maisonCard.appendChild(mTitle);
+
+  // ── Alexa Smart Home ──────────────────────────────────────────────────────
+  const alexaSection = el('div', { marginBottom:'12px' });
+  const alexaSectionTitle = el('div', { fontSize:'12px', color:'#7af', fontWeight:'600', marginBottom:'6px' });
+  alexaSectionTitle.textContent = 'Alexa Smart Home';
+  alexaSection.appendChild(alexaSectionTitle);
+
+  const hasAlexaToken = !!(lsGet('ALEXA_ACCESS_TOKEN') || '').trim();
+  const alexaStatus = el('div', { fontSize:'11px', marginBottom:'8px', padding:'3px 8px', borderRadius:'5px', display:'inline-block',
+    background: hasAlexaToken ? '#0d1a0d' : '#1a0d0d',
+    color:      hasAlexaToken ? '#5a9'    : '#a55' });
+  alexaStatus.textContent = hasAlexaToken ? '✅ Alexa connecté' : '⚫ Non connecté';
+  alexaSection.appendChild(alexaStatus);
+
+  const alexaClientIdLabel = labelEl('ALEXA_CLIENT_ID (ID client LWA)');
+  const alexaClientIdInp = document.createElement('input');
+  alexaClientIdInp.type = 'text'; alexaClientIdInp.autocomplete = 'off';
+  Object.assign(alexaClientIdInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box',
+  });
+  alexaClientIdInp.placeholder = 'amzn1.application-oa2-client.xxx';
+  alexaClientIdInp.value = lsGet('ALEXA_CLIENT_ID') || '';
+  alexaClientIdInp.onchange = () => { lsSet('ALEXA_CLIENT_ID', alexaClientIdInp.value.trim()); showToast('ALEXA_CLIENT_ID sauvegardé.'); };
+  alexaSection.append(alexaClientIdLabel, alexaClientIdInp);
+
+  const alexaSecretLabel = labelEl('ALEXA_CLIENT_SECRET');
+  const alexaSecretInp = document.createElement('input');
+  alexaSecretInp.type = 'password'; alexaSecretInp.autocomplete = 'off';
+  Object.assign(alexaSecretInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box', marginBottom:'8px',
+  });
+  alexaSecretInp.placeholder = '••••••••••••••••';
+  alexaSecretInp.value = lsGet('ALEXA_CLIENT_SECRET') || '';
+  alexaSecretInp.onchange = () => { lsSet('ALEXA_CLIENT_SECRET', alexaSecretInp.value.trim()); showToast('ALEXA_CLIENT_SECRET sauvegardé.'); };
+  alexaSection.append(alexaSecretLabel, alexaSecretInp);
+
+  const alexaConnectBtn = btn('🔗 Connecter Alexa (OAuth)', 'primary', () => {
+    try {
+      const url = alexa_auth_url();
+      window.location.href = url;
+    } catch (e) {
+      showToast('Erreur OAuth Alexa : ' + e.message, true);
+    }
+  });
+  alexaSection.appendChild(alexaConnectBtn);
+  maisonCard.appendChild(alexaSection);
+
+  // ── Séparateur ─────────────────────────────────────────────────────────────
+  const sep = el('div', { height:'1px', background:'#1a2a1a', margin:'8px 0' });
+  maisonCard.appendChild(sep);
+
+  // ── Ecovacs ────────────────────────────────────────────────────────────────
+  const ecoSection = el('div', {});
+  const ecoSectionTitle = el('div', { fontSize:'12px', color:'#7af', fontWeight:'600', marginBottom:'6px' });
+  ecoSectionTitle.textContent = 'Ecovacs Deebot';
+  ecoSection.appendChild(ecoSectionTitle);
+
+  const hasEcoToken = !!(lsGet('ECOVACS_TOKEN') || '').trim();
+  const ecoStatus = el('div', { fontSize:'11px', marginBottom:'8px', padding:'3px 8px', borderRadius:'5px', display:'inline-block',
+    background: hasEcoToken ? '#0d1a0d' : '#1a0d0d',
+    color:      hasEcoToken ? '#5a9'    : '#a55' });
+  ecoStatus.textContent = hasEcoToken ? '✅ Ecovacs connecté — DID : ' + (lsGet('ECOVACS_DID') || '?') : '⚫ Non connecté';
+  ecoSection.appendChild(ecoStatus);
+
+  const ecoAccountLabel = labelEl('ECOVACS_ACCOUNT (email du compte)');
+  const ecoAccountInp = document.createElement('input');
+  ecoAccountInp.type = 'email'; ecoAccountInp.autocomplete = 'off';
+  Object.assign(ecoAccountInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box',
+  });
+  ecoAccountInp.placeholder = 'mon@email.com';
+  ecoAccountInp.value = lsGet('ECOVACS_ACCOUNT') || '';
+  ecoSection.append(ecoAccountLabel, ecoAccountInp);
+
+  const ecoPassLabel = labelEl('ECOVACS_PASSWORD');
+  const ecoPassInp = document.createElement('input');
+  ecoPassInp.type = 'password'; ecoPassInp.autocomplete = 'off';
+  Object.assign(ecoPassInp.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box', marginBottom:'8px',
+  });
+  ecoPassInp.placeholder = '••••••••';
+  ecoSection.append(ecoPassLabel, ecoPassInp);
+
+  const ecoConnectBtn = btn('🔌 Se connecter à Ecovacs', 'primary', async () => {
+    const account = ecoAccountInp.value.trim();
+    const password = ecoPassInp.value.trim();
+    if (!account || !password) { showToast('Renseignez email et mot de passe.', true); return; }
+    ecoConnectBtn.textContent = '⏳ Connexion…'; ecoConnectBtn.disabled = true;
+    try {
+      await ecovacs_login(account, password);
+      showToast('Ecovacs connecté ! DID : ' + lsGet('ECOVACS_DID'));
+      rerender();
+    } catch (e) {
+      showToast('Erreur Ecovacs : ' + e.message, true);
+    }
+    ecoConnectBtn.textContent = '🔌 Se connecter à Ecovacs'; ecoConnectBtn.disabled = false;
+  });
+  ecoSection.appendChild(ecoConnectBtn);
+  maisonCard.appendChild(ecoSection);
+  list.appendChild(maisonCard);
 
   container.appendChild(list);
 }
