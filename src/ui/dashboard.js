@@ -13,14 +13,19 @@ import { renderRadarView, cleanupRadarView } from './radar-view.js';
 import { renderBourseView, cleanupBourseView } from './bourse-view.js';
 import { renderMeteoView as renderMeteoContent } from './meteo-view.js';
 import { renderMusiqueView as renderMusiqueContent, cleanupMusiqueView } from './musique-view.js';
+import { getSettings, setSettings, getNestorSettings, getBourseSettings,
+         getMeteoSettings, getMusiqueSettings, setNestorSettings, setBourseSettings,
+         setMeteoSettings, setMusiqueSettings } from '../core/settings-store.js';
+import { syncApiKeys, fetchDeviceKeyStatus } from '../sync/key-sync.js';
+import { bleConnected } from '../bt/ble.js';
 
 const ROLE_ICONS = {
-  orchestrator: '🧠', gardener: '🌿', factory: '🏭',
-  'monthly-payments': '📅', 'pea-portfolio': '📈', stories: '📚',
-  research: '🔍', 'web-search': '🌐', 'web-analyst': '🔎', generic: '🤖',
-  maison: '🏠',
+  orchestrator: '\uD83E\uDDE0', gardener: '\uD83C\uDF3F', factory: '\uD83C\uDFED',
+  'monthly-payments': '\uD83D\uDCC5', 'pea-portfolio': '\uD83D\uDCC8', stories: '\uD83D\uDCDA',
+  research: '\uD83D\uDD0D', 'web-search': '\uD83C\uDF10', 'web-analyst': '\uD83D\uDD0E', generic: '\uD83E\uDD16',
+  maison: '\uD83C\uDFE0',
 };
-function roleIcon(role) { return ROLE_ICONS[role] || '🤖'; }
+function roleIcon(role) { return ROLE_ICONS[role] || '\uD83E\uDD16'; }
 function tag(text, color) {
   const s = document.createElement('span');
   s.textContent = text;
@@ -29,7 +34,6 @@ function tag(text, color) {
   return s;
 }
 
-// ─── Sépare la réponse principale des sources ─────────────────────────────────
 function splitReplyAndSources(text) {
   const sourcePattern = /\n+(?:Sources?\s*(?:\(s\))?\s*:.*)/si;
   const match = text.match(sourcePattern);
@@ -52,13 +56,11 @@ export function renderDashboard(container, state, rerender) {
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
   if (state.view === 'radar')  { renderRadarSection(container, state, rerender); return; }
   if (state.view === 'bourse') { renderBourseSection(container, state, rerender); return; }
-  if (state.view === 'meteo')  { renderMeteoView(container, state, rerender); return; }
-  if (state.view === 'musique'){ renderMusiqueView(container, state, rerender); return; }
-  if (state.view === 'companion'){ renderCompanionView(container, state, rerender); return; }
+  if (state.view === 'meteo')  { renderMeteoSection(container, state, rerender); return; }
+  if (state.view === 'musique'){ renderMusiqueSection(container, state, rerender); return; }
+  if (state.view === 'companion'){ renderCompanionSection(container, state, rerender); return; }
 
-  // Vues agents et réglages — bouton retour hub + actions agents
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
-
   const leftRow = el('div', { display:'flex', alignItems:'center', gap:'8px' });
   const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
   leftRow.appendChild(backBtn);
@@ -98,7 +100,7 @@ export function renderDashboard(container, state, rerender) {
   container.appendChild(msg);
 }
 
-// ─── Radar section ────────────────────────────────────────────────────────────
+// ─── Radar ────────────────────────────────────────────────────────────────────
 function renderRadarSection(container, state, rerender) {
   const backBtn = btn('← Hub', '', () => {
     cleanupRadarView();
@@ -107,23 +109,13 @@ function renderRadarSection(container, state, rerender) {
   });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
-
   const body = el('div', {});
   container.appendChild(body);
-
-  renderRadarView(body, state, rerender, () => {
-    state.view = state._radarPrevView || 'hub';
-    rerender();
-  });
+  renderRadarView(body, state, rerender, () => { state.view = state._radarPrevView || 'hub'; rerender(); });
 }
 
-// ─── Bourse section ───────────────────────────────────────────────────────────
+// ─── Bourse ───────────────────────────────────────────────────────────────────
 function renderBourseSection(container, state, rerender) {
-  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
-  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
-  title.textContent = '📈 Bourse & Marchés';
-  header.appendChild(title);
-
   const backBtn = btn('← Hub', '', () => {
     cleanupBourseView(container.querySelector('[data-bourse]'));
     state.view = state._boursePrevView || 'hub';
@@ -131,30 +123,24 @@ function renderBourseSection(container, state, rerender) {
   });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
-
   const body = el('div', {});
   body.setAttribute('data-bourse', '1');
   container.appendChild(body);
-
   renderBourseView(body, state, rerender);
 }
 
-// ─── Météo section ────────────────────────────────────────────────────────────
-function renderMeteoView(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => {
-    state.view = state._meteoPrevView || 'hub';
-    rerender();
-  });
+// ─── Météo ────────────────────────────────────────────────────────────────────
+function renderMeteoSection(container, state, rerender) {
+  const backBtn = btn('← Hub', '', () => { state.view = state._meteoPrevView || 'hub'; rerender(); });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
-
   const body = el('div', {});
   container.appendChild(body);
   renderMeteoContent(body, state, rerender);
 }
 
-// ─── Musique section ──────────────────────────────────────────────────────────
-function renderMusiqueView(container, state, rerender) {
+// ─── Musique ──────────────────────────────────────────────────────────────────
+function renderMusiqueSection(container, state, rerender) {
   const backBtn = btn('← Hub', '', () => {
     cleanupMusiqueView();
     state.view = state._musiquePrevView || 'hub';
@@ -162,26 +148,21 @@ function renderMusiqueView(container, state, rerender) {
   });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
-
   const body = el('div', {});
   container.appendChild(body);
   renderMusiqueContent(body, state, rerender);
 }
 
-// ─── Companion ESP32 section ──────────────────────────────────────────────────
-function renderCompanionView(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => {
-    state.view = 'hub';
-    rerender();
-  });
+// ─── Companion ESP32 ──────────────────────────────────────────────────────────
+// Correction : l'export de companion.js est renderCompanionView (pas renderCompanionPanel)
+function renderCompanionSection(container, state, rerender) {
+  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
-
   const body = el('div', {});
   container.appendChild(body);
-
-  import('./companion.js').then(({ renderCompanionPanel }) => {
-    renderCompanionPanel(body, state, rerender);
+  import('./companion.js').then(({ renderCompanionView }) => {
+    renderCompanionView(body, state, rerender);
   }).catch(() => {
     body.textContent = '⚠️ Module Companion ESP32 non disponible.';
   });
@@ -193,13 +174,11 @@ function renderCompanionView(container, state, rerender) {
 function renderHubView(container, state, rerender) {
   container.style.cssText = 'display:flex;flex-direction:column;gap:10px;padding:4px 0;';
 
-  // Titre
   const titleRow = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'4px' });
   const titleText = el('div', { fontSize:'15px', fontWeight:'700', color:'#eee', flex:'1' });
-  titleText.textContent = '🏠 Compagnon';
+  titleText.textContent = '\uD83C\uDFE0 Compagnon';
   titleRow.appendChild(titleText);
 
-  // Statut BLE
   const bleStatus = el('div', { fontSize:'11px', padding:'2px 8px', borderRadius:'10px',
     background: deviceStatus.connected ? '#1a3a1a' : '#2a1a1a',
     color: deviceStatus.connected ? '#5ef' : '#e65', whiteSpace:'nowrap' });
@@ -207,11 +186,10 @@ function renderHubView(container, state, rerender) {
   titleRow.appendChild(bleStatus);
   container.appendChild(titleRow);
 
-  // Grille d'apps
   const grid = el('div', { display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'8px' });
 
   const appCards = [
-    { icon:'🧠', label:'Nestor', view:'chat', action: () => {
+    { icon:'\uD83E\uDDE0', label:'Nestor', view:'chat', action: () => {
         const orch = state.agents.find(a => a.role === 'orchestrator');
         if (orch) {
           state.activeAgent = orch;
@@ -220,11 +198,11 @@ function renderHubView(container, state, rerender) {
         }
         state.view = 'chat'; rerender();
       }},
-    { icon:'🚨', label:'Radars', view:'radar', action: () => { state._radarPrevView = 'hub'; state.view = 'radar'; rerender(); }},
-    { icon:'🌤', label:'Météo', view:'meteo', action: () => { state._meteoPrevView = 'hub'; state.view = 'meteo'; rerender(); }},
-    { icon:'📈', label:'Bourse', view:'bourse', action: () => { state._boursePrevView = 'hub'; state.view = 'bourse'; rerender(); }},
-    { icon:'🎵', label:'Musique', view:'musique', action: () => { state._musiquePrevView = 'hub'; state.view = 'musique'; rerender(); }},
-    { icon:'📱', label:'ESP32', view:'companion', action: () => { state.view = 'companion'; rerender(); }},
+    { icon:'\uD83D\uDEA8', label:'Radars', view:'radar', action: () => { state._radarPrevView = 'hub'; state.view = 'radar'; rerender(); }},
+    { icon:'\uD83C\uDF24', label:'Météo', view:'meteo', action: () => { state._meteoPrevView = 'hub'; state.view = 'meteo'; rerender(); }},
+    { icon:'\uD83D\uDCC8', label:'Bourse', view:'bourse', action: () => { state._boursePrevView = 'hub'; state.view = 'bourse'; rerender(); }},
+    { icon:'\uD83C\uDFB5', label:'Musique', view:'musique', action: () => { state._musiquePrevView = 'hub'; state.view = 'musique'; rerender(); }},
+    { icon:'\uD83D\uDCF1', label:'ESP32', view:'companion', action: () => { state.view = 'companion'; rerender(); }},
   ];
 
   appCards.forEach(({ icon, label, view, action }) => {
@@ -242,19 +220,15 @@ function renderHubView(container, state, rerender) {
       transition: 'background 0.15s',
       WebkitTapHighlightColor: 'transparent',
     });
-    const iconEl = el('span', { fontSize:'22px', lineHeight:'1' });
-    iconEl.textContent = icon;
-    const labelEl = el('span', { fontSize:'11px', fontWeight:'500' });
-    labelEl.textContent = label;
-    card.appendChild(iconEl);
-    card.appendChild(labelEl);
+    const iconEl = el('span', { fontSize:'22px', lineHeight:'1' }); iconEl.textContent = icon;
+    const labelEl = el('span', { fontSize:'11px', fontWeight:'500' }); labelEl.textContent = label;
+    card.appendChild(iconEl); card.appendChild(labelEl);
     card.onclick = action;
     grid.appendChild(card);
   });
 
   container.appendChild(grid);
 
-  // Agents récents
   const activeAgents = state.agents.filter(a =>
     a.role !== 'orchestrator' && a.role !== 'gardener' && a.role !== 'factory'
   ).slice(0, 4);
@@ -263,7 +237,6 @@ function renderHubView(container, state, rerender) {
     const sectionLabel = el('div', { fontSize:'11px', color:'#555', textTransform:'uppercase', letterSpacing:'0.06em', marginTop:'8px', marginBottom:'4px' });
     sectionLabel.textContent = 'Agents récents';
     container.appendChild(sectionLabel);
-
     const agentList = el('div', { display:'flex', flexDirection:'column', gap:'6px' });
     activeAgents.forEach(agent => {
       const row = el('button', {
@@ -295,10 +268,8 @@ let _currentSTT = null;
 
 function renderChatView(container, state, rerender) {
   const agent = state.activeAgent;
-
   const wrap = el('div', { display:'flex', flexDirection:'column', height:'100%', gap:'0' });
 
-  // Agent header
   const agentHeader = el('div', {
     display:'flex', alignItems:'center', gap:'8px',
     padding:'6px 0 8px', borderBottom:'1px solid #1a1a1a', marginBottom:'8px',
@@ -306,21 +277,16 @@ function renderChatView(container, state, rerender) {
   const agentIcon = el('span', { fontSize:'18px' }); agentIcon.textContent = roleIcon(agent.role);
   const agentName = el('span', { fontSize:'13px', fontWeight:'600', color:'#ccc', flex:'1' });
   agentName.textContent = agent.name;
-
-  const clearBtn = btn('🗑', '', () => {
+  const clearBtn = btn('\uD83D\uDDD1', '', () => {
     state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }];
     clearChatHistory(agent.id);
     rerender();
   });
   clearBtn.title = 'Effacer l\'historique';
   clearBtn.style.cssText = 'background:none;border:none;color:#555;padding:4px 6px;cursor:pointer;font-size:14px;';
-
-  agentHeader.appendChild(agentIcon);
-  agentHeader.appendChild(agentName);
-  agentHeader.appendChild(clearBtn);
+  agentHeader.appendChild(agentIcon); agentHeader.appendChild(agentName); agentHeader.appendChild(clearBtn);
   wrap.appendChild(agentHeader);
 
-  // Messages
   const messages = el('div', {
     flex:'1', overflowY:'auto', display:'flex', flexDirection:'column',
     gap:'8px', paddingBottom:'8px',
@@ -342,7 +308,6 @@ function renderChatView(container, state, rerender) {
         borderBottomRightRadius: m.role === 'user' ? '2px' : '10px',
         borderBottomLeftRadius: m.role === 'user' ? '10px' : '2px',
       });
-
       if (m.role === 'assistant') {
         const { main, sources } = splitReplyAndSources(m.content || '');
         bubble.innerHTML = formatMessage(main);
@@ -351,22 +316,18 @@ function renderChatView(container, state, rerender) {
           src.textContent = sources;
           bubble.appendChild(src);
         }
-
-        // Bouton lire TTS
         const ttsBtn = document.createElement('button');
         ttsBtn.style.cssText = 'background:none;border:none;color:#3a5a4a;padding:2px 4px;cursor:pointer;font-size:11px;display:block;margin-top:4px;';
-        ttsBtn.textContent = '🔊';
+        ttsBtn.textContent = '\uD83D\uDD0A';
         ttsBtn.onclick = () => speak(textForTTS(m.content || ''));
         bubble.appendChild(ttsBtn);
       } else {
         bubble.textContent = m.content || '';
       }
-
       messages.appendChild(bubble);
     });
   }
 
-  // Indicateur "en cours"
   if (state._thinking) {
     const thinking = el('div', {
       alignSelf:'flex-start', padding:'8px 12px', borderRadius:'10px',
@@ -375,10 +336,8 @@ function renderChatView(container, state, rerender) {
     thinking.textContent = '…';
     messages.appendChild(thinking);
   }
-
   wrap.appendChild(messages);
 
-  // Zone de saisie
   const inputRow = el('div', {
     display:'flex', gap:'6px', alignItems:'flex-end',
     borderTop:'1px solid #1a1a1a', paddingTop:'8px',
@@ -401,16 +360,14 @@ function renderChatView(container, state, rerender) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 
-  // Bouton STT
   const sttStatus = getSTTStatus();
-  let sttBtn = null;
   if (sttStatus.available) {
-    sttBtn = document.createElement('button');
+    const sttBtn = document.createElement('button');
     sttBtn.style.cssText = 'background:#111;border:1px solid #252525;border-radius:8px;color:#888;padding:8px;cursor:pointer;font-size:16px;min-width:36px;';
-    sttBtn.textContent = '🎤';
+    sttBtn.textContent = '\uD83C\uDF99';
     sttBtn.setAttribute('aria-label', 'Dictée vocale');
     sttBtn.onclick = () => {
-      if (_currentSTT) { _currentSTT.stop(); _currentSTT = null; sttBtn.textContent = '🎤'; return; }
+      if (_currentSTT) { _currentSTT.stop(); _currentSTT = null; sttBtn.textContent = '\uD83C\uDF99'; return; }
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) return;
       const rec = new SpeechRecognition();
@@ -420,8 +377,8 @@ function renderChatView(container, state, rerender) {
         textarea.value += (textarea.value ? ' ' : '') + transcript;
         textarea.dispatchEvent(new Event('input'));
       };
-      rec.onend = () => { _currentSTT = null; sttBtn.textContent = '🎤'; };
-      rec.onerror = () => { _currentSTT = null; sttBtn.textContent = '🎤'; };
+      rec.onend = () => { _currentSTT = null; sttBtn.textContent = '\uD83C\uDF99'; };
+      rec.onerror = () => { _currentSTT = null; sttBtn.textContent = '\uD83C\uDF99'; };
       _currentSTT = rec;
       rec.start();
       sttBtn.textContent = '⏹';
@@ -439,19 +396,15 @@ function renderChatView(container, state, rerender) {
     if (!text || state._thinking) return;
     textarea.value = '';
     textarea.style.height = 'auto';
-
     state.chatHistory.push({ role:'user', content: text });
     state._thinking = true;
     rerender();
-
     try {
       const reply = await orchestratorResolve(agent, state.chatHistory, state.agents);
       state.chatHistory.push({ role:'assistant', content: reply });
       saveChatHistory(agent.id, state.chatHistory.filter(m => m.role !== 'system'));
       const ttsStatus = getTTSStatus();
-      if (ttsStatus.enabled && !isSilentMode()) {
-        speak(textForTTS(reply));
-      }
+      if (ttsStatus.enabled && !isSilentMode()) speak(textForTTS(reply));
     } catch (e) {
       state.chatHistory.push({ role:'assistant', content: '⚠️ Erreur : ' + e.message });
     } finally {
@@ -464,17 +417,11 @@ function renderChatView(container, state, rerender) {
   inputRow.appendChild(textarea);
   inputRow.appendChild(sendBtn);
   wrap.appendChild(inputRow);
-
   container.appendChild(wrap);
 
-  // Scroll bas
-  requestAnimationFrame(() => {
-    messages.scrollTop = messages.scrollHeight;
-    textarea.focus();
-  });
+  requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; textarea.focus(); });
 }
 
-// ─── Format message (markdown minimal) ───────────────────────────────────────
 function formatMessage(text) {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -488,25 +435,22 @@ function formatMessage(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AGENTS LIST VIEW
+// AGENTS LIST
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderAgentsList(container, state, rerender) {
   const agents = state.agents || [];
-
   if (agents.length === 0) {
     const empty = el('div', { textAlign:'center', color:'#555', padding:'30px 0' });
     empty.textContent = 'Aucun agent configuré.';
     container.appendChild(empty);
     return;
   }
-
   agents.forEach(agent => {
     const row = el('div', {
       display:'flex', alignItems:'center', gap:'10px',
       padding:'10px 12px', background:'#111', border:'1px solid #1e1e1e',
       borderRadius:'8px', marginBottom:'6px', cursor:'pointer',
     });
-
     const icon = el('span', { fontSize:'18px' }); icon.textContent = roleIcon(agent.role);
     const info = el('div', { flex:'1', overflow:'hidden' });
     const name = el('div', { fontSize:'13px', fontWeight:'600', color:'#ddd', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' });
@@ -514,15 +458,12 @@ function renderAgentsList(container, state, rerender) {
     const desc = el('div', { fontSize:'11px', color:'#555', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' });
     desc.textContent = agent.description || agent.role;
     info.appendChild(name); info.appendChild(desc);
-
     const editBtn = btn('✏️', '', (e) => {
       e.stopPropagation();
-      state.editingAgent = { ...agent };
-      state.view = 'edit'; rerender();
+      state.editingAgent = { ...agent }; state.view = 'edit'; rerender();
     });
     editBtn.style.cssText = 'background:none;border:none;color:#555;cursor:pointer;padding:4px 6px;font-size:14px;';
-
-    const delBtn = btn('🗑', '', async (e) => {
+    const delBtn = btn('\uD83D\uDDD1', '', async (e) => {
       e.stopPropagation();
       if (!confirm('Supprimer l\'agent "' + agent.name + '" ?')) return;
       await deleteAgent(agent.id);
@@ -530,33 +471,25 @@ function renderAgentsList(container, state, rerender) {
       rerender();
     });
     delBtn.style.cssText = 'background:none;border:none;color:#4a2a2a;cursor:pointer;padding:4px 6px;font-size:14px;';
-
     row.appendChild(icon); row.appendChild(info); row.appendChild(editBtn); row.appendChild(delBtn);
-
     row.onclick = () => {
       state.activeAgent = agent;
       state.chatHistory = [{ role:'system', content: agent.system_prompt || '' }];
       state.view = 'chat'; rerender();
     };
-
     container.appendChild(row);
   });
 
-  // Import/Export
   const ioRow = el('div', { display:'flex', gap:'8px', marginTop:'12px' });
-
   const exportBtn = btn('⬇ Export JSON', '', () => {
-    const data = exportAgentsJson(state.agents);
-    downloadText(data, 'nestor-agents.json', 'application/json');
+    downloadText(exportAgentsJson(state.agents), 'nestor-agents.json', 'application/json');
   });
   exportBtn.style.flex = '1';
-
   const importBtn = btn('⬆ Import JSON', '', async () => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = '.json';
     input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+      const file = e.target.files[0]; if (!file) return;
       const text = await file.text();
       const result = await importAgentsJson(text, state.agents);
       state.agents = result;
@@ -566,7 +499,6 @@ function renderAgentsList(container, state, rerender) {
     input.click();
   });
   importBtn.style.flex = '1';
-
   ioRow.appendChild(exportBtn); ioRow.appendChild(importBtn);
   container.appendChild(ioRow);
 }
@@ -577,13 +509,10 @@ function renderAgentsList(container, state, rerender) {
 function renderEditView(container, state, rerender) {
   const agent = state.editingAgent;
   const isNew = !state.agents.find(a => a.id === agent.id);
-
   const form = el('div', { display:'flex', flexDirection:'column', gap:'10px' });
 
-  // Nom
   form.appendChild(field('Nom', 'text', agent.name, v => { agent.name = v; }));
 
-  // Rôle
   const roleWrap = el('div', {});
   const roleLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
   roleLbl.textContent = 'Rôle';
@@ -600,10 +529,8 @@ function renderEditView(container, state, rerender) {
   roleWrap.appendChild(roleLbl); roleWrap.appendChild(roleSelect);
   form.appendChild(roleWrap);
 
-  // Description
   form.appendChild(field('Description', 'text', agent.description || '', v => { agent.description = v; }));
 
-  // Backend
   const backends = listBackends();
   if (backends.length > 0) {
     const bkWrap = el('div', {});
@@ -623,7 +550,6 @@ function renderEditView(container, state, rerender) {
     form.appendChild(bkWrap);
   }
 
-  // System prompt
   const spWrap = el('div', {});
   const spLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
   spLbl.textContent = 'System Prompt';
@@ -637,7 +563,6 @@ function renderEditView(container, state, rerender) {
   spWrap.appendChild(spLbl); spWrap.appendChild(spArea);
   form.appendChild(spWrap);
 
-  // Boutons
   const actRow = el('div', { display:'flex', gap:'8px', marginTop:'8px' });
   const saveBtn = btn(isNew ? '✚ Créer l\'agent' : '💾 Sauvegarder', 'primary', async () => {
     agent.updatedAt = new Date().toISOString();
@@ -650,7 +575,6 @@ function renderEditView(container, state, rerender) {
   saveBtn.style.flex = '1';
   actRow.appendChild(saveBtn);
   form.appendChild(actRow);
-
   container.appendChild(form);
 }
 
@@ -672,13 +596,11 @@ function field(label, type, value, onChange) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderFabriqueView(container, state, rerender) {
   const title = el('div', { fontSize:'14px', fontWeight:'600', color:'#ddd', marginBottom:'12px' });
-  title.textContent = '🏭 Fabrique d\'agents';
+  title.textContent = '\uD83C\uDFED Fabrique d\'agents';
   container.appendChild(title);
-
   const desc = el('div', { fontSize:'12px', color:'#666', marginBottom:'16px', lineHeight:'1.5' });
   desc.textContent = 'Décrivez l\'agent que vous souhaitez créer en langage naturel. Le Gardien construira sa configuration automatiquement.';
   container.appendChild(desc);
-
   const textarea = document.createElement('textarea');
   textarea.placeholder = 'Ex : "Un agent qui analyse mes relevés bancaires et détecte les dépenses inhabituelles"';
   textarea.rows = 4;
@@ -686,16 +608,13 @@ function renderFabriqueView(container, state, rerender) {
     borderRadius:'8px', color:'#eee', padding:'10px', fontSize:'13px', resize:'none',
     fontFamily:'inherit', lineHeight:'1.4', boxSizing:'border-box', marginBottom:'10px' });
   container.appendChild(textarea);
-
   const generateBtn = btn('⚡ Générer l\'agent', 'primary', async () => {
-    const desc = textarea.value.trim();
-    if (!desc) return;
-    generateBtn.textContent = '⏳ Génération…';
-    generateBtn.disabled = true;
+    const d = textarea.value.trim(); if (!d) return;
+    generateBtn.textContent = '⏳ Génération…'; generateBtn.disabled = true;
     try {
       const gardener = state.agents.find(a => a.role === 'gardener');
       if (!gardener) { showToast('❌ Agent Gardien introuvable', true); return; }
-      const newAgent = await gardenerMerge(gardener, desc, state.agents);
+      const newAgent = await gardenerMerge(gardener, d, state.agents);
       state.agents.push(newAgent);
       await saveAgent(newAgent);
       showToast('✅ Agent "' + newAgent.name + '" créé');
@@ -703,109 +622,188 @@ function renderFabriqueView(container, state, rerender) {
     } catch (e) {
       showToast('❌ Erreur : ' + e.message, true);
     } finally {
-      generateBtn.textContent = '⚡ Générer l\'agent';
-      generateBtn.disabled = false;
+      generateBtn.textContent = '⚡ Générer l\'agent'; generateBtn.disabled = false;
     }
   });
   container.appendChild(generateBtn);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SETTINGS VIEW
+// SETTINGS VIEW — Onglets par application
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderSettings(container, state, rerender) {
-  const title = el('div', { fontSize:'14px', fontWeight:'600', color:'#ddd', marginBottom:'14px' });
-  title.textContent = '⚙️ Réglages API Nestor';
-  container.appendChild(title);
+  // ── Onglets ─────────────────────────────────────────────────────────────────
+  const TABS = [
+    { id: 'nestor',  label: '\uD83E\uDDE0 Nestor'  },
+    { id: 'bourse',  label: '\uD83D\uDCC8 Bourse'  },
+    { id: 'meteo',   label: '\uD83C\uDF24 Météo'   },
+    { id: 'musique', label: '\uD83C\uDFB5 Musique' },
+    { id: 'systeme', label: '⚙️ Système'  },
+  ];
 
-  // ── Backends LLM ────────────────────────────────────────────────────────────
-  const backendsSection = el('div', { marginBottom:'18px' });
-  const bTitle = el('div', { fontSize:'12px', color:'#666', fontWeight:'600', textTransform:'uppercase',
-    letterSpacing:'0.06em', marginBottom:'8px' });
-  bTitle.textContent = 'LLM Backends';
-  backendsSection.appendChild(bTitle);
+  let activeTab = state._settingsTab || 'nestor';
 
-  const groqKey = lsGet('groq_api_key') || '';
-  const openaiKey = lsGet('openai_api_key') || '';
-  const geminiKey = lsGet('gemini_api_key') || '';
+  const tabBar = el('div', { display:'flex', gap:'4px', marginBottom:'14px', borderBottom:'1px solid #1a1a1a', paddingBottom:'8px', flexWrap:'wrap' });
 
-  const mkKeyField = (label, storageKey, currentVal) => {
-    const wrap = el('div', { marginBottom:'10px' });
+  const renderTab = (tabId) => {
+    activeTab = tabId;
+    state._settingsTab = tabId;
+    tabBody.innerHTML = '';
+    renderTabBody(tabBody, tabId, state, rerender);
+    tabBar.querySelectorAll('button').forEach(b => {
+      b.style.background = b.dataset.tab === tabId ? '#1a3a2a' : '#111';
+      b.style.color = b.dataset.tab === tabId ? '#5ef' : '#888';
+      b.style.borderColor = b.dataset.tab === tabId ? '#2a5a3a' : '#252525';
+    });
+  };
+
+  TABS.forEach(tab => {
+    const b = btn(tab.label, '', () => renderTab(tab.id));
+    b.dataset.tab = tab.id;
+    b.style.cssText += ';font-size:11px;padding:5px 10px;';
+    if (tab.id === activeTab) {
+      b.style.background = '#1a3a2a'; b.style.color = '#5ef'; b.style.borderColor = '#2a5a3a';
+    }
+    tabBar.appendChild(b);
+  });
+
+  container.appendChild(tabBar);
+
+  const tabBody = el('div', {});
+  container.appendChild(tabBody);
+  renderTabBody(tabBody, activeTab, state, rerender);
+}
+
+function renderTabBody(container, tabId, state, rerender) {
+  const mkField = (label, value, onSave, type = 'password', placeholder = 'Clé API…') => {
+    const wrap = el('div', { marginBottom:'12px' });
     const lbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
     lbl.textContent = label;
-    const inp = document.createElement('input');
-    inp.type = 'password'; inp.value = currentVal; inp.placeholder = 'Clé API…';
-    Object.assign(inp.style, { width:'100%', background:'#111', border:'1px solid #252525',
-      borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px', boxSizing:'border-box' });
     const row = el('div', { display:'flex', gap:'6px', alignItems:'center' });
-    row.appendChild(inp);
-    const saveKeyBtn = btn('Sauver', 'primary', () => {
-      lsSet(storageKey, inp.value.trim());
-      showToast(label + ' sauvegardé');
-    });
-    saveKeyBtn.style.cssText = 'padding:6px 10px;font-size:12px;white-space:nowrap;';
-    row.appendChild(saveKeyBtn);
-    wrap.appendChild(lbl); wrap.appendChild(row);
+    const inp = document.createElement('input');
+    inp.type = type; inp.value = value; inp.placeholder = placeholder;
+    Object.assign(inp.style, { flex:'1', background:'#111', border:'1px solid #252525',
+      borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px', boxSizing:'border-box' });
+    const saveBtn = btn('Sauver', 'primary', () => { onSave(inp.value.trim()); showToast(label + ' sauvegardé'); });
+    saveBtn.style.cssText += ';padding:6px 10px;font-size:12px;white-space:nowrap;';
+    row.append(inp, saveBtn);
+    wrap.append(lbl, row);
     return wrap;
   };
 
-  backendsSection.appendChild(mkKeyField('Groq API Key', 'groq_api_key', groqKey));
-  backendsSection.appendChild(mkKeyField('OpenAI API Key', 'openai_api_key', openaiKey));
-  backendsSection.appendChild(mkKeyField('Gemini API Key', 'gemini_api_key', geminiKey));
-  container.appendChild(backendsSection);
+  if (tabId === 'nestor') {
+    const s = getNestorSettings();
+    const sectionTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
+    sectionTitle.textContent = 'Clés API Nestor';
+    container.appendChild(sectionTitle);
+    container.appendChild(mkField('Groq API Key',        s.apiKey,          v => setNestorSettings({ apiKey: v })));
+    container.appendChild(mkField('Gemini API Key (TTS)', s.geminiApiKey,    v => setNestorSettings({ geminiApiKey: v })));
+    container.appendChild(mkField('Serper API Key',       s.serperApiKey,    v => setNestorSettings({ serperApiKey: v })));
+    container.appendChild(mkField('OpenRouter API Key',   s.openrouterApiKey, v => setNestorSettings({ openrouterApiKey: v })));
 
-  // ── TTS ─────────────────────────────────────────────────────────────────────
-  const ttsSection = el('div', { marginBottom:'18px' });
-  const tTitle = el('div', { fontSize:'12px', color:'#666', fontWeight:'600', textTransform:'uppercase',
-    letterSpacing:'0.06em', marginBottom:'8px' });
-  tTitle.textContent = 'Synthèse vocale (TTS)';
-  ttsSection.appendChild(tTitle);
+    const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'10px 0' });
+    container.appendChild(sep);
 
-  const ttsStatus = getTTSStatus();
-  const silentToggle = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
-  const silentLbl = el('span', { fontSize:'13px', color:'#bbb', flex:'1' });
-  silentLbl.textContent = 'Mode silencieux';
-  const silentBtn = btn(isSilentMode() ? '🔇 Activé' : '🔊 Désactivé', '', () => {
-    setSilentMode(!isSilentMode());
-    rerender();
-  });
-  silentToggle.appendChild(silentLbl); silentToggle.appendChild(silentBtn);
-  ttsSection.appendChild(silentToggle);
+    const modelTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+    modelTitle.textContent = 'LLM par défaut';
+    container.appendChild(modelTitle);
+    container.appendChild(mkField('Modèle Groq', s.model, v => setNestorSettings({ model: v }), 'text', 'llama3-70b-8192'));
 
-  if (ttsStatus.available) {
-    const voiceInfo = el('div', { fontSize:'11px', color:'#555', marginBottom:'6px' });
-    voiceInfo.textContent = 'Moteur : ' + (ttsStatus.engine || 'navigateur') + ' · Voix disponibles : ' + (ttsStatus.voiceCount || 0);
-    ttsSection.appendChild(voiceInfo);
+    const ttsSection = el('div', { marginTop:'10px' });
+    const ttsTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+    ttsTitle.textContent = 'Synthèse vocale';
+    ttsSection.appendChild(ttsTitle);
+    const silentToggle = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
+    const silentLbl = el('span', { fontSize:'13px', color:'#bbb', flex:'1' });
+    silentLbl.textContent = 'Mode silencieux';
+    const silentBtn = btn(isSilentMode() ? '\uD83D\uDD07 Activé' : '\uD83D\uDD0A Désactivé', '', () => {
+      setSilentMode(!isSilentMode()); rerender();
+    });
+    silentToggle.append(silentLbl, silentBtn);
+    ttsSection.appendChild(silentToggle);
+    container.appendChild(ttsSection);
   }
 
-  container.appendChild(ttsSection);
+  else if (tabId === 'bourse') {
+    const s = getBourseSettings();
+    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
+    title.textContent = 'Clés API Bourse';
+    container.appendChild(title);
+    container.appendChild(mkField('TwelveData API Key', s.twelveDataApiKey, v => setBourseSettings({ twelveDataApiKey: v })));
+  }
 
-  // ── Note générale ──────────────────────────────────────────────────────────
-  const noteEl = el('div', { fontSize:'12px', color:'#888', marginBottom:'8px', lineHeight:'1.5' });
-  noteEl.innerHTML = '🔑 Les clés API sont stockées localement sur cet appareil uniquement.<br>Groq est gratuit avec un compte sur <a href="https://console.groq.com" target="_blank" style="color:#5af">console.groq.com</a>.';
-  container.appendChild(noteEl);
+  else if (tabId === 'meteo') {
+    const s = getMeteoSettings();
+    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
+    title.textContent = 'Clés API Météo';
+    container.appendChild(title);
+    container.appendChild(mkField('Météo-Concept API Key', s.meteoConcept, v => setMeteoSettings({ meteoConcept: v })));
+    container.appendChild(mkField('Latitude par défaut', String(s.defaultLat), v => setMeteoSettings({ defaultLat: parseFloat(v) || 48.8566 }), 'text', '48.8566'));
+    container.appendChild(mkField('Longitude par défaut', String(s.defaultLon), v => setMeteoSettings({ defaultLon: parseFloat(v) || 2.3522 }), 'text', '2.3522'));
+  }
 
-  // ── Réinitialisation ────────────────────────────────────────────────────────
-  const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'12px 0' });
-  container.appendChild(sep);
+  else if (tabId === 'musique') {
+    const s = getMusiqueSettings();
+    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
+    title.textContent = 'Spotify Connect';
+    container.appendChild(title);
+    container.appendChild(mkField('Client ID Spotify',     s.spotifyClientId,     v => setMusiqueSettings({ spotifyClientId: v })));
+    container.appendChild(mkField('Client Secret Spotify', s.spotifyClientSecret, v => setMusiqueSettings({ spotifyClientSecret: v })));
+    container.appendChild(mkField('Redirect URI',          s.spotifyRedirectUri,  v => setMusiqueSettings({ spotifyRedirectUri: v }), 'text', 'https://…'));
+  }
 
-  const resetSection = el('div', {});
-  const rTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase',
-    letterSpacing:'0.06em', marginBottom:'8px' });
-  rTitle.textContent = 'Danger';
-  resetSection.appendChild(rTitle);
+  else if (tabId === 'systeme') {
+    // ── Sync BLE clés ────────────────────────────────────────────────────────
+    const bleTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+    bleTitle.textContent = 'Synchronisation clés → ESP32';
+    container.appendChild(bleTitle);
 
-  const resetBtn = btn('🗑 Réinitialiser tous les agents', '', async () => {
-    if (!confirm('Réinitialiser tous les agents ? Cette action est irréversible.')) return;
-    const { DEFAULT_AGENTS } = await import('../core/default-agents.js');
-    for (const a of DEFAULT_AGENTS) { await saveAgent(a); }
-    state.agents = [...DEFAULT_AGENTS];
-    showToast('Agents réinitialisés');
-    state.view = 'hub'; rerender();
-  });
-  resetBtn.style.cssText = resetBtn.style.cssText + ';color:#e65;border-color:#4a1a1a;';
-  resetSection.appendChild(resetBtn);
-  container.appendChild(resetSection);
+    const statusEl = el('div', { fontSize:'11px', color:'#555', marginBottom:'8px', lineHeight:'1.6' });
+    statusEl.textContent = bleConnected() ? '\uD83D\uDD17 ESP32 connecté' : '⚠️ ESP32 non connecté — connexion BLE requise';
+    container.appendChild(statusEl);
+
+    const syncBtn = btn('\uD83D\uDD04 Synchroniser les clés vers l\'ESP32', bleConnected() ? 'primary' : '', async () => {
+      if (!bleConnected()) { showToast('⚠️ Connecte d\'abord l\'ESP32 via Bluetooth', true); return; }
+      syncBtn.textContent = '⏳ Sync…'; syncBtn.disabled = true;
+      try {
+        const report = await syncApiKeys();
+        const parts = [];
+        if (report.pushed.length) parts.push('✅ ' + report.pushed.length + ' poussée(s)');
+        if (report.ok.length)     parts.push('\uD83D\uDFE2 ' + report.ok.length + ' déjà OK');
+        if (report.missing.length) parts.push('⚠️ ' + report.missing.length + ' manquante(s) dans les deux');
+        showToast(parts.join(' · ') || 'Rien à faire');
+      } catch (e) {
+        showToast('❌ ' + e.message, true);
+      } finally {
+        syncBtn.textContent = '\uD83D\uDD04 Synchroniser les clés vers l\'ESP32';
+        syncBtn.disabled = false;
+      }
+    });
+    container.appendChild(syncBtn);
+
+    const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'16px 0' });
+    container.appendChild(sep);
+
+    // ── Danger zone ──────────────────────────────────────────────────────────
+    const dangerTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
+    dangerTitle.textContent = 'Danger';
+    container.appendChild(dangerTitle);
+
+    const resetBtn = btn('\uD83D\uDDD1 Réinitialiser tous les agents', '', async () => {
+      if (!confirm('Réinitialiser tous les agents ? Cette action est irréversible.')) return;
+      const { DEFAULT_AGENTS } = await import('../core/default-agents.js');
+      for (const a of DEFAULT_AGENTS) { await saveAgent(a); }
+      state.agents = [...DEFAULT_AGENTS];
+      showToast('Agents réinitialisés');
+      state.view = 'hub'; rerender();
+    });
+    resetBtn.style.cssText += ';color:#e65;border-color:#4a1a1a;';
+    container.appendChild(resetBtn);
+
+    const noteEl = el('div', { fontSize:'11px', color:'#444', marginTop:'12px', lineHeight:'1.5' });
+    noteEl.innerHTML = '\uD83D\uDD11 Les clés API sont stockées dans localStorage sur cet appareil uniquement.<br>Elles sont poussées automatiquement vers l\'ESP32 à chaque connexion BLE.';
+    container.appendChild(noteEl);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -830,7 +828,6 @@ function btn(label, variant, onClick) {
   return b;
 }
 
-// ── Toast notification ────────────────────────────────────────────────────────
 let toastTimer = null;
 function showToast(message, isError = false) {
   let toast = document.getElementById('nestor-toast');
