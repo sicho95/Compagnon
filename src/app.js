@@ -1,4 +1,4 @@
-import { loadAgents, loadChatHistory } from './storage/agents-db.js';
+import { loadAgents, loadChatHistory, initSettingsStore } from './storage/agents-db.js';
 import { initBackends } from './api/backends.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { cleanupRadarView } from './ui/radar-view.js';
@@ -13,6 +13,10 @@ async function main() {
     try { await navigator.serviceWorker.register('./service-worker.js'); }
     catch (e) { console.warn('[Nestor] SW:', e); }
   }
+
+  // Pré-charger le cache settings depuis IndexedDB (résout le bug clés perdues iOS)
+  try { await initSettingsStore(); }
+  catch (e) { console.warn('[Nestor] initSettingsStore:', e); }
 
   // Callback OAuth Alexa : échange le code si présent dans l'URL
   const _urlParams  = new URLSearchParams(window.location.search);
@@ -45,8 +49,8 @@ async function main() {
     chatHistory: orchestrator
       ? [{ role: 'system', content: orchestrator.system_prompt || '' }]
       : [],
-    menuOpen: false,      // drawer Nestor (vue chat)
-    hubMenuOpen: false,   // drawer Hub global (toutes les autres vues)
+    menuOpen: false,
+    hubMenuOpen: false,
     _radarPrevView: 'hub',
     _boursePrevView: 'hub',
     _meteoPrevView: 'hub',
@@ -60,14 +64,9 @@ export function renderFrame(root, state) {
   const safeViews = ['hub', 'agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'meteo', 'musique', 'companion'];
   if (!safeViews.includes(state.view)) state.view = 'hub';
 
-  // Nettoyage lors de la sortie des vues qui ont des ressources
-  if (state._prevView === 'radar' && state.view !== 'radar') {
-    cleanupRadarView();
-  }
-  if (state._prevView === 'musique' && state.view !== 'musique') {
-    cleanupMusiqueView();
-  }
-  // Fermer les drawers si changement de vue
+  if (state._prevView === 'radar'   && state.view !== 'radar')   cleanupRadarView();
+  if (state._prevView === 'musique' && state.view !== 'musique') cleanupMusiqueView();
+
   if (state.view !== 'chat') state.menuOpen = false;
   if (state.view === 'chat') state.hubMenuOpen = false;
   state._prevView = state.view;
@@ -83,25 +82,17 @@ export function renderFrame(root, state) {
   const titleEl = document.createElement('span');
   titleEl.style.cssText = 'font-weight:600;font-size:13px;flex:1;';
   const titles = {
-    hub: '🏠 Compagnon',
-    chat: state.activeAgent ? '🧠 ' + state.activeAgent.name : '🧠 Nestor',
-    settings: '⚙️ Réglages',
-    fabrique: '🏭 Fabrique',
-    edit: '✏️ Édition',
-    radar: '🚨 Radars',
-    bourse: '📈 Bourse',
-    agents: '🤖 Agents',
-    meteo: '🌤 Météo',
-    musique: '🎵 Musique',
-    companion: '📱 Compagnon ESP32',
+    hub: '🏠 Compagnon', chat: state.activeAgent ? '🧠 ' + state.activeAgent.name : '🧠 Nestor',
+    settings: '⚙️ Réglages', fabrique: '🏭 Fabrique', edit: '✏️ Édition',
+    radar: '🚨 Radars', bourse: '📈 Bourse', agents: '🤖 Agents',
+    meteo: '🌤 Météo', musique: '🎵 Musique', companion: '📱 Compagnon ESP32',
   };
   titleEl.textContent = titles[state.view] || '🏠 Compagnon';
   statusBar.appendChild(titleEl);
 
   const rerender = () => renderFrame(root, state);
 
-  // ── Hamburger Hub global (toutes les vues SAUF chat) ─────────────────────
-  // Menu global : navigation apps, Compagnon ESP32, réglages PWA
+  // Hamburger Hub global (toutes les vues SAUF chat)
   if (state.view !== 'chat') {
     const hubHamburger = document.createElement('button');
     hubHamburger.setAttribute('aria-label', 'Menu global');
@@ -109,15 +100,11 @@ export function renderFrame(root, state) {
       ? '✕'
       : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
     hubHamburger.style.cssText = 'background:none;border:none;color:#aaa;padding:4px 8px;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
-    hubHamburger.onclick = () => {
-      state.hubMenuOpen = !state.hubMenuOpen;
-      renderFrame(root, state);
-    };
+    hubHamburger.onclick = () => { state.hubMenuOpen = !state.hubMenuOpen; renderFrame(root, state); };
     statusBar.appendChild(hubHamburger);
   }
 
-  // ── Hamburger Nestor (vue chat UNIQUEMENT) ───────────────────────────────
-  // Menu Nestor : changement d'agent, historiques, réglages API Nestor
+  // Hamburger Nestor (vue chat UNIQUEMENT)
   if (state.view === 'chat') {
     const nestorHamburger = document.createElement('button');
     nestorHamburger.setAttribute('aria-label', 'Menu Nestor');
@@ -125,16 +112,11 @@ export function renderFrame(root, state) {
       ? '✕'
       : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
     nestorHamburger.style.cssText = 'background:none;border:none;color:#aaa;padding:4px 8px;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;';
-    nestorHamburger.onclick = () => {
-      state.menuOpen = !state.menuOpen;
-      renderFrame(root, state);
-    };
+    nestorHamburger.onclick = () => { state.menuOpen = !state.menuOpen; renderFrame(root, state); };
     statusBar.appendChild(nestorHamburger);
   }
 
-  // ── Helpers drawers ──────────────────────────────────────────────────────
-  let drawer = null;
-  let drawerOverlay = null;
+  let drawer = null, drawerOverlay = null;
 
   const mkOverlay = () => {
     const ov = document.createElement('div');
@@ -182,13 +164,10 @@ export function renderFrame(root, state) {
     return l;
   };
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // DRAWER HUB GLOBAL — navigation principale (toutes vues sauf chat)
-  // ══════════════════════════════════════════════════════════════════════════
+  // DRAWER HUB GLOBAL
   if (state.hubMenuOpen && state.view !== 'chat') {
     drawerOverlay = mkOverlay();
     drawerOverlay.onclick = () => { state.hubMenuOpen = false; rerender(); };
-
     drawer = mkDrawer();
 
     const hubTitle = document.createElement('div');
@@ -197,10 +176,8 @@ export function renderFrame(root, state) {
     drawer.appendChild(hubTitle);
 
     drawer.appendChild(mkLabel('Applications'));
-    drawer.appendChild(mkItem('🏠', 'Accueil', () => {
-      state.view = 'hub'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'hub'));
-    drawer.appendChild(mkItem('🧠', 'Nestor', () => {
+    drawer.appendChild(mkItem('🏠', 'Accueil',          () => { state.view = 'hub';    state.hubMenuOpen = false; rerender(); }, state.view === 'hub'));
+    drawer.appendChild(mkItem('🧠', 'Nestor',            () => {
       const orch = state.agents.find(a => a.role === 'orchestrator');
       if (orch) {
         state.activeAgent = orch;
@@ -209,49 +186,26 @@ export function renderFrame(root, state) {
       }
       state.view = 'chat'; state.hubMenuOpen = false; rerender();
     }, state.view === 'chat'));
-    drawer.appendChild(mkItem('🚨', 'Radars', () => {
-      state._radarPrevView = state.view; state.view = 'radar'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'radar'));
-    drawer.appendChild(mkItem('🌤', 'Météo', () => {
-      state._meteoPrevView = state.view; state.view = 'meteo'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'meteo'));
-    drawer.appendChild(mkItem('📈', 'Bourse & Marchés', () => {
-      state._boursePrevView = state.view; state.view = 'bourse'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'bourse'));
-    drawer.appendChild(mkItem('🎵', 'Musique', () => {
-      state._musiquePrevView = state.view; state.view = 'musique'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'musique'));
-
+    drawer.appendChild(mkItem('🚨', 'Radars',            () => { state._radarPrevView  = state.view; state.view = 'radar';   state.hubMenuOpen = false; rerender(); }, state.view === 'radar'));
+    drawer.appendChild(mkItem('🌤', 'Météo',             () => { state._meteoPrevView   = state.view; state.view = 'meteo';   state.hubMenuOpen = false; rerender(); }, state.view === 'meteo'));
+    drawer.appendChild(mkItem('📈', 'Bourse & Marchés',  () => { state._boursePrevView  = state.view; state.view = 'bourse';  state.hubMenuOpen = false; rerender(); }, state.view === 'bourse'));
+    drawer.appendChild(mkItem('🎵', 'Musique',           () => { state._musiquePrevView = state.view; state.view = 'musique'; state.hubMenuOpen = false; rerender(); }, state.view === 'musique'));
     drawer.appendChild(mkSep());
     drawer.appendChild(mkLabel('Compagnon ESP32'));
-    drawer.appendChild(mkItem('📱', 'Gestion ESP32', () => {
-      state.view = 'companion'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'companion'));
-
+    drawer.appendChild(mkItem('📱', 'Gestion ESP32',     () => { state.view = 'companion'; state.hubMenuOpen = false; rerender(); }, state.view === 'companion'));
     drawer.appendChild(mkSep());
     drawer.appendChild(mkLabel('Gestion'));
-    drawer.appendChild(mkItem('🤖', 'Gérer les agents', () => {
-      state.view = 'agents'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'agents'));
-    drawer.appendChild(mkItem('🏭', 'Fabrique d\'agents', () => {
-      state.view = 'fabrique'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'fabrique'));
-
+    drawer.appendChild(mkItem('🤖', 'Gérer les agents',  () => { state.view = 'agents';   state.hubMenuOpen = false; rerender(); }, state.view === 'agents'));
+    drawer.appendChild(mkItem('🏭', 'Fabrique d\'agents',() => { state.view = 'fabrique'; state.hubMenuOpen = false; rerender(); }, state.view === 'fabrique'));
     drawer.appendChild(mkSep());
     drawer.appendChild(mkLabel('Réglages'));
-    drawer.appendChild(mkItem('⚙️', 'Réglages globaux', () => {
-      state.view = 'settings'; state.hubMenuOpen = false; rerender();
-    }, state.view === 'settings'));
+    drawer.appendChild(mkItem('⚙️', 'Réglages globaux',  () => { state.view = 'settings'; state.hubMenuOpen = false; rerender(); }, state.view === 'settings'));
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // DRAWER NESTOR — vue chat uniquement
-  // Agents, historiques, réglages API Nestor
-  // ══════════════════════════════════════════════════════════════════════════
+  // DRAWER NESTOR (vue chat)
   else if (state.view === 'chat' && state.menuOpen) {
     drawerOverlay = mkOverlay();
     drawerOverlay.onclick = () => { state.menuOpen = false; rerender(); };
-
     drawer = mkDrawer();
 
     const nestorTitle = document.createElement('div');
@@ -259,13 +213,9 @@ export function renderFrame(root, state) {
     nestorTitle.textContent = 'Nestor — Conversations';
     drawer.appendChild(nestorTitle);
 
-    drawer.appendChild(mkItem('🏠', 'Accueil', () => {
-      state.view = 'hub'; state.menuOpen = false; rerender();
-    }, false));
-
+    drawer.appendChild(mkItem('🏠', 'Accueil', () => { state.view = 'hub'; state.menuOpen = false; rerender(); }, false));
     drawer.appendChild(mkSep());
 
-    // Orchestrateur
     const orch = state.agents.find(a => a.role === 'orchestrator');
     if (orch) {
       drawer.appendChild(mkItem('🧠', 'Parler à l\'Orchestrateur', () => {
@@ -275,44 +225,26 @@ export function renderFrame(root, state) {
         state.view = 'chat'; state.menuOpen = false; rerender();
       }, state.view === 'chat' && state.activeAgent?.role === 'orchestrator'));
     }
-
     drawer.appendChild(mkSep());
 
-    // Agents métier
-    const otherAgents = state.agents.filter(a =>
-      a.role !== 'orchestrator' && a.role !== 'gardener' && a.role !== 'factory'
-    );
+    const otherAgents = state.agents.filter(a => a.role !== 'orchestrator' && a.role !== 'gardener' && a.role !== 'factory');
     if (otherAgents.length > 0) {
       drawer.appendChild(mkLabel('Agents'));
-      const ICONS = {
-        'monthly-payments': '📅', 'pea-portfolio': '📈', stories: '📚',
-        research: '🔍', 'web-search': '🌐', 'web-analyst': '🔎', generic: '🤖', maison: '🏠',
-      };
+      const ICONS = { 'monthly-payments':'📅','pea-portfolio':'📈',stories:'📚',research:'🔍','web-search':'🌐','web-analyst':'🔎',generic:'🤖',maison:'🏠' };
       otherAgents.forEach(a => {
-        drawer.appendChild(mkItem(
-          ICONS[a.role] || '🤖', a.name,
-          () => {
-            state.activeAgent = a;
-            state.chatHistory = [{ role:'system', content: a.system_prompt || '' }];
-            state.view = 'chat'; state.menuOpen = false; rerender();
-          },
-          state.view === 'chat' && state.activeAgent?.id === a.id
-        ));
+        drawer.appendChild(mkItem(ICONS[a.role] || '🤖', a.name, () => {
+          state.activeAgent = a;
+          state.chatHistory = [{ role:'system', content: a.system_prompt || '' }];
+          state.view = 'chat'; state.menuOpen = false; rerender();
+        }, state.view === 'chat' && state.activeAgent?.id === a.id));
       });
       drawer.appendChild(mkSep());
     }
 
-    // Réglages Nestor
     drawer.appendChild(mkLabel('Nestor'));
-    drawer.appendChild(mkItem('🤖', 'Gérer les agents', () => {
-      state.view = 'agents'; state.menuOpen = false; rerender();
-    }, state.view === 'agents'));
-    drawer.appendChild(mkItem('🏭', 'Fabrique d\'agents', () => {
-      state.view = 'fabrique'; state.menuOpen = false; rerender();
-    }, state.view === 'fabrique'));
-    drawer.appendChild(mkItem('⚙️', 'Réglages API Nestor', () => {
-      state.view = 'settings'; state.menuOpen = false; rerender();
-    }, state.view === 'settings'));
+    drawer.appendChild(mkItem('🤖', 'Gérer les agents',    () => { state.view = 'agents';   state.menuOpen = false; rerender(); }, state.view === 'agents'));
+    drawer.appendChild(mkItem('🏭', 'Fabrique d\'agents', () => { state.view = 'fabrique';  state.menuOpen = false; rerender(); }, state.view === 'fabrique'));
+    drawer.appendChild(mkItem('⚙️', 'Réglages API Nestor', () => { state.view = 'settings';  state.menuOpen = false; rerender(); }, state.view === 'settings'));
   }
 
   const mainEl = document.createElement('div');
@@ -325,7 +257,7 @@ export function renderFrame(root, state) {
 
   mainEl.appendChild(content);
   if (drawerOverlay) mainEl.appendChild(drawerOverlay);
-  if (drawer) mainEl.appendChild(drawer);
+  if (drawer)        mainEl.appendChild(drawer);
 
   frame.append(statusBar, mainEl);
   root.appendChild(frame);

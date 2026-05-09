@@ -1,33 +1,38 @@
 import { defaultAgents } from '../core/default-agents.js';
 
-const DB_NAME = 'nestor-agents-v1';
-const STORE_AGENTS = 'agents';
+const DB_NAME    = 'nestor-agents-v1';
+const STORE_AGENTS   = 'agents';
+const STORE_SETTINGS = 'settings';
 
+// ─── IndexedDB open (agents + settings stores) ───────────────────────────────
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2); // version 2 : ajout store settings
     req.onupgradeneeded = (event) => {
       const db = event.target.result;
       if (!db.objectStoreNames.contains(STORE_AGENTS)) {
         db.createObjectStore(STORE_AGENTS, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+        db.createObjectStore(STORE_SETTINGS); // keyPath : clé libre
+      }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror   = () => reject(req.error);
   });
 }
 
+// ─── Agents ──────────────────────────────────────────────────────────────────
 async function getAllRaw() {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AGENTS, 'readonly');
+    const tx  = db.transaction(STORE_AGENTS, 'readonly');
     const req = tx.objectStore(STORE_AGENTS).getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
+    req.onerror   = () => reject(req.error);
   });
 }
 
-// Charge les agents. Si la base est vide, seed les agents par défaut.
 export async function loadAgents() {
   const existing = await getAllRaw();
   if (existing.length > 0) return existing;
@@ -39,10 +44,10 @@ export async function loadAgents() {
 async function saveAgentRaw(agent) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AGENTS, 'readwrite');
+    const tx  = db.transaction(STORE_AGENTS, 'readwrite');
     const req = tx.objectStore(STORE_AGENTS).put(agent);
     req.onsuccess = () => resolve(agent);
-    req.onerror = () => reject(req.error);
+    req.onerror   = () => reject(req.error);
   });
 }
 
@@ -54,10 +59,10 @@ export async function saveAgent(agent) {
 export async function deleteAgent(id) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AGENTS, 'readwrite');
+    const tx  = db.transaction(STORE_AGENTS, 'readwrite');
     const req = tx.objectStore(STORE_AGENTS).delete(id);
     req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    req.onerror   = () => reject(req.error);
   });
 }
 
@@ -65,34 +70,73 @@ export function exportAgentsJson(agents) {
   return JSON.stringify({ format: 'nestor-agents-1', exportedAt: new Date().toISOString(), agents }, null, 2);
 }
 
-export function downloadText(filename, text) {
-  const blob = new Blob([text], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
+export function downloadText(text, filename, mime) {
+  const blob = new Blob([text], { type: mime || 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-export async function importAgentsJson(json, gardenerMergeFn) {
+export async function importAgentsJson(json, currentAgents) {
   const parsed = JSON.parse(json);
   if (parsed.format !== 'nestor-agents-1') throw new Error('Format inconnu');
-  const existing = await getAllRaw();
-  const merged = await gardenerMergeFn(existing, parsed.agents || []);
+  const incoming = parsed.agents || [];
+  const merged = [...currentAgents];
+  for (const a of incoming) {
+    const idx = merged.findIndex(x => x.id === a.id);
+    if (idx >= 0) merged[idx] = a; else merged.push(a);
+  }
   for (const agent of merged) await saveAgent(agent);
   return merged;
 }
 
-// localStorage sécurisé (PWA iOS peut bloquer)
-export function lsGet(key) { try { return localStorage.getItem(key) || ''; } catch { return ''; } }
-export function lsSet(key, val) { try { localStorage.setItem(key, val); } catch { console.warn('[Nestor] localStorage indisponible'); } }
+// ─── Settings via IndexedDB (remplace localStorage) ──────────────────────────
+// Cache mémoire pour accès synchrone après init
+const _settingsCache = {};
+let   _dbReady = false;
 
-// ─── Historique de conversation par agent (localStorage) ─────────────────────
-const HIST_PREFIX = 'NESTOR_HIST_';
+/**
+ * À appeler une seule fois au boot (dans main()) avant toute lecture de settings.
+ * Pré-charge tous les namespaces dans _settingsCache.
+ */
+export async function initSettingsStore() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE_SETTINGS, 'readonly');
+    const req = tx.objectStore(STORE_SETTINGS).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) { _settingsCache[cursor.key] = cursor.value; cursor.continue(); }
+      else { _dbReady = true; resolve(); }
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export function lsGet(key) {
+  if (_dbReady) return _settingsCache[key] ?? '';
+  // Fallback synchrone si initSettingsStore() pas encore terminé
+  try { return localStorage.getItem(key) || ''; } catch { return ''; }
+}
+
+export function lsSet(key, val) {
+  _settingsCache[key] = val;
+  // Écriture async IDB (fire & forget)
+  openDb().then(db => {
+    const tx  = db.transaction(STORE_SETTINGS, 'readwrite');
+    tx.objectStore(STORE_SETTINGS).put(val, key);
+  }).catch(e => console.warn('[Nestor] IDB lsSet:', e));
+  // Écriture localStorage en parallèle pour migration douce
+  try { localStorage.setItem(key, val); } catch { /* iOS strict mode — ignoré */ }
+}
+
+// ─── Historique de conversation par agent ────────────────────────────────────
+const HIST_PREFIX     = 'NESTOR_HIST_';
 const HIST_MAX_MESSAGES = 100;
 
 export function saveChatHistory(agentId, history) {
-  // Ne persiste pas le message system (index 0)
   const toSave = history.filter(m => m.role !== 'system').slice(-HIST_MAX_MESSAGES);
   lsSet(HIST_PREFIX + agentId, JSON.stringify(toSave));
 }
@@ -105,5 +149,10 @@ export function loadChatHistory(agentId) {
 }
 
 export function clearChatHistory(agentId) {
+  delete _settingsCache[HIST_PREFIX + agentId];
+  openDb().then(db => {
+    const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+    tx.objectStore(STORE_SETTINGS).delete(HIST_PREFIX + agentId);
+  }).catch(() => {});
   try { localStorage.removeItem(HIST_PREFIX + agentId); } catch {}
 }

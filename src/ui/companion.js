@@ -1,6 +1,7 @@
 /**
  * companion.js — Vue gestion du Compagnon ESP32 dans Nestor PWA
- * Connexion BLE, WiFi provisioning, sync agents, clavier distant, config, batterie PMIC
+ * Connexion BLE (Android/Desktop via Web Bluetooth)
+ * iOS : guide d'appairage natif Bluetooth + deep link réglages
  */
 import { bleAvailable, bleConnect, bleDisconnect, bleConnected, bleDeviceName } from '../bt/ble.js';
 import { deviceStatus, subscribeBleStatus, setBleConnected, setBleDisconnected } from '../bt/ble_status.js';
@@ -11,10 +12,117 @@ import { setupLlmRelay } from '../bt/ble_protocol.js';
 import { createKeyboardOverlay } from '../input/bt_keyboard.js';
 import { callLLM, listBackends } from '../api/backends.js';
 
+// Détecte iOS Safari (pas de Web Bluetooth)
+function isIOS() {
+  return /iP(hone|ad|od)/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
 export function renderCompanionView(container, state, rerender) {
   container.innerHTML = '';
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;';
 
+  // ── iOS : Web Bluetooth indisponible → guide appairage natif ─────────────
+  if (!bleAvailable()) {
+    renderIOSBluetoothGuide(container);
+    return;
+  }
+
+  // ── Android / Desktop : flux Web Bluetooth normal ───────────────────────
+  renderWebBluetoothUI(container, state, rerender);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GUIDE iOS : appairage Bluetooth natif
+// ─────────────────────────────────────────────────────────────────────────────
+function renderIOSBluetoothGuide(container) {
+  const wrap = el('div', 'padding:16px;display:flex;flex-direction:column;gap:12px;');
+
+  // Header
+  const header = el('div', 'text-align:center;padding:12px 0 4px;');
+  header.innerHTML = `
+    <div style="font-size:40px;margin-bottom:8px;">📱</div>
+    <div style="font-size:15px;font-weight:700;color:#eee;">Compagnon ESP32</div>
+    <div style="font-size:12px;color:#555;margin-top:4px;">iOS — Bluetooth natif requis</div>
+  `;
+  wrap.appendChild(header);
+
+  // Info Web Bluetooth
+  const infoBanner = el('div', 'background:#1a1208;border:1px solid #3a2a08;border-radius:10px;padding:12px 14px;');
+  infoBanner.innerHTML = `
+    <div style="font-size:12px;color:#fa8;font-weight:600;margin-bottom:6px;">⚠️ Web Bluetooth non disponible sur iOS Safari</div>
+    <div style="font-size:11px;color:#766040;line-height:1.6;">
+      Apple ne supporte pas Web Bluetooth sur iOS/iPadOS.<br>
+      L'appairage se fait via les <strong style="color:#fa8;">Réglages Bluetooth</strong> natifs,
+      puis la PWA communique via les fonctionnalités disponibles (WiFi, sync, etc.).
+    </div>
+  `;
+  wrap.appendChild(infoBanner);
+
+  // Étapes
+  const stepsTitle = el('div', 'font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-top:4px;');
+  stepsTitle.textContent = 'Comment appairer le Compagnon';
+  wrap.appendChild(stepsTitle);
+
+  const steps = [
+    { n:'1', icon:'📲', title:'Allume le Compagnon ESP32', desc:'Appuie sur le bouton power. L\'écran affiche « Prêt à appairer » et le nom BLE : <strong style="color:#7ef;">Nestor</strong>.' },
+    { n:'2', icon:'⚙️', title:'Ouvre les Réglages Bluetooth', desc:'Va dans <strong style="color:#7ef;">Réglages → Bluetooth</strong> sur ton iPhone et assure-toi que le Bluetooth est activé.' },
+    { n:'3', icon:'🔍', title:'Cherche « Nestor » dans la liste', desc:'L\'ESP32 apparaît dans la section <em>Autres appareils</em>. Appuie dessus pour appairer.' },
+    { n:'4', icon:'✅', title:'Confirme le code d\'appairage', desc:'Si un code PIN s\'affiche sur l\'écran du Compagnon, saisis-le sur l\'iPhone. Accepte la demande d\'appairage.' },
+    { n:'5', icon:'🌐', title:'Reviens dans la PWA', desc:'Une fois appairé, le Compagnon se connecte automatiquement en WiFi si configuré. La sync d\'agents et les clés API se font via WiFi.' },
+  ];
+
+  for (const s of steps) {
+    const row = el('div', 'display:flex;gap:12px;align-items:flex-start;background:#0e0e0e;border:1px solid #1a1a1a;border-radius:10px;padding:12px;');
+    const num = el('div', 'min-width:28px;height:28px;border-radius:50%;background:#1a3a1a;border:1px solid #2a5a2a;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#7ef;flex-shrink:0;');
+    num.textContent = s.n;
+    const txt = el('div', 'flex:1;');
+    txt.innerHTML = `<div style="font-size:13px;font-weight:600;color:#ddd;margin-bottom:3px;">${s.icon} ${s.title}</div><div style="font-size:11px;color:#666;line-height:1.6;">${s.desc}</div>`;
+    row.append(num, txt);
+    wrap.appendChild(row);
+  }
+
+  // Bouton deep link Réglages Bluetooth iOS
+  const btBtn = document.createElement('button');
+  btBtn.style.cssText = 'background:#1a2a3a;border:1px solid #2a4a6a;border-radius:10px;padding:13px 16px;color:#7af;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:4px;';
+  btBtn.innerHTML = '<span style="font-size:18px;">⚙️</span> Ouvrir Réglages Bluetooth iOS';
+  btBtn.onclick = () => {
+    // Deep link natif iOS vers les réglages Bluetooth
+    window.location.href = 'App-Prefs:root=Bluetooth';
+    // Fallback : lien universel Réglages (fonctionne dans Safari/PWA)
+    setTimeout(() => { window.location.href = 'prefs:root=Bluetooth'; }, 400);
+  };
+  wrap.appendChild(btBtn);
+
+  // Note Android
+  const noteAndroid = el('div', 'background:#0a1a0a;border:1px solid #1a2a1a;border-radius:8px;padding:10px 12px;margin-top:4px;');
+  noteAndroid.innerHTML = `
+    <div style="font-size:11px;color:#3a6a3a;font-weight:600;margin-bottom:3px;">✅ Sur Android</div>
+    <div style="font-size:11px;color:#2a4a2a;line-height:1.5;">
+      Web Bluetooth est supporté nativement sur Chrome Android.<br>
+      Utilise l'onglet <strong>Connecter</strong> ci-dessous depuis un appareil Android pour le flux complet.
+    </div>
+  `;
+  wrap.appendChild(noteAndroid);
+
+  // Note sync WiFi iOS
+  const noteSync = el('div', 'background:#0a0a1a;border:1px solid #1a1a2a;border-radius:8px;padding:10px 12px;');
+  noteSync.innerHTML = `
+    <div style="font-size:11px;color:#3a3a7a;font-weight:600;margin-bottom:3px;">💡 Sync agents & clés sur iOS</div>
+    <div style="font-size:11px;color:#2a2a4a;line-height:1.5;">
+      Une fois le Compagnon connecté au WiFi (via un Android ou depuis l'ESP32 directement),
+      la synchronisation des agents et des clés API se fait <strong>via WiFi</strong> — pas besoin de BLE.
+    </div>
+  `;
+  wrap.appendChild(noteSync);
+
+  container.appendChild(wrap);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEB BLUETOOTH UI (Android / Desktop Chrome)
+// ─────────────────────────────────────────────────────────────────────────────
+function renderWebBluetoothUI(container, state, rerender) {
   // ── Bandeau connexion ────────────────────────────────────
   const connBar = el('div', 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0e1a0e;border-bottom:1px solid #1a2a1a;position:sticky;top:0;z-index:2;');
   const connInfo = el('div', 'display:flex;flex-direction:column;gap:2px;');
@@ -28,7 +136,7 @@ export function renderCompanionView(container, state, rerender) {
       : mode === 'ble_relay' ? '📱 Relais LLM' : '⚡ BLE seulement';
     connInfo.innerHTML = ok
       ? `<span style="color:#7ef;font-size:13px;font-weight:600;">🔗 ${bleDeviceName() || 'Nestor'}</span><span style="color:#5a7a5a;font-size:11px;">${modeLabel}</span>`
-      : `<span style="color:#888;font-size:13px;">Compagnon non connecté</span><span style="color:#444;font-size:11px;">Bluetooth requis (Chrome Android/Desktop)</span>`;
+      : `<span style="color:#888;font-size:13px;">Compagnon non connecté</span><span style="color:#444;font-size:11px;">Chrome Android ou Chrome Desktop requis</span>`;
     connectBtn.textContent = ok ? 'Déconnecter' : 'Connecter';
     connectBtn.style.background = ok ? '#2a1a1a' : '#1a3a1a';
     connectBtn.style.color = ok ? '#e87' : '#7ef';
@@ -38,14 +146,13 @@ export function renderCompanionView(container, state, rerender) {
     if (bleConnected()) {
       await bleDisconnect(); setBleDisconnected();
     } else {
-      if (!bleAvailable()) { alert('Web Bluetooth non disponible.\nUtilise Chrome sur Android ou desktop.'); return; }
       try {
         connectBtn.textContent = '⏳…'; connectBtn.disabled = true;
         const name = await bleConnect();
         setBleConnected(name);
         const backends = listBackends();
         const defaultB = backends[0];
-        setupLlmRelay(async (messages, model) => {
+        setupLlmRelay(async (messages) => {
           const choice = await callLLM(defaultB?.id || 'groq-llama', { messages });
           return choice?.message?.content || '';
         });
@@ -63,7 +170,6 @@ export function renderCompanionView(container, state, rerender) {
   container.appendChild(connBar);
   refreshBar();
 
-  // ── Sections ───────────────────────────────────────
   const sectionsWrap = el('div', 'display:flex;flex-direction:column;');
   container.appendChild(sectionsWrap);
 
@@ -77,11 +183,11 @@ export function renderCompanionView(container, state, rerender) {
       sectionsWrap.appendChild(hint);
       return;
     }
-    sectionsWrap.appendChild(mkSection('📶 Réseau WiFi', buildWifiSection()));
-    sectionsWrap.appendChild(mkSection('🧠 Agents & Sync', buildAgentsSection(state, rerender)));
-    sectionsWrap.appendChild(mkSection('🔋 Batterie & PMIC', buildBatterySection()));
-    sectionsWrap.appendChild(mkSection('⌨️ Clavier distant', buildKeyboardSection()));
-    sectionsWrap.appendChild(mkSection('⚙️ Configuration', buildConfigSection()));
+    sectionsWrap.appendChild(mkSection('📶 Réseau WiFi',       buildWifiSection()));
+    sectionsWrap.appendChild(mkSection('🧠 Agents & Sync',     buildAgentsSection(state, rerender)));
+    sectionsWrap.appendChild(mkSection('🔋 Batterie & PMIC',   buildBatterySection()));
+    sectionsWrap.appendChild(mkSection('⌨️ Clavier distant',   buildKeyboardSection()));
+    sectionsWrap.appendChild(mkSection('⚙️ Configuration',     buildConfigSection()));
   }
   renderSections();
 
@@ -173,10 +279,7 @@ function buildAgentsSection(state, rerender) {
     finally { syncBtn.textContent = '🔄 Synchroniser les agents'; syncBtn.disabled = false; }
   };
   wrap.appendChild(syncBtn);
-
-  const note = el('div', 'font-size:11px;color:#333;line-height:1.5;');
-  note.textContent = `${state.agents.length} agent(s) local — fusion par date de modification`;
-  wrap.appendChild(note);
+  wrap.appendChild(Object.assign(el('div', 'font-size:11px;color:#333;line-height:1.5;'), { textContent: `${state.agents.length} agent(s) local — fusion par date de modification` }));
   return wrap;
 }
 
@@ -203,122 +306,108 @@ function buildBatterySection() {
       socFill.style.width = pct + '%';
       socFill.style.background = pct < 10 ? '#e87' : pct < 25 ? '#fa8' : '#3a8a5a';
       socLabel.textContent = pct + '%';
-    } catch {
-      voltEl.textContent = '—';
-      socLabel.textContent = '—';
-    }
+    } catch { voltEl.textContent = '—'; socLabel.textContent = '—'; }
   }
   refreshStatus();
 
   const params = [
-    { label: '⚡ Courant charge (mA)',      key: 'chargeCurrentMa',       min: 100,  max: 800,  step: 50  },
-    { label: '🔋 Tension max (mV)',          key: 'chargeVoltageMv',        min: 4100, max: 4200, step: 10  },
-    { label: '🏁 Courant fin charge (mA)',   key: 'terminationCurrentMa',  min: 25,   max: 100,  step: 25  },
-    { label: '⚠️ Alerte basse (mV)',          key: 'alertLowMv',             min: 3100, max: 3500, step: 50  },
-    { label: '🛑 Coupure critique (mV)',      key: 'alertCriticalMv',       min: 2900, max: 3200, step: 50  },
+    { label:'⚡ Courant charge (mA)',    key:'chargeCurrentMa',      min:100,  max:800,  step:50  },
+    { label:'🔋 Tension max (mV)',        key:'chargeVoltageMv',      min:4100, max:4200, step:10  },
+    { label:'🏁 Courant fin charge (mA)', key:'terminationCurrentMa', min:25,   max:100,  step:25  },
+    { label:'⚠️ Alerte basse (mV)',       key:'alertLowMv',           min:3100, max:3500, step:50  },
+    { label:'🛑 Coupure critique (mV)',   key:'alertCriticalMv',      min:2900, max:3200, step:50  },
   ];
 
   for (const p of params) {
     const row = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0;');
     const lbl = el('div', 'font-size:11px;color:#888;flex:1;'); lbl.textContent = p.label;
     const inp = document.createElement('input');
-    inp.type = 'number'; inp.min = p.min; inp.max = p.max; inp.step = p.step; inp.value = bat[p.key];
-    inp.style.cssText = 'width:72px;background:#111;border:1px solid #333;border-radius:6px;padding:4px 6px;color:#7ef;font-size:12px;text-align:right;';
-    inp.onchange = () => { bat[p.key] = Number(inp.value); saveDeviceConfig(cfg); };
-    row.append(lbl, inp);
-    wrap.appendChild(row);
+    inp.type='number'; inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=bat[p.key];
+    inp.style.cssText='width:72px;background:#111;border:1px solid #333;border-radius:6px;padding:4px 6px;color:#7ef;font-size:12px;text-align:right;';
+    inp.onchange=()=>{ bat[p.key]=Number(inp.value); saveDeviceConfig(cfg); };
+    row.append(lbl,inp); wrap.appendChild(row);
   }
 
-  wrap.appendChild(mkToggle('🔬 Jauge AXP2101 interne', bat.gaugeEnabled, v => { bat.gaugeEnabled = v; saveDeviceConfig(cfg); }));
+  wrap.appendChild(mkToggle('🔬 Jauge AXP2101 interne', bat.gaugeEnabled, v=>{ bat.gaugeEnabled=v; saveDeviceConfig(cfg); }));
 
-  const modeRow = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0;');
-  const modeLbl = el('div', 'font-size:11px;color:#888;'); modeLbl.textContent = '📊 Affichage batterie';
-  const modeBtn = el('button', '');
-  let dispMode = bat.displayMode || 'percent';
-  const refreshMode = () => {
-    modeBtn.textContent = dispMode === 'percent' ? '% capacité' : 'V tension';
-    modeBtn.style.cssText = 'padding:4px 10px;border:1px solid #333;border-radius:12px;font-size:11px;cursor:pointer;background:#1a1a1a;color:#aaa;';
-  };
-  modeBtn.onclick = () => { dispMode = dispMode === 'percent' ? 'voltage' : 'percent'; bat.displayMode = dispMode; saveDeviceConfig(cfg); refreshMode(); };
-  refreshMode();
-  modeRow.append(modeLbl, modeBtn);
-  wrap.appendChild(modeRow);
+  const modeRow = el('div','display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0;');
+  const modeLbl = el('div','font-size:11px;color:#888;'); modeLbl.textContent='📊 Affichage batterie';
+  const modeBtn = el('button','');
+  let dispMode = bat.displayMode||'percent';
+  const refreshMode=()=>{ modeBtn.textContent=dispMode==='percent'?'% capacité':'V tension'; modeBtn.style.cssText='padding:4px 10px;border:1px solid #333;border-radius:12px;font-size:11px;cursor:pointer;background:#1a1a1a;color:#aaa;'; };
+  modeBtn.onclick=()=>{ dispMode=dispMode==='percent'?'voltage':'percent'; bat.displayMode=dispMode; saveDeviceConfig(cfg); refreshMode(); };
+  refreshMode(); modeRow.append(modeLbl,modeBtn); wrap.appendChild(modeRow);
 
-  const refreshBtn = document.createElement('button');
-  refreshBtn.textContent = '🔄 Actualiser statut batterie';
-  refreshBtn.style.cssText = btnStyle('#0a1a0a', '#5af');
-  refreshBtn.onclick = async () => { refreshBtn.textContent = '⏳…'; await refreshStatus(); refreshBtn.textContent = '🔄 Actualiser statut batterie'; };
+  const refreshBtn=document.createElement('button'); refreshBtn.textContent='🔄 Actualiser statut batterie';
+  refreshBtn.style.cssText=btnStyle('#0a1a0a','#5af');
+  refreshBtn.onclick=async()=>{ refreshBtn.textContent='⏳…'; await refreshStatus(); refreshBtn.textContent='🔄 Actualiser statut batterie'; };
   wrap.appendChild(refreshBtn);
 
-  const pushBtn = document.createElement('button');
-  pushBtn.textContent = '📤 Envoyer config PMIC au Compagnon';
-  pushBtn.style.cssText = btnStyle('#2a1a0a', '#fa8');
-  pushBtn.onclick = async () => {
-    pushBtn.textContent = '⏳ Envoi…'; pushBtn.disabled = true;
-    try   { await pushBatteryConfig(bat); pushBtn.textContent = '✅ PMIC configuré'; }
-    catch { pushBtn.textContent = '❌ Erreur envoi'; }
-    finally { setTimeout(() => { pushBtn.textContent = '📤 Envoyer config PMIC au Compagnon'; pushBtn.disabled = false; }, 2500); }
+  const pushBtn=document.createElement('button'); pushBtn.textContent='📤 Envoyer config PMIC au Compagnon';
+  pushBtn.style.cssText=btnStyle('#2a1a0a','#fa8');
+  pushBtn.onclick=async()=>{
+    pushBtn.textContent='⏳ Envoi…'; pushBtn.disabled=true;
+    try { await pushBatteryConfig(bat); pushBtn.textContent='✅ PMIC configuré'; }
+    catch { pushBtn.textContent='❌ Erreur envoi'; }
+    finally { setTimeout(()=>{ pushBtn.textContent='📤 Envoyer config PMIC au Compagnon'; pushBtn.disabled=false; },2500); }
   };
   wrap.appendChild(pushBtn);
 
-  const info = el('div', 'font-size:10px;color:#333;line-height:1.6;margin-top:4px;');
-  info.textContent = `${BATTERY_PROFILE.model} · ${BATTERY_PROFILE.capacityMah}mAh · ${BATTERY_PROFILE.chemistry} · ${BATTERY_PROFILE.voltageMin}–${BATTERY_PROFILE.voltageFull}V`;
+  const info=el('div','font-size:10px;color:#333;line-height:1.6;margin-top:4px;');
+  info.textContent=`${BATTERY_PROFILE.model} · ${BATTERY_PROFILE.capacityMah}mAh · ${BATTERY_PROFILE.chemistry} · ${BATTERY_PROFILE.voltageMin}–${BATTERY_PROFILE.voltageFull}V`;
   wrap.appendChild(info);
   return wrap;
 }
 
 // ── Clavier ──────────────────────────────────────────────────
 function buildKeyboardSection() {
-  const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
-  const desc = el('div', 'font-size:12px;color:#555;line-height:1.5;');
-  desc.textContent = 'Utilise le clavier de ton téléphone pour écrire dans le chat du Compagnon sans parler.';
-  const kbBtn = document.createElement('button');
-  kbBtn.textContent = '⌨️ Ouvrir le clavier distant';
-  kbBtn.style.cssText = btnStyle('#2a1a3a', '#c7f');
-  kbBtn.onclick = () => document.body.appendChild(createKeyboardOverlay(() => {}));
-  wrap.append(desc, kbBtn);
+  const wrap=el('div','display:flex;flex-direction:column;gap:8px;');
+  const desc=el('div','font-size:12px;color:#555;line-height:1.5;');
+  desc.textContent='Utilise le clavier de ton téléphone pour écrire dans le chat du Compagnon sans parler.';
+  const kbBtn=document.createElement('button');
+  kbBtn.textContent='⌨️ Ouvrir le clavier distant';
+  kbBtn.style.cssText=btnStyle('#2a1a3a','#c7f');
+  kbBtn.onclick=()=>document.body.appendChild(createKeyboardOverlay(()=>{}));
+  wrap.append(desc,kbBtn);
   return wrap;
 }
 
 // ── Config ────────────────────────────────────────────────
 function buildConfigSection() {
-  const wrap = el('div', 'display:flex;flex-direction:column;gap:8px;');
-  const cfg = getDeviceConfig();
-
-  wrap.appendChild(mkToggle('📱 Relais LLM si pas de WiFi', cfg.ble.relayLlmOnNoWifi, v => { cfg.ble.relayLlmOnNoWifi = v; saveDeviceConfig(cfg); }));
-  wrap.appendChild(mkToggle('🔄 Sync auto agents à la connexion', cfg.ble.autoSyncAgents, v => { cfg.ble.autoSyncAgents = v; saveDeviceConfig(cfg); }));
-
-  const pushBtn = document.createElement('button');
-  pushBtn.textContent = '📤 Envoyer la config au Compagnon';
-  pushBtn.style.cssText = btnStyle('#2a2a1a', '#fa8');
-  pushBtn.onclick = async () => {
-    pushBtn.textContent = '⏳ Envoi…'; pushBtn.disabled = true;
-    try { await pushDeviceConfig(cfg); pushBtn.textContent = '✅ Config envoyée'; }
-    catch { pushBtn.textContent = '❌ Erreur'; }
-    finally { setTimeout(() => { pushBtn.textContent = '📤 Envoyer la config au Compagnon'; pushBtn.disabled = false; }, 2000); }
+  const wrap=el('div','display:flex;flex-direction:column;gap:8px;');
+  const cfg=getDeviceConfig();
+  wrap.appendChild(mkToggle('📱 Relais LLM si pas de WiFi',        cfg.ble.relayLlmOnNoWifi, v=>{ cfg.ble.relayLlmOnNoWifi=v; saveDeviceConfig(cfg); }));
+  wrap.appendChild(mkToggle('🔄 Sync auto agents à la connexion',   cfg.ble.autoSyncAgents,   v=>{ cfg.ble.autoSyncAgents=v;   saveDeviceConfig(cfg); }));
+  const pushBtn=document.createElement('button'); pushBtn.textContent='📤 Envoyer la config au Compagnon';
+  pushBtn.style.cssText=btnStyle('#2a2a1a','#fa8');
+  pushBtn.onclick=async()=>{
+    pushBtn.textContent='⏳ Envoi…'; pushBtn.disabled=true;
+    try { await pushDeviceConfig(cfg); pushBtn.textContent='✅ Config envoyée'; }
+    catch { pushBtn.textContent='❌ Erreur'; }
+    finally { setTimeout(()=>{ pushBtn.textContent='📤 Envoyer la config au Compagnon'; pushBtn.disabled=false; },2000); }
   };
   wrap.appendChild(pushBtn);
   return wrap;
 }
 
 // ── Helpers DOM ─────────────────────────────────────────────
-function el(tag, css) { const e = document.createElement(tag); if (css) e.style.cssText = css; return e; }
-function btnStyle(bg, color) { return `background:${bg};color:${color};border:1px solid ${color}22;border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;width:100%;text-align:left;`; }
-function mkSection(title, content) {
-  const w = el('div', 'background:#0a0a0a;border-bottom:1px solid #1a1a1a;');
-  const h = el('button', 'width:100%;background:none;border:none;text-align:left;padding:12px 16px;color:#888;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;cursor:pointer;text-transform:uppercase;letter-spacing:0.06em;');
-  h.innerHTML = `<span>${title}</span><span style="font-size:10px;color:#444;">▼</span>`;
-  const b = el('div', 'padding:0 16px 14px;'); b.appendChild(content);
-  let open = true;
-  h.onclick = () => { open = !open; b.style.display = open ? '' : 'none'; h.querySelector('span:last-child').textContent = open ? '▼' : '▶'; };
-  w.append(h, b); return w;
+function el(tag,css){ const e=document.createElement(tag); if(css) e.style.cssText=css; return e; }
+function btnStyle(bg,color){ return `background:${bg};color:${color};border:1px solid ${color}22;border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;width:100%;text-align:left;`; }
+function mkSection(title,content){
+  const w=el('div','background:#0a0a0a;border-bottom:1px solid #1a1a1a;');
+  const h=el('button','width:100%;background:none;border:none;text-align:left;padding:12px 16px;color:#888;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;cursor:pointer;text-transform:uppercase;letter-spacing:0.06em;');
+  h.innerHTML=`<span>${title}</span><span style="font-size:10px;color:#444;">▼</span>`;
+  const b=el('div','padding:0 16px 14px;'); b.appendChild(content);
+  let open=true;
+  h.onclick=()=>{ open=!open; b.style.display=open?'':'none'; h.querySelector('span:last-child').textContent=open?'▼':'▶'; };
+  w.append(h,b); return w;
 }
-function mkToggle(label, value, onChange) {
-  const row = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;');
-  const lbl = el('div', 'font-size:12px;color:#888;flex:1;'); lbl.textContent = label;
-  const btn = el('button', '');
-  let state = value;
-  const refresh = () => { btn.textContent = state ? 'ON' : 'OFF'; btn.style.cssText = `padding:4px 10px;border:none;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;${state ? 'background:#1a3a1a;color:#7ef;' : 'background:#1a1a1a;color:#555;'}`; };
-  btn.onclick = () => { state = !state; refresh(); onChange(state); };
-  refresh(); row.append(lbl, btn); return row;
+function mkToggle(label,value,onChange){
+  const row=el('div','display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;');
+  const lbl=el('div','font-size:12px;color:#888;flex:1;'); lbl.textContent=label;
+  const btn=el('button','');
+  let state=value;
+  const refresh=()=>{ btn.textContent=state?'ON':'OFF'; btn.style.cssText=`padding:4px 10px;border:none;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;${state?'background:#1a3a1a;color:#7ef;':'background:#1a1a1a;color:#555;'}`; };
+  btn.onclick=()=>{ state=!state; refresh(); onChange(state); };
+  refresh(); row.append(lbl,btn); return row;
 }

@@ -9,7 +9,7 @@
  *   musique  → Spotify client ID/secret
  *   battery  → profil PMIC AT103030
  *
- * Stockage : localStorage (clés préfixées par namespace)
+ * Stockage : IndexedDB via lsGet/lsSet (cache mémoire synchrone après init)
  * Jamais de fichier secrets.js — les clés viennent de l'utilisateur via l'UI
  * ou sont synchronisées automatiquement depuis l'ESP32 via BLE.
  */
