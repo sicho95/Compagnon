@@ -23,7 +23,7 @@
 
 | Composant | Description |
 |---|---|
-| **PWA Compagnon** | App web hébergée sur `sicho95.github.io/Nestor/`. Hub d'agents LLM, TTS, radars, bourse, gestion du Compagnon ESP32. Fonctionne entièrement côté navigateur (pas de serveur applicatif). |
+| **PWA Compagnon** | App web hébergée sur `sicho95.github.io/Nestor/`. Hub d'agents LLM, TTS, radars, bourse, météo, musique, gestion du Compagnon ESP32. Fonctionne entièrement côté navigateur (pas de serveur applicatif). |
 | **ESP32 Compagnon** | Firmware sur carte Waveshare AMOLED 2.16" (ESP32-S3). Launcher carousel 4 apps autonome. Reçoit le GPS du téléphone via BLE. L'app Nestor ESP32 est un lanceur Web → PWA. |
 
 **Proxy CORS partagé :** `https://proxy.sicho95.workers.dev/?url=<URL encodée>`  
@@ -40,26 +40,28 @@ Point d'entrée : `main()` — enregistre le SW, init les backends, charge les a
 **State global :**
 ```js
 {
-  view: 'chat' | 'agents' | 'settings' | 'fabrique' | 'edit' | 'radar' | 'bourse',
+  view: 'hub' | 'chat' | 'agents' | 'settings' | 'fabrique' | 'edit'
+      | 'radar' | 'bourse' | 'meteo' | 'musique' | 'companion',
   agents: [],          // Array d'agents chargés depuis IndexedDB
   activeAgent: null,
   editingAgent: null,
   chatHistory: [],
-  menuOpen: false,
-  _radarPrevView: 'chat',
-  _boursePrevView: 'chat',
+  menuOpen: false,       // drawer Nestor (vue chat uniquement)
+  hubMenuOpen: false,    // drawer Hub global (toutes les vues sauf chat)
+  _radarPrevView: 'hub',
+  _boursePrevView: 'hub',
+  _meteoPrevView: 'hub',
+  _musiquePrevView: 'hub',
 }
 ```
 
-**Drawer hamburger** (slide-in 220px) — sections :
-1. **Orchestrateur** — chat direct
-2. **Agents** — agents filtrés (ni orchestrator, ni gardener, ni factory)
-3. **Applications** — Radars 🚨, Bourse 📈
-4. **Navigation** — Gérer les agents, Fabrique, Réglages
+**Deux drawers hamburger :**
+- **Drawer Hub global** (`hubMenuOpen`) — toutes les vues sauf `chat` — navigation apps, Compagnon ESP32, réglages
+- **Drawer Nestor** (`menuOpen`) — vue `chat` uniquement — agents, historiques, réglages API
 
-**Nettoyage radar** : `cleanupRadarView()` déclenché quand on quitte `state.view === 'radar'`.
+**Nettoyage vues :** `cleanupRadarView()` et `cleanupMusiqueView()` déclenchés automatiquement dans `renderFrame` quand on quitte les vues `radar` / `musique` via `state._prevView`.
 
-**Service Worker** : cache `nestor-v4`, stratégie cache-first pour les assets locaux.
+**Service Worker** : cache `nestor-v5`, stratégie cache-first pour les assets locaux. 29 modules précachés.
 
 **Modèle** : monolithique modularisé (une source logique, deux rendus : HTML PWA + LVGL ESP32).
 
@@ -167,9 +169,11 @@ si confiance < 0.65 → escalade orchestrateur direct
 
 ---
 
-### 2.4 App Météo
+### 2.4 App Météo (`src/ui/meteo-view.js`)
 
-L'App Météo est implémentée côté **ESP32** (voir §3.7). Côté PWA, il n'y a pas de vue météo dédiée (pas de module `meteo-view.js`).
+L'App Météo est implémentée côté **ESP32** (voir §3.7) et également côté **PWA** via `meteo-view.js`, accessible depuis le hub (icône 🌤).
+
+**API PWA** : `https://api.meteo-concept.com` via proxy CORS — localisation par coordonnées GPS browser.
 
 ---
 
@@ -275,7 +279,7 @@ Au démarrage, si `GROQ_API_KEY` présente → `GET https://api.groq.com/openai/
 
 ### 2.9 Vue Compagnon ESP32 (`src/ui/companion.js`)
 
-Vue de gestion du Compagnon, **non encore intégrée dans la navigation app.js** (pas de vue `companion` dans `safeViews`). Module autonome importable.
+Vue de gestion du Compagnon, **intégrée dans la navigation** : vue `'companion'` présente dans `safeViews` et accessible depuis le drawer Hub global (section "Compagnon ESP32").
 
 **Sections (accordéon collapsible)** :
 1. **WiFi** — scan réseaux + provisioning (ssid/password → BLE WIFI_PROVISION), réseaux sauvegardés
@@ -369,7 +373,7 @@ ble_mgr_tick()        // no-op (callbacks BLE sont async)
 ui_status_bar_tick()  // toutes les 10s : heure NTP + % batterie
 hal_imu_tick()        // toutes les 500ms : orientation → rotation LVGL
   → si hal_imu_changed() : lv_display_set_rotation(rot_map[orientation])
-orchestrator_tick()   // → brain_tick() [stub vide]
+orchestrator_tick()   // → brain_tick() → dispatch APP_METEO / APP_MUSIQUE
 ui_launcher_btn_tick()// polling boutons BTN_LEFT/BTN_RIGHT (debounce 20ms)
 delay(5)
 ```
@@ -485,7 +489,7 @@ date (Zeller), icône LVGL, condition texte, tmin/tmax °C, proba pluie %
 **Codes météo meteo-concept** :
 - 1–4 → Ensoleillé | 10–16 → Nuageux | 20–26 → Pluie | 40–48 → Forte pluie | 60–78 → Neige | 100–102 → Orage
 
-**Refresh** : toutes les 10min via `meteo_app_tick()` — **non appelé actuellement** (brain_tick est vide), donc le fetch initial via `_last_fetch=0` ne se déclenche pas.
+**Refresh** : toutes les 10min via `meteo_app_tick()` — appelé depuis `brain_tick()` via `orchestrator_get_app()`.
 
 #### Status bar (`compagnon/src/ui/status_bar.cpp`)
 
@@ -635,15 +639,18 @@ nestor/
 ├── README.md
 ├── index.html
 ├── manifest.json
-├── service-worker.js              # Cache nestor-v4
+├── service-worker.js              # Cache nestor-v5, 29 modules précachés
 ├── css/
 │   └── style.css
 ├── src/
-│   ├── app.js                     # Bootstrap + state + drawer hamburger
+│   ├── app.js                     # Bootstrap + state + deux drawers hamburger
 │   ├── api/
+│   │   ├── alexa.js               # OAuth Alexa (exchange_code)
 │   │   ├── backends.js            # callLLM + chargement dynamique Groq
 │   │   ├── backends.json          # 5 backends statiques
+│   │   ├── ecovacs.js             # Intégration aspirateur Ecovacs
 │   │   ├── search.js              # Serper + DDG + fetchPageText
+│   │   ├── stt.js                 # Speech-to-text (Web Speech API)
 │   │   └── tts.js                 # Cascade 4 providers TTS
 │   ├── bt/
 │   │   ├── ble.js                 # Web Bluetooth (service 12345678-...)
@@ -663,8 +670,10 @@ nestor/
 │   ├── sync/
 │   │   └── agents_sync.js         # Sync bidirectionnelle agents PWA ↔ ESP32
 │   └── ui/
-│       ├── dashboard.js           # Chat, agents, settings, radar, bourse
-│       ├── companion.js           # Gestion ESP32 (non encore wired dans app.js)
+│       ├── dashboard.js           # Chat, agents, settings, radar, bourse, météo, musique
+│       ├── companion.js           # Gestion ESP32 (wired — vue 'companion' + drawer Hub)
+│       ├── meteo-view.js          # Vue Météo PWA (meteo-concept API)
+│       ├── musique-view.js        # Vue Musique PWA
 │       ├── radar-view.js          # GPS + Lufop + Blitzer + alertes audio
 │       └── bourse-view.js         # Twelve Data, 4 actifs, auto-refresh
 └── compagnon/
@@ -697,7 +706,7 @@ nestor/
     │   │   ├── ble_mgr.cpp/.h      # BLE serveur GPS (4FAFC201...)
     │   │   └── ota.cpp/.h          # ArduinoOTA
     │   ├── system/
-    │   │   ├── brain.cpp/.h        # Stub vide — à implémenter
+    │   │   ├── brain.cpp/.h        # Dispatch APP_METEO / APP_MUSIQUE via orchestrator
     │   │   ├── orchestrator.cpp/.h # State machine ActiveApp
     │   │   └── wifi_mgr.cpp/.h     # WiFiManager non-bloquant
     │   └── ui/
@@ -715,21 +724,13 @@ nestor/
 
 | Composant | État | Ce qu'il faut |
 |---|---|---|
-| `brain.cpp` | **Stub vide** — `brain_tick()` ne fait rien | Appeler `meteo_app_tick()` + futures apps dans brain_tick |
-| `meteo_app_tick()` | Jamais appelé → le fetch météo ne se déclenche jamais | Appel depuis brain_tick ou timer LVGL dédié |
+| `meteo_app_tick()` | Appelé via brain_tick → fetch déclenché, mais dépend du WiFi | S'assurer que le refresh toutes les 10min fonctionne en pratique |
 | `bourse_app.cpp` | Stub UI | Appeler Twelve Data via WiFi + HTTPClient |
 | `radar_app.cpp` | Stub UI | GPS BLE + fetch Lufop/Blitzer + alertes audio I2S |
 | Service BLE multi-chars (`12345678-...`) | **Non implémenté côté ESP32** | Implémenter les 6 caractéristiques GATT côté firmware pour que `companion.js` fonctionne |
 | Audio ES8311/ES7210 | Pins définies, bibliothèque non initialisée | Init codec I2S pour TTS + micro |
 
-### 7.2 PWA — Non connecté
-
-| Composant | État |
-|---|---|
-| `src/ui/companion.js` | Module existant mais **non wired** dans `app.js` (pas de vue `'companion'` dans safeViews, pas d'entrée drawer) |
-| App Météo PWA | Pas de vue météo dans la PWA (seulement côté ESP32) |
-
-### 7.3 PWA — Fonctionnel mais non exposé
+### 7.2 PWA — Fonctionnel mais non exposé
 
 | Item | État |
 |---|---|
