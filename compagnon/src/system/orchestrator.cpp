@@ -3,6 +3,8 @@
 #include "../apps/meteo/meteo_app.h"
 #include "../apps/bourse/bourse_app.h"
 #include "../apps/radars/radar_app.h"
+#include "../apps/musique/musique_app.h"
+#include "../apps/nestor/nestor_app.h"
 
 static ActiveApp _app = APP_LAUNCHER;
 
@@ -15,9 +17,12 @@ void orchestrator_tick() {
     brain_tick();
     // Dispatch vers l'app active
     switch (_app) {
-        case APP_METEO:  meteo_app_tick();  break;
-        case APP_BOURSE: bourse_app_tick(); break;
-        case APP_RADAR:  radar_app_tick();  break;
+        case APP_METEO:    meteo_app_tick();   break;
+        case APP_BOURSE:   bourse_app_tick();  break;
+        case APP_RADAR:    radar_app_tick();   break;
+        case APP_MUSIQUE:  musique_app_tick(); break;
+        case APP_NESTOR:   /* nestor_app n'a pas de tick periodique */ break;
+        case APP_COMPANION: /* TODO: companion_app_tick() */ break;
         default: break;
     }
 }

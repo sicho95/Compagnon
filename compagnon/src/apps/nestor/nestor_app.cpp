@@ -104,7 +104,8 @@ static void wifi_task(void *) {
 void nestor_app_start() {
     orchestrator_set_app(APP_NESTOR);
     build_ui();
-    xTaskCreatePinnedToCore(wifi_task, "nestor_wifi", 4096, NULL, 1, NULL, 0);
+    // Core 1 = réseau — évite de bloquer LVGL sur Core 0
+    xTaskCreatePinnedToCore(wifi_task, "nestor_wifi", 4096, NULL, 1, NULL, 1);
 }
 
 void nestor_app_stop() {

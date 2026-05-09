@@ -171,17 +171,29 @@ static void fetch_task(void *) {
     int rc = http.GET();
 
     if (rc != 200) {
-        static char st[48];
-        snprintf(st, sizeof(st), "Lufop erreur %d", rc);
+        // Allouer le message sur le heap pour éviter la data race sur static char
+        char *msg = (char *)malloc(48);
+        if (msg) snprintf(msg, 48, "Lufop erreur %d", rc);
+        http.end();
+        lv_async_call([](void *p) {
+            _fetch_running = false;
+            if (_lbl_status && p) lv_label_set_text(_lbl_status, (char *)p);
+            free(p);
+        }, msg);
+        vTaskDelete(NULL); return;
+    }
+
+    // 16 Ko : marge pour les réponses Lufop volumineuses sans OOM
+    DynamicJsonDocument doc(16384);
+    if (doc.capacity() == 0) {
         http.end();
         lv_async_call([](void *) {
             _fetch_running = false;
-            if (_lbl_status) lv_label_set_text(_lbl_status, st);
+            if (_lbl_status) lv_label_set_text(_lbl_status, "Mémoire insuffisante");
         }, nullptr);
         vTaskDelete(NULL); return;
     }
 
-    DynamicJsonDocument doc(8192);
     DeserializationError derr = deserializeJson(doc, http.getString());
     http.end();
 

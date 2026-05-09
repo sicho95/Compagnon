@@ -20,6 +20,9 @@
 
 #define DEVICE_NAME  "Nestor"
 #define MTU_MAX      512
+// 7 caract. × 3 handles (déclaration + valeur + CCCD) + 1 service = 22 minimum
+// On prend 30 pour avoir une marge confortable
+#define BLE_HANDLE_COUNT 30
 
 // ─── Handles ──────────────────────────────────────────────────────────────────
 static BLEServer         *_server          = nullptr;
@@ -134,8 +137,8 @@ void ble_mgr_init() {
     _server = BLEDevice::createServer();
     _server->setCallbacks(new ConnCB());
 
-    // 20 handles : 7 caract. x 2 (val+CCC) + service + marge
-    BLEService *svc = _server->createService(BLEUUID(SERVICE_UUID), 20);
+    // BLE_HANDLE_COUNT = 30 : 7 caract. × 3 handles + service + marge
+    BLEService *svc = _server->createService(BLEUUID(SERVICE_UUID), BLE_HANDLE_COUNT);
 
     // 1. WiFi Scan — write + notify
     _c_wifi_scan = svc->createCharacteristic(
