@@ -1,22 +1,16 @@
 /**
- * SECRETS TEMPLATE — Copier en secrets.js + remplir les valeurs réelles
- * JAMAIS commit secrets.js (listé dans .gitignore)
+ * MIGRÉ — Ce fichier n'est plus utilisé.
  *
- * source des clés : iCloud Documents/Arduino/libraries/clé (texte)
+ * Les clés API sont désormais saisies directement dans les Réglages
+ * de chaque application (Nestor, Bourse, Météo, Musique) et stockées
+ * dans localStorage via src/core/settings-store.js
+ *
+ * La synchronisation vers l'ESP32 est automatique à chaque connexion BLE
+ * via src/sync/key-sync.js
+ *
+ * Pour migrer vos anciennes clés :
+ *   1. Ouvrez l'app → menu ☰ → Réglages
+ *   2. Saisissez vos clés dans l'onglet correspondant
+ *   3. Sauvegardez — elles seront automatiquement poussées vers l'ESP32
  */
-
-// Clés API — Backends LLM
-export const GROQ_API_KEY = 'gsk_YOUR_GROQ_KEY_HERE';
-export const OPENROUTER_API_KEY = 'sk_YOUR_OPENROUTER_KEY_HERE';
-export const GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY_HERE';
-
-// Clés API — Recherche Web
-export const SERPER_KEY = 'YOUR_SERPER_KEY_HERE';
-
-// Clés API — Financier & Météo
-export const TWELVE_DATA_KEY = 'YOUR_TWELVE_DATA_KEY_HERE';
-export const FINNHUB_KEY = 'YOUR_FINNHUB_KEY_HERE';
-export const METEO_API_KEY = 'YOUR_METEO_API_KEY_HERE';
-
-// Proxy CORS (optionnel)
-export const SEARCH_PROXY_URL = 'https://proxy.sicho95.workers.dev/';
+export {};

@@ -1,59 +1,73 @@
 const CACHE = 'nestor-v5';
+
 const PRECACHE = [
+  './',
+  './index.html',
+  './manifest.json',
+  './css/style.css',
+  './src/app.js',
+  './src/core/settings-store.js',
+  './src/core/default-agents.js',
+  './src/core/gardener.js',
+  './src/core/orchestrator-engine.js',
+  './src/api/backends.js',
   './src/api/alexa.js',
+  './src/api/search.js',
   './src/api/stt.js',
-  './src/api/ecovacs.js',
+  './src/api/tts.js',
   './src/bt/ble.js',
   './src/bt/ble_protocol.js',
   './src/bt/ble_status.js',
   './src/device/device_settings.js',
   './src/device/provisioning.js',
   './src/input/bt_keyboard.js',
+  './src/storage/agents-db.js',
   './src/sync/agents_sync.js',
+  './src/sync/key-sync.js',
+  './src/system/wake_lock.js',
+  './src/ui/bourse-view.js',
   './src/ui/companion.js',
+  './src/ui/dashboard.js',
   './src/ui/meteo-view.js',
   './src/ui/musique-view.js',
-  './',
-  './index.html',
-  './css/style.css',
-  './manifest.json',
-  './src/app.js',
-  './src/api/backends.js',
-  './src/api/backends.json',
-  './src/api/search.js',
-  './src/api/tts.js',
-  './src/core/default-agents.js',
-  './src/core/gardener.js',
-  './src/core/orchestrator-engine.js',
-  './src/storage/agents-db.js',
-  './src/ui/bourse-view.js',
-  './src/ui/dashboard.js',
   './src/ui/radar-view.js',
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(PRECACHE))
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
+self.addEventListener('activate', e => {
+  e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  // Laisser passer tous les appels API externes sans cache
-  if (url.hostname !== location.hostname) {
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  // Stratégie network-first pour les API externes
+  if (url.hostname !== self.location.hostname) {
+    e.respondWith(
+      fetch(e.request).catch(() => caches.match(e.request))
+    );
     return;
   }
-  event.respondWith(
-    caches.match(event.request).then(resp => resp || fetch(event.request))
+  // Cache-first pour les assets locaux
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      if (cached) return cached;
+      return fetch(e.request).then(resp => {
+        if (resp && resp.status === 200) {
+          const clone = resp.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return resp;
+      });
+    })
   );
 });
