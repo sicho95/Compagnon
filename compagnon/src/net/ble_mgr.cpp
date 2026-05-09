@@ -1,5 +1,4 @@
 #include "ble_mgr.h"
-#include "../gps.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -9,23 +8,42 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define SERVICE_UUID         "4FAFC201-1FB5-459E-8FCC-C5C9C331914B"
-#define GPS_CHAR_UUID        "BEB5483E-36E1-4688-B7F5-EA07361B26A8"
-#define MUSIC_CMD_CHAR_UUID  "A0B1C2D3-0001-2222-3333-AABB12345678"
-#define MUSIC_STAT_CHAR_UUID "A0B1C2D3-0002-2222-3333-AABB12345678"
-#define DEVICE_NAME          "Compagnon-Nestor"
+// ─── UUIDs alignés sur la PWA (src/bt/ble.js) ────────────────────────────────
+#define SERVICE_UUID       "12345678-1234-5678-1234-56789abcdef0"
+#define CHAR_WIFI_SCAN     "12345678-0001-5678-1234-56789abcdef0"
+#define CHAR_WIFI_PROV     "12345678-0002-5678-1234-56789abcdef0"
+#define CHAR_AGENT_SYNC    "12345678-0003-5678-1234-56789abcdef0"
+#define CHAR_TEXT_INPUT    "12345678-0004-5678-1234-56789abcdef0"
+#define CHAR_LLM_RELAY     "12345678-0005-5678-1234-56789abcdef0"
+#define CHAR_DEVICE_STATUS "12345678-0006-5678-1234-56789abcdef0"
+#define CHAR_GPS           "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-static BLEServer         *_server      = nullptr;
-static BLECharacteristic *_gps_char    = nullptr;
-static BLECharacteristic *_music_cmd   = nullptr;
-static BLECharacteristic *_music_stat  = nullptr;
-static bool               _connected   = false;
-static bool               _active      = false;
-static double             _lat         = 0.0;
-static double             _lon         = 0.0;
-static bool               _has_gps     = false;
-static music_cmd_cb_t     _music_cb    = nullptr;
+#define DEVICE_NAME  "Nestor"
+#define MTU_MAX      512
 
+// ─── Handles ──────────────────────────────────────────────────────────────────
+static BLEServer         *_server          = nullptr;
+static BLECharacteristic *_c_wifi_scan     = nullptr;
+static BLECharacteristic *_c_wifi_prov     = nullptr;
+static BLECharacteristic *_c_agent_sync    = nullptr;
+static BLECharacteristic *_c_text_input    = nullptr;
+static BLECharacteristic *_c_llm_relay     = nullptr;
+static BLECharacteristic *_c_device_status = nullptr;
+static BLECharacteristic *_c_gps           = nullptr;
+
+static bool   _connected  = false;
+static bool   _active     = false;
+static bool   _scanning   = false;
+static double _lat        = 0.0;
+static double _lon        = 0.0;
+static bool   _has_gps    = false;
+
+static music_cmd_cb_t   _music_cb      = nullptr;
+static text_input_cb_t  _text_input_cb = nullptr;
+static agent_sync_cb_t  _agent_sync_cb = nullptr;
+static wifi_prov_cb_t   _wifi_prov_cb  = nullptr;
+
+// ─── Connexion ────────────────────────────────────────────────────────────────
 class ConnCB : public BLEServerCallbacks {
     void onConnect(BLEServer *) override {
         _connected = true;
@@ -33,78 +51,144 @@ class ConnCB : public BLEServerCallbacks {
     }
     void onDisconnect(BLEServer *s) override {
         _connected = false;
+        _has_gps   = false;
         Serial.println("[BLE] Deconnecte — re-advertising");
         s->startAdvertising();
     }
 };
 
-// Décoder la position GPS reçue en float32 little-endian (lat 4 oct. + lon 4 oct.)
+// ─── GPS : 8 octets float32 little-endian (lat 0-3, lon 4-7) ─────────────────
 class GpsCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
         String val = c->getValue();
-        if (val.length() == 0) return;
-        const char *s = val.c_str();
-        char *comma = (char *)strchr(s, ',');
-        if (!comma) return;
-        *comma = '\0';
-        double lat = atof(s);
-        double lon = atof(comma + 1);
-        *comma = ',';
-        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
-        _lat = lat; _lon = lon; _has_gps = true;
-        Serial.printf("[BLE] GPS recu : %.5f, %.5f\n", _lat, _lon);
+        if ((int)val.length() < 8) return;
+        const uint8_t *b = (const uint8_t *)val.c_str();
+        float lat, lon;
+        memcpy(&lat, b,     4);
+        memcpy(&lon, b + 4, 4);
+        if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f) return;
+        _lat = (double)lat;
+        _lon = (double)lon;
+        _has_gps = true;
+        Serial.printf("[BLE] GPS: %.5f, %.5f\n", _lat, _lon);
     }
 };
 
-// Dispatcher les commandes music: vers l'app Musique
-class MusicCmdCB : public BLECharacteristicCallbacks {
+// ─── WiFi scan : écriture 0x01 démarre un scan asynchrone ────────────────────
+class WifiScanCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
         String val = c->getValue();
-        if (val.length() == 0 || !_music_cb) return;
-        Serial.printf("[BLE] Music cmd: %s\n", val.c_str());
-        _music_cb(val.c_str());
+        if (val.length() == 0) return;
+        if ((uint8_t)val[0] == 0x01 && !_scanning) {
+            _scanning = true;
+            WiFi.scanNetworks(true);
+            Serial.println("[BLE] WiFi scan lance");
+        }
     }
 };
 
+// ─── WiFi provisioning : JSON {"s":"ssid","p":"pass"} ─────────────────────────
+class WifiProvCB : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override {
+        String val = c->getValue();
+        if (val.length() == 0 || !_wifi_prov_cb) return;
+        Serial.printf("[BLE] WiFi prov: %s\n", val.c_str());
+        _wifi_prov_cb(val.c_str());
+    }
+};
+
+// ─── Agent sync : JSON envoyé par la PWA ──────────────────────────────────────
+class AgentSyncCB : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override {
+        String val = c->getValue();
+        if (val.length() == 0 || !_agent_sync_cb) return;
+        Serial.printf("[BLE] AgentSync: %u bytes\n", val.length());
+        _agent_sync_cb(val.c_str());
+    }
+};
+
+// ─── Text input : message texte depuis la PWA ─────────────────────────────────
+class TextInputCB : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override {
+        String val = c->getValue();
+        if (val.length() == 0) return;
+        Serial.printf("[BLE] TextInput: %s\n", val.c_str());
+        if (_text_input_cb) _text_input_cb(val.c_str());
+        if (_music_cb)      _music_cb(val.c_str());  // compat music app
+    }
+};
+
+// ─── Helper notify ────────────────────────────────────────────────────────────
+static void notify_char(BLECharacteristic *c, const char *json) {
+    if (!_connected || !c || !json) return;
+    static char buf[MTU_MAX];
+    strlcpy(buf, json, sizeof(buf));
+    c->setValue((uint8_t *)buf, strlen(buf));
+    c->notify();
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
 void ble_mgr_init() {
     BLEDevice::init(DEVICE_NAME);
+    BLEDevice::setMTU(MTU_MAX);
     _server = BLEDevice::createServer();
     _server->setCallbacks(new ConnCB());
 
-    BLEService *svc = _server->createService(BLEUUID(SERVICE_UUID), 10);
+    // 20 handles : 7 caract. x 2 (val+CCC) + service + marge
+    BLEService *svc = _server->createService(BLEUUID(SERVICE_UUID), 20);
 
-    _gps_char = svc->createCharacteristic(
-        GPS_CHAR_UUID,
-        BLECharacteristic::PROPERTY_WRITE |
-        BLECharacteristic::PROPERTY_WRITE_NR
-    );
-    gps_char->setCallbacks(new GpsCB());
-
-    // Caractéristique WiFi scan : écriture 0x01 déclenche le scan, résultat notifié en JSON
-    _wifi_scan_char = svc->createCharacteristic(
-        WIFI_SCAN_CHAR_UUID,
+    // 1. WiFi Scan — write + notify
+    _c_wifi_scan = svc->createCharacteristic(
+        CHAR_WIFI_SCAN,
         BLECharacteristic::PROPERTY_WRITE |
         BLECharacteristic::PROPERTY_WRITE_NR |
-        BLECharacteristic::PROPERTY_NOTIFY
-    );
-    _gps_char->addDescriptor(new BLE2902());
-    _gps_char->setCallbacks(new GpsCB());
+        BLECharacteristic::PROPERTY_NOTIFY);
+    _c_wifi_scan->setCallbacks(new WifiScanCB());
+    _c_wifi_scan->addDescriptor(new BLE2902());
 
-    // Commande music (write depuis la PWA)
-    _music_cmd = svc->createCharacteristic(
-        MUSIC_CMD_CHAR_UUID,
+    // 2. WiFi Provisioning — write
+    _c_wifi_prov = svc->createCharacteristic(
+        CHAR_WIFI_PROV,
         BLECharacteristic::PROPERTY_WRITE |
-        BLECharacteristic::PROPERTY_WRITE_NR
-    );
-    _music_cmd->setCallbacks(new MusicCmdCB());
+        BLECharacteristic::PROPERTY_WRITE_NR);
+    _c_wifi_prov->setCallbacks(new WifiProvCB());
 
-    // Statut/notification music (notify vers la PWA)
-    _music_stat = svc->createCharacteristic(
-        MUSIC_STAT_CHAR_UUID,
+    // 3. Agent Sync — write + notify
+    _c_agent_sync = svc->createCharacteristic(
+        CHAR_AGENT_SYNC,
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_WRITE_NR |
+        BLECharacteristic::PROPERTY_NOTIFY);
+    _c_agent_sync->setCallbacks(new AgentSyncCB());
+    _c_agent_sync->addDescriptor(new BLE2902());
+
+    // 4. Text Input — write
+    _c_text_input = svc->createCharacteristic(
+        CHAR_TEXT_INPUT,
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_WRITE_NR);
+    _c_text_input->setCallbacks(new TextInputCB());
+
+    // 5. LLM Relay — notify (réponses LLM vers la PWA)
+    _c_llm_relay = svc->createCharacteristic(
+        CHAR_LLM_RELAY,
         BLECharacteristic::PROPERTY_NOTIFY |
-        BLECharacteristic::PROPERTY_READ
-    );
-    _music_stat->addDescriptor(new BLE2902());
+        BLECharacteristic::PROPERTY_READ);
+    _c_llm_relay->addDescriptor(new BLE2902());
+
+    // 6. Device Status — notify (état système : wifi, bat, heure...)
+    _c_device_status = svc->createCharacteristic(
+        CHAR_DEVICE_STATUS,
+        BLECharacteristic::PROPERTY_NOTIFY |
+        BLECharacteristic::PROPERTY_READ);
+    _c_device_status->addDescriptor(new BLE2902());
+
+    // 7. GPS — write (float32 LE : lat 4 oct. + lon 4 oct.)
+    _c_gps = svc->createCharacteristic(
+        CHAR_GPS,
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_WRITE_NR);
+    _c_gps->setCallbacks(new GpsCB());
 
     svc->start();
 
@@ -118,46 +202,43 @@ void ble_mgr_init() {
     Serial.println("[BLE] Advertising : " DEVICE_NAME);
 }
 
+// ─── Tick (appelé depuis loop) — résultat scan WiFi ──────────────────────────
 void ble_mgr_tick() {
     if (!_scanning) return;
     int n = WiFi.scanComplete();
-    if (n < 0) return;   // scan encore en cours (WIFI_SCAN_RUNNING = -1)
-
+    if (n < 0) return;  // WIFI_SCAN_RUNNING
     _scanning = false;
 
-    // Construire le JSON des réseaux triés par RSSI décroissant, limité à 10 entrées
     const int MAX_NETS = 20;
     struct { int rssi; int idx; } nets[MAX_NETS];
     int count = (n < MAX_NETS) ? n : MAX_NETS;
+    for (int i = 0; i < count; i++) nets[i] = { WiFi.RSSI(i), i };
 
-    for (int i = 0; i < count; i++) { nets[i] = { WiFi.RSSI(i), i }; }
-
-    // Tri à bulles léger pour classer par signal décroissant
-    for (int i = 0; i < count - 1; i++)
-        for (int j = i + 1; j < count; j++)
-            if (nets[j].rssi > nets[i].rssi) {
-                auto t = nets[i]; nets[i] = nets[j]; nets[j] = t;
-            }
+    // Tri par RSSI décroissant
+    for (int i = 1; i < count; i++) {
+        auto key = nets[i]; int j = i - 1;
+        while (j >= 0 && nets[j].rssi < key.rssi) { nets[j+1] = nets[j]; j--; }
+        nets[j+1] = key;
+    }
 
     int lim = (count < 10) ? count : 10;
     String json = "[";
     for (int i = 0; i < lim; i++) {
         String ssid = WiFi.SSID(nets[i].idx);
-        ssid.replace("\\", "\\\\");
-        ssid.replace("\"", "\\\"");
+        ssid.replace("\\", "\\\\"); ssid.replace("\"", "\\\"");
         if (i > 0) json += ",";
         json += "{\"s\":\"" + ssid + "\",\"r\":" + String(nets[i].rssi) + "}";
     }
     json += "]";
 
-    _wifi_scan_char->setValue(json.c_str());
-    _wifi_scan_char->notify();
+    notify_char(_c_wifi_scan, json.c_str());
     WiFi.scanDelete();
-    Serial.printf("[BLE] Scan WiFi termine : %d reseaux\n", n);
+    Serial.printf("[BLE] Scan WiFi : %d reseaux notifies\n", n);
 }
 
+// ─── Accesseurs ───────────────────────────────────────────────────────────────
 bool ble_mgr_connected() { return _connected; }
-bool ble_mgr_is_active()  { return _active; }
+bool ble_mgr_is_active() { return _active; }
 
 bool ble_mgr_get_gps(double *lat, double *lon) {
     if (!_has_gps) return false;
@@ -165,17 +246,15 @@ bool ble_mgr_get_gps(double *lat, double *lon) {
     return true;
 }
 
-void ble_mgr_set_music_cb(music_cmd_cb_t cb) {
-    _music_cb = cb;
-}
+// ─── Notifications vers la PWA ────────────────────────────────────────────────
+void ble_mgr_notify_llm(const char *json)           { notify_char(_c_llm_relay,     json); }
+void ble_mgr_notify_device_status(const char *json) { notify_char(_c_device_status, json); }
+void ble_mgr_notify_agent_sync(const char *json)    { notify_char(_c_agent_sync,    json); }
+void ble_mgr_notify_wifi_scan(const char *json)     { notify_char(_c_wifi_scan,     json); }
 
-// Envoyer une notification JSON vers la PWA via la caractéristique music status
-void ble_mgr_music_notify(const char *json) {
-    if (!_connected || !_music_stat || !json) return;
-    int len = strlen(json);
-    // Tronquer si nécessaire (MTU typique 512 octets)
-    static char buf[512];
-    strlcpy(buf, json, sizeof(buf));
-    _music_stat->setValue((uint8_t *)buf, strlen(buf));
-    _music_stat->notify();
-}
+// ─── Callbacks enregistrés depuis les apps ────────────────────────────────────
+void ble_mgr_set_text_input_cb(text_input_cb_t cb) { _text_input_cb = cb; }
+void ble_mgr_set_agent_sync_cb(agent_sync_cb_t cb) { _agent_sync_cb = cb; }
+void ble_mgr_set_wifi_prov_cb(wifi_prov_cb_t  cb)  { _wifi_prov_cb  = cb; }
+void ble_mgr_set_music_cb(music_cmd_cb_t cb)        { _music_cb = cb; }
+void ble_mgr_music_notify(const char *json)         { notify_char(_c_llm_relay, json); }
