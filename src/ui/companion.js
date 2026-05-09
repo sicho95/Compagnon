@@ -12,7 +12,7 @@ import { setupLlmRelay } from '../bt/ble_protocol.js';
 import { createKeyboardOverlay } from '../input/bt_keyboard.js';
 import { callLLM, listBackends } from '../api/backends.js';
 
-// Détecte iOS Safari (pas de Web Bluetooth)
+// Détecte iOS/iPadOS (Web Bluetooth non supporté par Apple)
 function isIOS() {
   return /iP(hone|ad|od)/i.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -22,13 +22,15 @@ export function renderCompanionView(container, state, rerender) {
   container.innerHTML = '';
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;';
 
-  // ── iOS : Web Bluetooth indisponible → guide appairage natif ─────────────
-  if (!bleAvailable()) {
+  // iOS détecté en priorité — Web Bluetooth absent ou non fonctionnel
+  // On utilise isIOS() en premier pour éviter les faux positifs si Apple
+  // exposait partiellement navigator.bluetooth dans une future version de Safari.
+  if (isIOS() || !bleAvailable()) {
     renderIOSBluetoothGuide(container);
     return;
   }
 
-  // ── Android / Desktop : flux Web Bluetooth normal ───────────────────────
+  // Android / Desktop Chrome : flux Web Bluetooth normal
   renderWebBluetoothUI(container, state, rerender);
 }
 
@@ -89,7 +91,7 @@ function renderIOSBluetoothGuide(container) {
   btBtn.onclick = () => {
     // Deep link natif iOS vers les réglages Bluetooth
     window.location.href = 'App-Prefs:root=Bluetooth';
-    // Fallback : lien universel Réglages (fonctionne dans Safari/PWA)
+    // Fallback universel Réglages (fonctionne dans Safari/PWA)
     setTimeout(() => { window.location.href = 'prefs:root=Bluetooth'; }, 400);
   };
   wrap.appendChild(btBtn);

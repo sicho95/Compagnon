@@ -6,7 +6,7 @@ import { bleWrite, bleRead, bleSubscribe } from './ble.js';
 export async function bleRequestWifiScan() {
   // Déclencher le scan en envoyant l'octet 0x01
   await bleWrite('WIFI_SCAN', new Uint8Array([0x01]));
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     let done = false;
     const t = setTimeout(() => { done = true; resolve([]); }, 10000);
     bleSubscribe('WIFI_SCAN', raw => {
@@ -20,21 +20,25 @@ export async function bleRequestWifiScan() {
           resolve(d.map(n => ({ ssid: n.s, rssi: n.r })));
         }
       } catch {}
-    }).catch(() => { if (!done) resolve([]); });
+    }).catch(e => { if (!done) { done = true; clearTimeout(t); reject(e); } });
   });
 }
 
 export async function bleProvisionWifi(ssid, password) {
   await bleWrite('WIFI_PROVISION', { ssid, password });
+  // Note : on n'ouvre PAS une nouvelle subscription sur DEVICE_STATUS ici —
+  // celle-ci est déjà active depuis bleConnect() via startNotifications().
+  // On expose un timeout propre ; la mise à jour du statut arrivera via
+  // onStatusChange -> ble_status.js -> updateDeviceStatus.
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('Timeout provision WiFi')), 15000);
-    bleSubscribe('DEVICE_STATUS', raw => {
-      try {
-        const s = JSON.parse(raw);
-        if (s.wifi === 'connected') { clearTimeout(t); resolve(s); }
-        if (s.wifi === 'failed')    { clearTimeout(t); reject(new Error('WiFi échoué: ' + (s.reason||'?'))); }
-      } catch {}
-    }).catch(() => {});
+    // Écouter les changements de deviceStatus via ble_status
+    import('./ble_status.js').then(({ subscribeBleStatus }) => {
+      const unsub = subscribeBleStatus(s => {
+        if (s.wifi === 'connected') { clearTimeout(t); unsub(); resolve(s); }
+        if (s.wifi === 'failed')    { clearTimeout(t); unsub(); reject(new Error('WiFi échoué: ' + (s.reason || '?'))); }
+      });
+    }).catch(() => reject(new Error('ble_status non disponible')));
   });
 }
 
@@ -70,6 +74,7 @@ export async function bleSendText(text) {
 }
 
 export function setupLlmRelay(llmCallFn) {
+  // bleSubscribe retourne une Promise — on l'attrape pour éviter une unhandled rejection
   bleSubscribe('LLM_RELAY', async raw => {
     try {
       const req = JSON.parse(raw);
@@ -79,7 +84,7 @@ export function setupLlmRelay(llmCallFn) {
     } catch (e) {
       await bleWrite('LLM_RELAY', { cmd: 'error', message: e.message }).catch(() => {});
     }
-  }).catch(() => {});
+  }).catch(e => console.warn('[BLE] setupLlmRelay subscribe:', e.message));
 }
 
 export async function bleGetDeviceStatus() {

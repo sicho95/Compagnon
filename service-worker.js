@@ -1,4 +1,4 @@
-const CACHE = 'nestor-v5';
+const CACHE = 'nestor-v6';
 
 const PRECACHE = [
   './',
