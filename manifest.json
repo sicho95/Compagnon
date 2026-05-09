@@ -1,19 +1,19 @@
 {
-  "name": "Nestor Meta\u2011Agent",
+  "name": "Nestor Compagnon",
   "short_name": "Nestor",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#0e0e0e",
+  "theme_color": "#0e0e0e",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%23111'/%3E%3Ccircle cx='96' cy='80' r='36' fill='none' stroke='%234f98a3' stroke-width='8'/%3E%3Ccircle cx='96' cy='80' r='16' fill='%234f98a3'/%3E%3Cpath d='M60 140 Q96 110 132 140' fill='none' stroke='%234f98a3' stroke-width='8' stroke-linecap='round'/%3E%3C/svg%3E",
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9Ijg2IiBmaWxsPSIjMGUwZTBlIi8+PHRleHQgeD0iNTAlIiB5PSI1NCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzVlZiI+TjwvdGV4dD48L3N2Zz4=",
       "sizes": "192x192",
       "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%23111'/%3E%3Ccircle cx='256' cy='210' r='96' fill='none' stroke='%234f98a3' stroke-width='20'/%3E%3Ccircle cx='256' cy='210' r='42' fill='%234f98a3'/%3E%3Cpath d='M160 380 Q256 295 352 380' fill='none' stroke='%234f98a3' stroke-width='20' stroke-linecap='round'/%3E%3C/svg%3E",
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9Ijg2IiBmaWxsPSIjMGUwZTBlIi8+PHRleHQgeD0iNTAlIiB5PSI1NCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzVlZiI+TjwvdGV4dD48L3N2Zz4=",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
