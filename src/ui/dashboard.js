@@ -4,11 +4,12 @@ import { saveAgent, deleteAgent, exportAgentsJson, downloadText, importAgentsJso
 import { gardenerMerge } from '../core/gardener.js';
 import { searchWeb, searchWebMulti, getSearchStatus } from '../api/search.js';
 import { speak, stopSpeech, isSilentMode, setSilentMode, isSpeechEnabled,
-         listBrowserVoices, getTTSStatus,
-         TTS_PROVIDERS, GEMINI_VOICES, GROQ_VOICES } from '../api/tts.js';
+         listBrowserVoices, getTTSStatus, GEMINI_VOICES } from '../api/tts.js';
+import { getSTTStatus } from '../api/stt.js';
 import { resolve as orchestratorResolve, ROLES } from '../core/orchestrator-engine.js';
 import { renderRadarView, cleanupRadarView } from './radar-view.js';
 import { renderBourseView, cleanupBourseView } from './bourse-view.js';
+import { renderMeteoView, cleanupMeteoView } from './meteo-view.js';
 
 const ROLE_ICONS = {
   orchestrator: '🧠', gardener: '🌿', factory: '🏭',
@@ -46,6 +47,7 @@ export function renderDashboard(container, state, rerender) {
   if (state.view === 'fabrique') { renderFabriqueView(container, state, rerender); return; }
   if (state.view === 'radar') { renderRadarSection(container, state, rerender); return; }
   if (state.view === 'bourse') { renderBourseSection(container, state, rerender); return; }
+  if (state.view === 'meteo') { renderMeteoSection(container, state, rerender); return; }
 
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
   const title = el('div', { fontWeight:'600', fontSize:'15px' });
@@ -134,6 +136,26 @@ function renderBourseSection(container, state, rerender) {
   container.appendChild(body);
 
   renderBourseView(body, state, rerender);
+}
+
+// ─── Météo section ────────────────────────────────────────────────────────────
+function renderMeteoSection(container, state, rerender) {
+  const header = el('div', { display:'flex', alignItems:'center', gap:'8px', marginBottom:'12px' });
+  const title = el('div', { fontWeight:'600', fontSize:'15px', flex:'1' });
+  title.textContent = '🌤 Météo — Prévisions';
+  header.appendChild(title);
+
+  const backBtn = btn('← Retour', '', () => {
+    cleanupMeteoView();
+    state.view = state._meteoPrevView || 'chat';
+    rerender();
+  });
+  header.appendChild(backBtn);
+  container.appendChild(header);
+
+  const body = el('div', {});
+  container.appendChild(body);
+  renderMeteoView(body, state, rerender);
 }
 
 // ─── Agents List ──────────────────────────────────────────────────────────────
@@ -367,6 +389,42 @@ function renderChatView(container, state, rerender) {
   input.placeholder = 'Ton message…';
   input.setAttribute('autocomplete', 'off');
 
+  // ── Bouton micro STT ──────────────────────────────────────────────────────
+  let _sttMod = null;
+  const micBtn = document.createElement('button');
+  micBtn.textContent = '🎙';
+  Object.assign(micBtn.style, {
+    background:'#181828', border:'1px solid #333', borderRadius:'8px',
+    padding:'8px 10px', fontSize:'16px', cursor:'pointer', color:'#ccc',
+    flexShrink:'0', transition:'background 0.2s',
+  });
+  let _micActive = false;
+  micBtn.onclick = async () => {
+    if (!_sttMod) {
+      try { _sttMod = await import('../api/stt.js'); }
+      catch { showToast('STT non disponible', true); return; }
+    }
+    if (!_micActive) {
+      try {
+        await _sttMod.startRecording();
+        _micActive = true;
+        micBtn.textContent = '⏹'; micBtn.style.background = '#3a1a1a'; micBtn.style.color = '#f88';
+        micBtn.title = 'Arrêter et transcrire';
+      } catch(e) { showToast('Micro: ' + e.message, true); }
+    } else {
+      micBtn.textContent = '⏳'; micBtn.disabled = true;
+      try {
+        const text = await _sttMod.stopRecording();
+        if (text) { input.value = text; input.focus(); }
+        else showToast('Rien transcrit', true);
+      } catch(e) { showToast('STT: ' + e.message, true); }
+      _micActive = false;
+      micBtn.textContent = '🎙'; micBtn.style.background = '#181828'; micBtn.style.color = '#ccc';
+      micBtn.disabled = false; micBtn.title = 'Dicter';
+    }
+  };
+  micBtn.title = 'Dicter';
+
   const sendBtn = btn('Envoyer', 'primary', send);
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 
@@ -463,7 +521,7 @@ function renderChatView(container, state, rerender) {
     }
   }
 
-  inputRow.append(input, sendBtn);
+  inputRow.append(micBtn, input, sendBtn);
   container.appendChild(inputRow);
 }
 
@@ -767,90 +825,139 @@ function renderSettings(container, state, rerender) {
   bourseCard.appendChild(tdStatus);
   list.appendChild(bourseCard);
 
+  // ── Section Météo ─────────────────────────────────────────────────────────
+  const meteoCard = el('div', { background:'#070d14', border:'1px solid #1a2a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const mTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  mTitle.textContent = '🌤 Météo — Meteo-Concept';
+  meteoCard.appendChild(mTitle);
+
+  const mDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  mDesc.innerHTML = 'Prévisions quotidiennes France. Clé gratuite sur <a href="https://api.meteo-concept.com" target="_blank" style="color:#5af">api.meteo-concept.com</a>.';
+  meteoCard.appendChild(mDesc);
+
+  const mcLabel = labelEl('Clé API Meteo-Concept (METEO_CONCEPT_KEY)');
+  const mcInput = document.createElement('input');
+  mcInput.type = 'password'; mcInput.autocomplete = 'off';
+  Object.assign(mcInput.style, {
+    width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box'
+  });
+  mcInput.placeholder = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  mcInput.value = lsGet('METEO_CONCEPT_KEY') || '';
+  mcInput.onchange = () => { lsSet('METEO_CONCEPT_KEY', mcInput.value.trim()); showToast('METEO_CONCEPT_KEY sauvegardée.'); };
+  meteoCard.appendChild(mcLabel);
+  meteoCard.appendChild(mcInput);
+
+  const mcStatus = el('div', { fontSize:'11px', marginTop:'4px' });
+  const hasMC = !!(lsGet('METEO_CONCEPT_KEY') || '').trim();
+  mcStatus.textContent = hasMC ? '✅ Clé présente' : '⚠️ Clé manquante — la vue Météo affichera un message';
+  mcStatus.style.color = hasMC ? '#5a9' : '#a66';
+  meteoCard.appendChild(mcStatus);
+  list.appendChild(meteoCard);
+
+  // ── Section Gemini API ────────────────────────────────────────────────────
+  const geminiCard = el('div', { background:'#0a0e18', border:'1px solid #1a2a4a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
+  const gTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
+  gTitle.textContent = '✨ Gemini API (TTS + LLM)';
+  geminiCard.appendChild(gTitle);
+
+  const gDesc = el('div', { fontSize:'11px', color:'#777', marginBottom:'10px', lineHeight:'1.5' });
+  gDesc.innerHTML = 'Utilisé pour TTS naturel (3.1 → 2.5-pro → 2.5-flash) et optionnellement LLM.<br>'
+    + 'Clé gratuite sur <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#5af">aistudio.google.com</a>.';
+  geminiCard.appendChild(gDesc);
+
+  const gkLabel = labelEl('Clé API Gemini (GEMINI_API_KEY)');
+  const gkInput = document.createElement('input');
+  gkInput.type = 'password'; gkInput.autocomplete = 'off';
+  Object.assign(gkInput.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px', boxSizing:'border-box' });
+  gkInput.placeholder = 'AIzaSy...';
+  gkInput.value = lsGet('GEMINI_API_KEY') || '';
+  gkInput.onchange = () => { lsSet('GEMINI_API_KEY', gkInput.value.trim()); showToast('GEMINI_API_KEY sauvegardée.'); rerender(); };
+  geminiCard.append(gkLabel, gkInput);
+
+  const gkStatus = el('div', { fontSize:'11px', marginTop:'4px', marginBottom:'10px' });
+  const hasGemini = !!(lsGet('GEMINI_API_KEY') || '').trim();
+  gkStatus.textContent = hasGemini ? '✅ Clé présente' : '⚠️ Clé manquante — TTS Gemini désactivé';
+  gkStatus.style.color = hasGemini ? '#5a9' : '#a66';
+  geminiCard.appendChild(gkStatus);
+
+  // Voix Gemini
+  const gvLabel = labelEl('Voix Gemini TTS (NESTOR_GEMINI_VOICE)');
+  const gvSel = document.createElement('select');
+  Object.assign(gvSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333',
+    borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  const savedGVoice = lsGet('NESTOR_GEMINI_VOICE') || 'Charon';
+  GEMINI_VOICES.forEach(v => {
+    const opt = document.createElement('option'); opt.value = v.name;
+    opt.textContent = v.label;
+    if (v.name === savedGVoice) opt.selected = true;
+    gvSel.appendChild(opt);
+  });
+  gvSel.onchange = () => { lsSet('NESTOR_GEMINI_VOICE', gvSel.value); showToast('Voix Gemini : ' + gvSel.value); };
+  geminiCard.append(gvLabel, gvSel);
+
+  const gvHint = el('div', { fontSize:'10px', color:'#555', marginTop:'4px' });
+  gvHint.textContent = 'Chain : gemini-3.1-flash-preview-tts → 2.5-pro → 2.5-flash (quotas distincts) → navigateur';
+  geminiCard.appendChild(gvHint);
+  list.appendChild(geminiCard);
+
   // ── Section TTS ────────────────────────────────────────────────────────────
   const ttsCard = el('div', { background:'#0a0a1a', border:'1px solid #1a1a3a', borderRadius:'10px', padding:'12px', marginTop:'4px' });
-  const tTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'6px' });
+  const tTitle = el('div', { fontWeight:'600', fontSize:'13px', marginBottom:'4px' });
   tTitle.textContent = '🔊 Text-to-Speech (TTS)';
 
   const ttsStatus = getTTSStatus();
-  const ttsBadgeColors = { gemini:'#1a2a3a', groq:'#1a1a2a', browser:'#101018', silent:'#2a1a1a', none:'#1a1a1a' };
-  const ttsBadgeText   = { gemini:'#88f',    groq:'#7af',    browser:'#aaf',    silent:'#f88',    none:'#666' };
-  const ttsIconMap     = { gemini:'🌐', groq:'🎙', browser:'🗣', silent:'🔇', none:'❌' };
   const ttsBadge = el('div', { fontSize:'11px', marginBottom:'10px', padding:'4px 8px', borderRadius:'6px',
-    background: ttsBadgeColors[ttsStatus.engine] || '#1a1a2a',
-    color:      ttsBadgeText[ttsStatus.engine]   || '#aaf',
+    background: ttsStatus.engine === 'gemini' ? '#1a2a3a' : ttsStatus.engine === 'silent' ? '#2a1a1a' : '#1a1a2a',
+    color: ttsStatus.engine === 'gemini' ? '#88f' : ttsStatus.engine === 'silent' ? '#f88' : '#aaf',
     display: 'inline-block' });
-  ttsBadge.textContent = (ttsIconMap[ttsStatus.engine] || '') + ' ' + ttsStatus.reason;
+  const ttsEngineIcons = { gemini:'🌐', browser:'🗣', silent:'🔇', none:'❌' };
+  ttsBadge.textContent = (ttsEngineIcons[ttsStatus.engine] || '') + ' ' + ttsStatus.reason;
+
   ttsCard.append(tTitle, ttsBadge);
 
-  // Cascade providers — affichage informatif
-  const cascadeLabel = labelEl('Cascade active (par ordre de priorité)');
-  const cascadeList = el('div', { display:'flex', flexDirection:'column', gap:'4px', marginBottom:'6px' });
-  const gemKeyOk  = !!(lsGet('GEMINI_API_KEY') || '').trim();
-  const groqKeyOk = !!(lsGet('GROQ_API_KEY')   || '').trim();
-  TTS_PROVIDERS.forEach((p, i) => {
-    const available = p.keyName === 'GEMINI_API_KEY' ? gemKeyOk
-                    : p.keyName === 'GROQ_API_KEY'   ? groqKeyOk
-                    : true;
-    const row = el('div', { display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', padding:'3px 6px', borderRadius:'5px',
-      background: available ? '#0d1a0d' : '#141414',
-      color:      available ? '#7ef'    : '#555' });
-    row.innerHTML = `<span style="color:#555;min-width:14px">${i + 1}.</span>`
-      + `<span style="flex:1">${p.label}</span>`
-      + `<span style="font-size:10px;color:#555">${p.quota}</span>`
-      + `<span style="font-size:10px;${available ? 'color:#5a9' : 'color:#a55'}">${available ? '✅' : '🔴 clé manquante'}</span>`;
-    cascadeList.appendChild(row);
+  // Moteur
+  const engLabel = labelEl('Moteur TTS');
+  const engSel = document.createElement('select');
+  Object.assign(engSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
+  [['browser', '🗣 Navigateur (offline, gratuit)'], ['gemini', '🌐 Gemini Cloud (voix naturelle)']].forEach(([val, lbl]) => {
+    const opt = document.createElement('option'); opt.value = val; opt.textContent = lbl;
+    if ((lsGet('NESTOR_TTS_ENGINE') || 'browser') === val) opt.selected = true;
+    engSel.appendChild(opt);
   });
-  ttsCard.append(cascadeLabel, cascadeList);
+  engSel.onchange = () => { lsSet('NESTOR_TTS_ENGINE', engSel.value); showToast('Moteur TTS : ' + engSel.value); rerender(); };
+  ttsCard.append(engLabel, engSel);
 
-  // Voix Gemini
-  const gemVoiceLabel = labelEl('Voix Gemini TTS');
-  const gemVoiceSel = document.createElement('select');
-  Object.assign(gemVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  const savedGemVoice = lsGet('NESTOR_TTS_VOICE_GEMINI') || 'Charon';
-  GEMINI_VOICES.forEach(v => {
-    const opt = document.createElement('option'); opt.value = v.name;
-    opt.textContent = v.name + ' — ' + v.hint;
-    if (v.name === savedGemVoice) opt.selected = true;
-    gemVoiceSel.appendChild(opt);
-  });
-  gemVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GEMINI', gemVoiceSel.value); showToast('Voix Gemini : ' + gemVoiceSel.value); };
-  ttsCard.append(gemVoiceLabel, gemVoiceSel);
-
-  // Voix Groq PlayAI
-  const groqVoiceLabel = labelEl('Voix Groq PlayAI');
-  const groqVoiceSel = document.createElement('select');
-  Object.assign(groqVoiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  const savedGroqVoice = lsGet('NESTOR_TTS_VOICE_GROQ') || 'Fritz-PlayAI';
-  GROQ_VOICES.forEach(v => {
-    const opt = document.createElement('option'); opt.value = v.name;
-    opt.textContent = v.name + ' — ' + v.hint;
-    if (v.name === savedGroqVoice) opt.selected = true;
-    groqVoiceSel.appendChild(opt);
-  });
-  groqVoiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE_GROQ', groqVoiceSel.value); showToast('Voix Groq : ' + groqVoiceSel.value); };
-  ttsCard.append(groqVoiceLabel, groqVoiceSel);
-
-  // Voix navigateur
-  const voiceLabel = labelEl('Voix navigateur (fallback offline)');
+  // Voix browser
+  const voiceWrap = el('div', {});
+  const voiceLabel = labelEl('Voix navigateur (fallback)');
   const voiceSel = document.createElement('select');
   Object.assign(voiceSel.style, { width:'100%', background:'#111', color:'#ccc', border:'1px solid #333', borderRadius:'8px', padding:'8px', fontSize:'13px' });
-  const savedBrVoice = lsGet('NESTOR_TTS_VOICE') || '';
+  const savedVoice = lsGet('NESTOR_TTS_VOICE') || '';
   listBrowserVoices().then(voices => {
-    const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '— Auto (voix française)';
-    voiceSel.appendChild(defOpt);
+    const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '— Auto (voix française)'; voiceSel.appendChild(defOpt);
     voices.forEach(v => {
       const opt = document.createElement('option'); opt.value = v.name;
       opt.textContent = v.name + ' (' + v.lang + ')';
-      if (v.name === savedBrVoice) opt.selected = true;
+      if (v.name === savedVoice) opt.selected = true;
       voiceSel.appendChild(opt);
     });
   });
   voiceSel.onchange = () => { lsSet('NESTOR_TTS_VOICE', voiceSel.value); showToast('Voix navigateur sauvegardée.'); };
-  ttsCard.append(voiceLabel, voiceSel);
+  voiceWrap.append(voiceLabel, voiceSel);
+  ttsCard.appendChild(voiceWrap);
 
-  // Vitesse de lecture (browser)
-  const rateLabel = labelEl('Vitesse de lecture (navigateur)');
+  // ── STT (Groq Whisper) ────────────────────────────────────────────────────
+  const sttBadge = el('div', { fontSize:'11px', marginTop:'10px', padding:'4px 8px', borderRadius:'6px', display:'inline-block' });
+  const sttSt = getSTTStatus();
+  sttBadge.textContent = (sttSt.available ? '🎙 STT actif — ' : '⚠️ STT — ') + sttSt.reason;
+  sttBadge.style.background = sttSt.available ? '#0a1a10' : '#1a0a0a';
+  sttBadge.style.color       = sttSt.available ? '#5d9' : '#a66';
+  ttsCard.appendChild(sttBadge);
+
+  // Vitesse
+  const rateLabel = labelEl('Vitesse de lecture');
   const rateRow = el('div', { display:'flex', alignItems:'center', gap:'10px' });
   const rateSlider = document.createElement('input');
   rateSlider.type = 'range'; rateSlider.min = '0.5'; rateSlider.max = '2.0'; rateSlider.step = '0.1';
@@ -866,8 +973,9 @@ function renderSettings(container, state, rerender) {
   const testBtn = btn('▶ Tester la voix', '', async () => {
     testBtn.disabled = true; testBtn.textContent = '⏳ Lecture…';
     try {
-      await speak('Bonjour, je suis Nestor, votre assistant personnel.');
-    } catch (e) { showToast('Erreur TTS : ' + e.message, true); }
+      const { speak: spk } = await import('../api/tts.js');
+      await spk('Bonjour, je suis Nestor, votre assistant personnel.');
+    } catch(e) { showToast('Erreur TTS : ' + e.message, true); }
     testBtn.disabled = false; testBtn.textContent = '▶ Tester la voix';
   });
   testBtn.style.marginTop = '8px';

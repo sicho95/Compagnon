@@ -1,574 +1,737 @@
-# Nestor — Spécification Technique Complète
+# Nestor — Spécification Technique Complète V3
 
-> Version **v2** — mai 2026
-> Couvre la PWA **et** le Compagnon ESP32
+> **Version v3** — mai 2026
+> Dual-app system : PWA Compagnon (hub) + 4 apps autonomes (Nestor, Radars, Météo, Bourse)
+> ESP32 autonome avec sync bidirectionnelle agents
 
 ---
 
 ## Table des matières
 
-1. [Vue d'ensemble](#1-vue-densemble)
-2. [Architecture](#2-architecture)
-3. [Structure des fichiers](#3-structure-des-fichiers)
-4. [Agents — Catalogue par défaut](#4-agents--catalogue-par-défaut)
-5. [Orchestrateur adaptatif](#5-orchestrateur-adaptatif)
-6. [Module de recherche web](#6-module-de-recherche-web)
-7. [Backends LLM](#7-backends-llm)
-8. [Text-to-Speech (TTS)](#8-text-to-speech-tts)
-9. [Stockage](#9-stockage)
-10. [UI — Dashboard & Companion](#10-ui--dashboard--companion)
-11. [Page Réglages](#11-page-réglages)
-12. [PWA & Service Worker](#12-pwa--service-worker)
-13. [Proxy CORS](#13-proxy-cors)
-14. [Clés et secrets](#14-clés-et-secrets)
-15. [Roadmap](#15-roadmap)
-16. [Compagnon ESP32 — Matériel](#16-compagnon-esp32--matériel)
-17. [Compagnon ESP32 — Architecture logicielle](#17-compagnon-esp32--architecture-logicielle)
-18. [Gestion de l'alimentation (PMU)](#18-gestion-de-lalimentation-pmu)
-19. [Affichage & Interface LVGL](#19-affichage--interface-lvgl)
-20. [Connectivité (WiFi / OTA / BLE)](#20-connectivité-wifi--ota--ble)
-21. [Applications V1 — Catalogue](#21-applications-v1--catalogue)
-22. [Synchronisation PWA ↔ ESP32](#22-synchronisation-pwa--esp32)
-23. [Clés et secrets ESP32](#23-clés-et-secrets-esp32)
-24. [Procédure Arduino IDE](#24-procédure-arduino-ide)
+1. [Vision globale](#1-vision-globale)
+2. [Architecture dual-app](#2-architecture-dual-app)
+3. [Compagnon PWA — Hub de gestion](#3-compagnon-pwa--hub-de-gestion)
+4. [Applications autonomes (Nestor, Radars, Météo, Bourse)](#4-applications-autonomes)
+5. [ESP32 Compagnon — Autonome](#5-esp32-compagnon--autonome)
+6. [BLE Pairing + Configuration WiFi](#6-ble-pairing--configuration-wifi)
+7. [STT/TTS Autonome (ESP32)](#7-stttts-autonome-esp32)
+8. [Synchronisation agents PWA ↔ ESP32](#8-synchronisation-agents-pwa--esp32)
+9. [Storage PWA](#9-storage-pwa)
+10. [Storage ESP32](#10-storage-esp32)
+11. [Clés API](#11-clés-api)
+12. [Préférences & Toggles apps](#12-préférences--toggles-apps)
+13. [Interface LVGL ESP32](#13-interface-lvgl-esp32)
+14. [Gestion de l'alimentation ESP32](#14-gestion-de-lalimentation-esp32)
+15. [Connectivité ESP32 (WiFi, OTA, BLE)](#15-connectivité-esp32-wifi-ota-ble)
+16. [Procédure Arduino IDE](#16-procédure-arduino-ide)
+17. [Roadmap](#17-roadmap)
 
 ---
 
-## 1. Vue d'ensemble
+## 1. Vision globale
 
-**Nestor** est un assistant personnel PWA (Progressive Web App) multi-agents. Il fonctionne entièrement côté client (browser), sans serveur applicatif propre. Toutes les données sont stockées dans `localStorage` / `IndexedDB`. Les appels LLM et de recherche passent par un proxy CORS Cloudflare Worker.
+**Nestor** est un système dual composé de :
 
-**Principes directeurs :**
-- Offline-first : fonctionne sans connexion pour les agents LLM purs (données déjà en mémoire).
-- Coût minimal : stratégie d'orchestration priorise toujours l'appel le moins cher qui garantit la qualité.
-- Extensible : n'importe quel agent peut être créé à la volée via la Fabrique.
-- Transparent : chaque réponse est tracée (étapes d'orchestration visibles en debug).
+- **PWA Compagnon** : application hub de gestion, orchestration, configuration des apps. Interface mobile/desktop riche.
+- **4 Apps modulaires** : Nestor (IA), Radars (GPS), Météo (prévisions), Bourse (cours). Chaque app existe en version PWA et ESP32.
+- **ESP32 Compagnon** : appareil autonome, affichage AMOLED 480×480, carrousel LVGL, sync agents bidirectionnelle.
 
-**Nouveautés v2 :**
-- 🚨 **App Radars** — détection GPS en temps réel, Lufop + Blitzer APIs, alertes audio
-- 📈 **App Bourse** — cours en temps réel via Twelve Data, CAC40/BTC/EUR-USD/Or
-- 🔊 **Réglages TTS complets** — moteur, voix, vitesse, test, silence
-- 💾 **Historique de conversation persisté** par agent (localStorage)
-- ⬇️ **Export/Import agents** JSON (déjà présent, confirmé v2)
-- 🔑 **TWELVE_DATA_KEY** dans les Réglages
+**Principes** :
+- Offline-first : ESP32 fonctionne seul si WiFi/BLE dispo
+- Sync autonome : agents s'améliorent des deux côtés (Jardinier PWA + Jardinier ESP32)
+- Une source logique : chaque app partagée entre PWA et ESP32 via JSON agents
+- Zéro captive portal malveillant : appairage BLE sécurisé + WiFi du téléphone
 
 ---
 
-## 2. Architecture
+## 2. Architecture dual-app
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Browser (PWA)                            │
-│                                                                 │
-│  ┌──────────┐    ┌──────────────────┐    ┌──────────────────┐  │
-│  │ companion│    │    dashboard.js   │    │   app.js (init)  │  │
-│  │   .js    │    │  (UI principale)  │    │   service-worker │  │
-│  └────┬─────┘    └────────┬─────────┘    └──────────────────┘  │
-│       │                   │                                     │
-│       └──────────┬────────┘                                     │
-│                  ▼                                              │
-│     ┌────────────────────────────┐                              │
-│     │   orchestrator-engine.js   │  ← méta-planificateur        │
-│     └──────┬─────────────┬───────┘                              │
-│            │             │                                      │
-│      ┌─────▼──────┐  ┌───▼──────────┐                          │
-│      │ backends.js│  │  search.js   │                          │
-│      └─────┬──────┘  └──────┬───────┘                          │
-│            │                │                                   │
-│  ┌─────────▼────────────────▼──────────────────┐               │
-│  │          proxy.sicho95.workers.dev           │               │
-│  │          (Cloudflare Worker CORS)            │               │
-│  └──────────────────┬──────────────────────────┘               │
-│                     │                                           │
-│  ┌──────────────────┼────────────────────────┐                  │
-│  │  radar-view.js   │  bourse-view.js        │ ← Apps v2        │
-│  │  GPS + Lufop     │  Twelve Data API       │                  │
-│  └──────────────────┴────────────────────────┘                  │
-└─────────────────────┼───────────────────────────────────────────┘
-                      │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-     Groq API    Serper API   Lufop API
-     OpenRouter  Gemini TTS   Twelve Data
-                 Blitzer.de
+Compagnon PWA (hub)
+├── src/apps/
+│   ├── nestor/         (agents, STT/TTS, chat UI)
+│   ├── radars/         (GPS, alertes radar)
+│   ├── meteo/          (prévisions, géoloc)
+│   └── bourse/         (cours, tickers)
+├── src/core/           (orchestrator, agents-db, storage)
+├── src/sync/           (BLE protocol)
+├── src/ui/             (Compagnon hub, WiFi config, toggles)
+└── ...
+
+Compagnon ESP32 (autonome)
+├── compagnon.ino
+├── src/apps/
+│   ├── nestor/         (LVGL chat, Groq direct, TTS ES8311)
+│   ├── radars/         (LVGL écran, API Lufop direct)
+│   ├── meteo/          (LVGL affichage, api.meteo-concept direct)
+│   └── bourse/         (LVGL écran, Twelve Data direct)
+├── src/core/           (orchestrator, agents-db LittleFS)
+├── src/net/            (BLE, WiFi)
+├── src/ui/             (LVGL launcher, status bar, app screens)
+└── src/hal/            (display, touch, PMU, audio)
 ```
+
+**Modèle** : monolithique modularisé (une source logique, deux rendus : HTML PWA + LVGL ESP32).
 
 ---
 
-## 3. Structure des fichiers
+## 3. Compagnon PWA — Hub de gestion
+
+### Vue d'ensemble
+
+**Compagnon** est la PWA principal. Elle :
+- Gère l'appairage BLE (code 6 chiffres aléatoire)
+- Configure le WiFi du téléphone → ESP32
+- Affiche et bascule les 4 apps disponibles
+- Gère les paramètres généraux (fuseau horaire, langue)
+- Syncronise agents PWA ↔ ESP32
+- Permet d'utiliser chaque app en PWA
+
+### Structure
 
 ```
-nestor/
-├── index.html                  # Point d'entrée PWA
-├── manifest.json               # Métadonnées PWA (nom, icônes, thème)
-├── service-worker.js           # Cache offline (nestor-v4) + stratégie réseau
+Compagnon-PWA/
+├── index.html
+├── manifest.json
+├── service-worker.js
 ├── css/
 │   └── style.css
 └── src/
-    ├── app.js                  # Bootstrap + state machine + drawer menu
+    ├── app.js                  (bootstrap + état)
     ├── api/
-    │   ├── backends.js         # callLLM() + routage par backendId
-    │   ├── backends.json       # Catalogue backends (Groq, OpenRouter, Puter)
-    │   ├── search.js           # searchWeb(), fetchPageText()
-    │   └── tts.js              # speak(), stopSpeech(), setSilentMode()
+    │   ├── backends.js         (LLM routing)
+    │   ├── search.js           (web search)
+    │   └── tts.js              (TTS browser/cloud)
     ├── core/
-    │   ├── orchestrator-engine.js  # Méta-planificateur
-    │   ├── default-agents.js       # 9 agents par défaut
-    │   └── gardener.js             # Maintenance/compaction
+    │   ├── orchestrator-engine.js
+    │   ├── default-agents.js
+    │   └── gardener.js
     ├── storage/
-    │   └── agents-db.js        # CRUD agents + saveChatHistory / loadChatHistory
-    └── ui/
-        ├── dashboard.js        # UI principale (chat, agents, réglages, radar, bourse)
-        ├── radar-view.js       # 🚨 App Radars v2 (GPS + alertes)
-        └── bourse-view.js      # 📈 App Bourse v2 (Twelve Data)
+    │   └── agents-db.js        (IndexedDB agents)
+    ├── sync/
+    │   └── ble-sync.js         (BLE protocol PWA side)
+    ├── ui/
+    │   ├── compagnon-hub.js    (hub de gestion, toggles, WiFi config)
+    │   ├── apps/
+    │   │   ├── nestor-app.js   (chat PWA)
+    │   │   ├── radars-app.js   (GPS + alertes)
+    │   │   ├── meteo-app.js    (prévisions)
+    │   │   └── bourse-app.js   (cours)
+    │   ├── settings.js         (clés API, TTS, préfs)
+    │   └── ble-pairing.js      (pairing modal)
+    └── device/
+        └── ble-manager.js      (Web Bluetooth API)
 ```
 
----
+### Vues disponibles
 
-## 4. Agents — Catalogue par défaut
-
-Les agents sont créés au premier démarrage via `defaultAgents()`. Chaque agent est un objet JSON persisté dans IndexedDB.
-
-### Schéma d'un agent
-
-```json
-{
-  "id": "agent-xxx",
-  "name": "Nom",
-  "role": "orchestrator | web-analyst | web-search | factory | gardener | generic | <slug-metier>",
-  "description": "Une phrase.",
-  "tags": ["tag1", "tag2"],
-  "backendId": "groq-llama",
-  "system_prompt": "...",
-  "memory_profile": { "level": "normal | high", "scope": "..." },
-  "preferences": [],
-  "examples": [],
-  "metrics": { "corrections": 0, "confidence": 1, "lastUsed": null },
-  "version": 1,
-  "createdAt": "ISO",
-  "updatedAt": "ISO"
-}
-```
-
-### Agents système
-
-| ID | Nom | Rôle | Description |
-|---|---|---|---|
-| `agent-orchestrateur` | Orchestrateur | `orchestrator` | Analyse, planifie, délègue. |
-| `agent-jardinier` | Jardinier | `gardener` | Nettoie et compacte les prompts. |
-| `agent-fabrique` | Fabrique d'agents | `factory` | Crée un agent JSON depuis un brief. |
-| `agent-web-analyst` | Web Analyst | `web-analyst` | Recherche web + synthèse 1-5 lignes. |
-
-### Agents métier par défaut
-
-| ID | Nom | Domaine |
-|---|---|---|
-| `agent-mensualites` | Mensualités | Paiements récurrents |
-| `agent-pea` | PEA | Portefeuille bourse |
-| `agent-histoires` | Histoires | Histoires interactives |
-| `agent-recherche-ciblee` | Recherche ciblée | Synthèse offline |
-| `agent-recherche-web` | Recherche web | Web brut + résumé |
-
----
-
-## 5. Orchestrateur adaptatif
-
-**Fichier :** `src/core/orchestrator-engine.js`
-
-### Pipeline de décision (coût croissant)
-
-```
-quickAnalyze() — 0 appel LLM
-    ├─ Score ≥ 65% ET requête simple → FAST-ROUTE → direct_mixed | direct_llm
-    └─ Sinon : buildMetaPlanPrompt()
-            ├─ direct_mixed   : web-analyst existant
-            ├─ direct_llm     : agent LLM pur existant
-            ├─ chain          : chaîne d'agents (max 3)
-            ├─ create_mixed   : créer agent mixte
-            ├─ create_agent   : créer + chaîner
-            └─ direct_orch    : fallback orchestrateur direct
-```
-
----
-
-## 6. Module de recherche web
-
-**Fichier :** `src/api/search.js`
-
-```
-1. Serper.dev (primaire, 2500 req/mois gratuites)
-2. SearXNG (fallback illimité, sans clé)
-```
-
-Split automatique des requêtes complexes (TV, multi-entités).
-
----
-
-## 7. Backends LLM
-
-| ID | Label | Modèle | Clé |
-|---|---|---|---|
-| `groq-llama` | Groq — Llama 3.3 70B | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
-| `groq-llama-free` | Groq — Llama 3.1 8B | `llama-3.1-8b-instant` | `GROQ_API_KEY` |
-| `openrouter-qwen-free` | Qwen Free | `qwen/qwen3-coder:free` | `OPENROUTER_API_KEY` |
-| `puter-qwen` | Qwen (Puter.js) | — | ❌ aucune |
-
----
-
-## 8. Text-to-Speech (TTS)
-
-**Fichier :** `src/api/tts.js`
-
-```
-1. Mode silence → no-op
-2. Gemini TTS (si engine='gemini' + GEMINI_API_KEY)
-   → gemini-2.5-flash-preview-tts (free tier)
-   → PCM 16-bit 24kHz → AudioContext
-3. Browser speechSynthesis (défaut)
-   → Voix française auto-sélectionnée
-   → Vitesse configurable (NESTOR_TTS_RATE, défaut 1.0)
-```
-
-### Clés localStorage TTS
-
-| Clé | Valeur |
+| Vue | Description |
 |---|---|
-| `NESTOR_SILENT_MODE` | `'1'` / `'0'` |
-| `NESTOR_TTS_ENGINE` | `'browser'` / `'gemini'` |
-| `NESTOR_TTS_VOICE` | nom de voix browser |
-| `NESTOR_TTS_RATE` | `'0.5'`–`'2.0'` |
+| **Hub Compagnon** | Tableau de bord : WiFi, BLE, toggles apps, sync status |
+| **Nestor** | Chat avec agents, TTS configurable |
+| **Radars** | Carte GPS, alertes radars |
+| **Météo** | Prévisions, géolocalisation |
+| **Bourse** | Cours en temps réel, portefeuille |
+| **Réglages généraux** | Fuseau horaire, langue, clés API |
+| **Réglages par app** | Toggles, tickers Bourse, villes Météo, etc. |
 
 ---
 
-## 9. Stockage
+## 4. Applications autonomes
 
-**Fichier :** `src/storage/agents-db.js`
+### 4.1 Nestor — Assistant IA
 
-Agents : IndexedDB (`nestor-agents-v1`).
-Secrets, préférences, historiques : `localStorage`.
+**PWA** :
+- Chat avec agents (Jardinier, Fabrique, Orchestrateur, métier)
+- Entrée clavier + Web Speech API (STT in-browser)
+- TTS browser speechSynthesis ou Gemini (toggle silence)
+- Historique persisté
 
-### CRUD Agents
+**ESP32** :
+- Chat LVGL natif, écran tactile + boutons physiques
+- STT : ES7210 microphone → API gratuite (Google Cloud Speech, ElevenLabs free, etc.)
+- TTS : Réponse Nestor → API TTS gratuite (Groq TTS, etc.) → ES8311 codec
+- Mode silence : toggle dans paramètres
+- Historique en PSRAM (chaud) + LittleFS (froid)
 
-| Fonction | Description |
-|---|---|
-| `loadAgents()` | Charge tous les agents (seed si vide) |
-| `saveAgent(agent)` | Upsert avec updatedAt |
-| `deleteAgent(id)` | Supprime un agent |
-| `exportAgentsJson(agents)` | Sérialise en JSON |
-| `importAgentsJson(json, mergeFn)` | Importe + fusionne |
-
-### Historique de conversation (v2)
-
-| Fonction | Description |
-|---|---|
-| `saveChatHistory(agentId, history)` | Persiste l'historique (hors message système, max 100 messages) |
-| `loadChatHistory(agentId)` | Charge l'historique |
-| `clearChatHistory(agentId)` | Efface l'historique |
-
-Clé localStorage : `NESTOR_HIST_<agentId>`
-
-### Clés localStorage applicatives
-
-| Clé | Contenu |
-|---|---|
-| `NESTOR_AGENTS` | JSON array agents (fallback si IndexedDB indispo) |
-| `GROQ_API_KEY` | Clé Groq |
-| `OPENROUTER_API_KEY` | Clé OpenRouter |
-| `GEMINI_API_KEY` | Clé Gemini (TTS cloud) |
-| `SERPER_KEY` | Clé Serper.dev |
-| `TWELVE_DATA_KEY` | Clé Twelve Data (Bourse v2) |
-| `SEARCH_PROXY_URL` | URL proxy CORS |
-| `NESTOR_SILENT_MODE` | Mode silence TTS |
-| `NESTOR_TTS_ENGINE` | Moteur TTS actif |
-| `NESTOR_TTS_VOICE` | Voix browser sélectionnée |
-| `NESTOR_TTS_RATE` | Vitesse TTS |
-| `NESTOR_BOURSE_CACHE` | Cache derniers cours boursiers |
-| `NESTOR_HIST_<id>` | Historique de conversation par agent |
+**Agents synchronisés** :
+- Agents métier et système partagés via sync bidirectionnelle
+- Amélioration Jardinier sur les deux côtés
+- Dernière version gagne (last-write-wins updatedAt)
 
 ---
 
-## 10. UI — Dashboard & Companion
+### 4.2 Radars — Surveillance GPS
 
-### Vues disponibles (v2)
+**PWA** :
+- Carte Leaflet ou Mapbox Lite
+- Position GPS du téléphone (Geolocation API)
+- Alertes Lufop + Blitzer.de en temps réel
+- Liste des radars proches, alertes audio optionnelles
 
-| Vue | `state.view` | Description |
-|---|---|---|
-| Chat | `chat` | Conversation avec l'agent actif |
-| Agents | `agents` | Liste + gestion des agents |
-| Réglages | `settings` | Clés API, TTS, recherche, bourse |
-| Fabrique | `fabrique` | Créer un agent depuis un brief |
-| Édition | `edit` | Modifier un agent existant |
-| **Radars** | `radar` | 🚨 Surveillance GPS radars (v2) |
-| **Bourse** | `bourse` | 📈 Cours en temps réel (v2) |
+**ESP32** :
+- Position GPS via BLE du téléphone (si appairé + connecté)
+- Fallback : dernière position GPS stockée en NVS
+- Affichage LVGL : liste radars proches, couleur d'alerte
+- API Lufop/Blitzer direct (clés stockées NVS)
 
-### Drawer navigation (app.js)
-
-- Orchestrateur (chat direct)
-- Agents métier (liste dynamique)
-- **Applications** : Radars 🚨, Bourse 📈
-- Gérer les agents / Fabrique / Réglages
+**Données partagées** :
+- Liste des types d'alertes (radar fixe, radar mobile, section danger)
+- Paramètres : rayon recherche, types d'alertes activés/désactivés
 
 ---
 
-## 11. Page Réglages
+### 4.3 Météo — Prévisions
 
-### Sections (renderSettings() dans dashboard.js)
+**PWA** :
+- api.meteo-concept.com (METEO_API_KEY)
+- Géolocalisation : GPS téléphone → lat/lon → ville
+- Prévisions J+3, carte meteo
+- Villes favorites (V2)
 
-1. **Backends LLM** — clés GROQ, OpenRouter (avec statut ✅/⚠️)
-2. **🌐 Recherche Web** — SERPER_KEY, proxy CORS, statut moteur
-3. **📈 Bourse** — TWELVE_DATA_KEY
-4. **🔊 TTS** — moteur (browser/gemini), voix, vitesse, test, mode silence
-
----
-
-## 12. PWA & Service Worker
-
-**Cache :** `nestor-v4`
-
-**Fichiers précachés :**
-- Assets HTML/CSS/JS
-- Tous les modules `src/`
-- `src/ui/radar-view.js` et `src/ui/bourse-view.js` (v2)
-
-**Stratégie :** cache-first pour les assets locaux, network bypass pour les APIs externes.
+**ESP32** :
+- Même API (METEO_API_KEY stockée NVS)
+- Géolocalisation : priorité
+  1. GPS via BLE du téléphone (si appairé)
+  2. Dernière position GPS stockée
+  3. Fallback Paris
+- Affichage LVGL : prévisions J+3, icône météo, temp min/max
+- Nom de la ville affiché en haut (ex "Lyon", "Dernière: Nice")
 
 ---
 
-## 13. Proxy CORS
+### 4.4 Bourse — Cours en temps réel
 
-**URL par défaut :** `https://proxy.sicho95.workers.dev/`
+**PWA** :
+- Twelve Data (TWELVE_DATA_KEY) : 4 tickers par défaut
+- Finnhub option (FINNHUB_KEY)
+- Refresh : 1.5 min (9h–18h), données figées après
+- Configuration : ajouter/retirer tickers, alertes prix
 
-Paramètre : `?url=<URL encodée>`
-
-Utilisé par : LLM, Serper, DDG, Gemini TTS, fetchPageText, Lufop API, Blitzer API, Twelve Data.
-
----
-
-## 14. Clés et secrets
-
-| Secret | Service | Obligatoire |
-|---|---|---|
-| `GROQ_API_KEY` | Groq (LLM principal) | ✅ |
-| `OPENROUTER_API_KEY` | OpenRouter | Non |
-| `GEMINI_API_KEY` | Gemini TTS cloud | Non |
-| `SERPER_KEY` | Recherche Serper.dev | Non (DDG fallback) |
-| `TWELVE_DATA_KEY` | Cours boursiers | Oui (App Bourse) |
+**ESP32** :
+- Même APIs (clés en NVS)
+- 4 tickers configurés (par défaut : CAC40, BTC, EUR/USD, Or)
+- Refresh : 1.5 min (Twelve Data), ou 10 sec par ticker (Finnhub) respectant 60 req/min
+- Affichage LVGL : prix, variation %, couleur rouge/vert
+- Configuration via BLE (input text téléphone)
 
 ---
 
-## 15. Roadmap
+## 5. ESP32 Compagnon — Autonome
 
-### ✅ Complété en v2
-- [x] App Radars GPS (Lufop + Blitzer + alertes audio)
-- [x] App Bourse (Twelve Data, 4 symboles, auto-refresh)
-- [x] Section TTS complète dans les Réglages
-- [x] Historique de conversation persisté par agent
-- [x] Export/Import agents JSON
-- [x] TWELVE_DATA_KEY dans les Réglages
-- [x] Drawer navigation apps v2
-
-### À faire (v3)
-- [ ] Module `src/bt/` — connexion BLE ESP32
-- [ ] Module `src/device/` — capteurs (batterie, accéléromètre)
-- [ ] Module `src/sync/` — synchronisation inter-appareils
-- [ ] Jardinier automatique (déclenchement planifié)
-- [ ] Historique des conversations exportable
-- [ ] Métriques enrichies (tokens, temps de réponse)
-- [ ] Support multi-langues (EN, ES)
-- [ ] Backend Ollama local
-
----
-
-## 16. Compagnon ESP32 — Matériel
-
-### Carte
+### Matériel
 
 | Composant | Détail |
 |---|---|
 | SoC | ESP32-S3 (Xtensa LX7 dual-core 240 MHz) |
 | Flash | 16 MB (QSPI) |
-| PSRAM | 8 MB OPI (mode OPI_80M) |
-| Écran | AMOLED 2.16" QSPI, résolution **480×480** |
-| Pilote écran | CO5300 via `Arduino_CO5300` |
-| Touch | CST9220 sur I2C (adresse 0x5A, fallback 0x1A) |
-| PMU | AXP2101 (AXP_INT = GPIO13) |
+| PSRAM | 8 MB OPI (OPI_80M) |
+| Écran | AMOLED 2.16" QSPI, **480×480** |
+| Pilote écran | CO5300 via Arduino_CO5300 |
+| Touch | CST9220 I2C (0x5A, fallback 0x1A) |
+| PMU | AXP2101 (GPIO13 IRQ) |
 | IMU | QMI8658 |
-| Codec audio | ES8311 (DAC/ampli) + ES7210 (ADC/mic) |
+| Codec audio | ES8311 (DAC) + ES7210 (ADC/mic) |
+| Batterie | 1000 mAh (envisagé) |
 
-### Broches (pin_config.h)
+### Broches critiques
 
-| Signal | GPIO | Notes |
-|---|---|---|
-| LCD_CS | 12 | Chip select QSPI |
-| LCD_SCLK | 38 | Horloge QSPI |
-| LCD_SDIO0..3 | 4, 5, 6, 7 | Bus QSPI données |
-| LCD_RESET | 2 | **Partagé avec TOUCH_RES** |
-| IIC_SDA | 15 | I2C (Touch, PMU, IMU) |
-| IIC_SCL | 14 | I2C horloge |
-| TOUCH_INT | 11 | Interrupt touch |
-| AXP_INT | 13 | Interrupt PMU |
-| BTN_LEFT | 18 | Bouton physique gauche |
-| BTN_RIGHT | 0 | Bouton physique droit |
-| AUDIO_BCLK | 48 | I2S bit clock |
-| AUDIO_WS | 45 | I2S word select |
-| AUDIO_DOUT | 46 | I2S data out (ES8311) |
-| AUDIO_DIN | 47 | I2S data in (ES7210) |
-
-### Rails d'alimentation AXP2101
-
-| Rail | Tension | Usage |
-|---|---|---|
-| ALDO1 | 2800 mV | AMOLED |
-| ALDO3 | 3300 mV | Touch + logique |
-
----
-
-## 17. Compagnon ESP32 — Architecture logicielle
-
-### Ordre d'init `setup()` (critique)
-
-1. `hal_pmu_init()` — rails ALDO1/ALDO3 + IRQ bouton power
-2. `hal_display_init()` — reset pin 2, init LVGL
-3. `hal_touch_init()` — 500 ms post-reset + CST9220
-4. `hal_imu_init()` — QMI8658
-5. `ui_status_bar_init()` — barre fixe `lv_layer_top()`
-6. `wifi_mgr_init()` — portail captif non-bloquant
-7. `net_ota_init()` — ArduinoOTA
-8. `orchestrator_init()` — planificateur + cerveau
-9. `ui_launcher_init()` — carousel 4 apps
-10. `hal_pmu_set_long_press_cb(ui_power_menu_show)`
-
-### Boucle `loop()`
-
-```
-lv_timer_handler()     // LVGL events (priorité maximale)
-hal_pmu_tick()         // IRQ AXP2101
-wifi_mgr_tick()        // connexion + portail
-net_ota_tick()         // OTA
-ui_status_bar_tick()   // refresh 10s
-hal_imu_tick()         // orientation
-orchestrator_tick()    // cerveau
-delay(5)
-```
-
----
-
-## 18. Gestion de l'alimentation (PMU)
-
-| Action bouton power | Résultat |
+| Signal | GPIO |
 |---|---|
-| Appui court | Écran ON/OFF |
-| Appui long (>1 s) | Menu Alimentation (Veille / Arrêt / Annuler) |
-
-**Veille :** light sleep ESP32, RAM et LVGL préservés, réveil sur appui.
-**Arrêt :** AXP2101 shutdown, fallback deep sleep.
-
-Batterie : > 30% vert `#44CC44`, 15–30% orange `#F4A236`, < 15% rouge `#F44336`.
+| LCD_RESET | 2 |
+| TOUCH_RESET | 2 (partagé) |
+| TOUCH_INT | 11 |
+| AXP_INT | 13 |
+| BTN_LEFT | 18 |
+| BTN_RIGHT | 0 |
+| IIC_SDA | 15 |
+| IIC_SCL | 14 |
+| AUDIO_BCLK | 48 |
+| AUDIO_WS | 45 |
+| AUDIO_DOUT | 46 (ES8311) |
+| AUDIO_DIN | 47 (ES7210) |
 
 ---
 
-## 19. Affichage & Interface LVGL
+## 6. BLE Pairing + Configuration WiFi
 
-- LVGL 9, `LV_COLOR_DEPTH = 16` (RGB565)
-- Buffer DMA : 40 lignes × 480 px (PSRAM, `MALLOC_CAP_DMA`)
-- Double buffer, `swap16_buf()` avant flush
+### Workflow complet
 
-### Launcher — Carousel 4 apps
+#### Étape 1 : Appairage initial
 
-| App | Icône | Couleur fond |
+1. **ESP32 boot** → BLE mode (pas AP WiFi)
+   - Annonce "Compagnon_XXXX" (XXXX = 4 derniers chiffres MAC)
+   - Génère code 6 chiffres aléatoire (stocké en RAM)
+   - Affiche le code en haut de l'écran LVGL
+
+2. **Téléphone** → scanne BLE
+   - Trouve "Compagnon_XXXX"
+   - Appairage : affiche le code 6 chiffres
+   - Demande à l'utilisateur de confirmer (ou de saisir le code affiché)
+   - Appairage établi
+
+3. **PWA Compagnon** → détecte pairing
+   - Affiche "Compagnon appairé" ✅
+   - Active section "Configurer WiFi"
+
+#### Étape 2 : Configuration WiFi
+
+**Cas 1 : SSID connu du téléphone + pwd stocké**
+- PWA liste les WiFi du téléphone (via Web Bluetooth API, si dispo)
+- Utilisateur sélectionne un WiFi
+- PWA envoie SSID + PWD via GATT
+- ESP32 se connecte, stocke en NVS
+
+**Cas 2 : Nouveau SSID**
+- PWA affiche champ texte "Mot de passe"
+- Utilisateur colle/saisit le mot de passe (depuis le tel)
+- PWA envoie SSID + PWD via GATT
+- ESP32 se connecte, stocke en NVS
+
+**Cas 3 : Depuis l'écran ESP32 (fallback)**
+- WiFi appairé via BLE dans le tel
+- Utilisateur tape long sur l'écran → écran réglages WiFi
+- Liste tactile des WiFi connus → boutons Connecter / Oublier
+- Pour nouveau WiFi → input text (gros clavier tactile ou BLE del tel)
+
+#### État de l'écran ESP32
+
+| État | Affichage |
+|---|---|
+| Boot, pas de BLE | WiFi gris ❌, BLE gris ❌, "Appairez via BLE" |
+| BLE appairé, pas de WiFi | WiFi gris ❌, BLE bleu ✅, "Configurer WiFi" |
+| WiFi connecté | WiFi vert ✅, BLE bleu ✅ (si appairé) |
+| WiFi + PWA sync actif | Animation sync en cours |
+
+---
+
+## 7. STT/TTS Autonome (ESP32)
+
+### STT (Speech-to-Text)
+
+**Micro ES7210** → WAV/PCM 16-bit 16 kHz → API STT gratuite
+
+Options recommandées (gratuit) :
+1. **Google Cloud Speech** (300 requêtes/mois gratuites)
+2. **ElevenLabs free tier** (10,000 caractères/mois)
+3. **Groq STT** (gratuit, si API key Groq dispo)
+
+Implémentation :
+- Appui long sur bouton micro (gros bouton tactile)
+- Enregistrement audio ES7210 en streaming (max 30s)
+- Upload WAV à l'API
+- Réponse texte → Nestor LLM
+- Réponse TTS → jouer audio
+
+### TTS (Text-to-Speech)
+
+**Réponse Nestor** → API TTS gratuite → MP3/WAV → ES8311 codec
+
+Options recommandées (gratuit) :
+1. **Groq TTS** (gratuit, intégré à la clé Groq)
+2. **ElevenLabs free** (10,000 caractères/mois)
+3. **Google Cloud TTS** (500 requêtes/mois gratuites)
+4. **Tacotron 2 / Glow-TTS local** (si PSRAM suffisant)
+
+Implémentation :
+- API TTS retourne MP3 ou WAV
+- Stream en chunks via BLE/WiFi (si PSRAM limité)
+- Ou stocke en PSRAM (max 8 MB) si court
+- I2S → ES8311 codec → haut-parleur intégré
+
+### Mode silence
+
+- Toggle dans paramètres app Nestor
+- Si activé : aucun TTS, texte affiché seul
+- Stocké en NVS, synchronisé via BLE à la PWA
+
+---
+
+## 8. Synchronisation agents PWA ↔ ESP32
+
+### Triggers
+
+1. **Au lancement app Nestor** (BLE ou WiFi LAN)
+   - Échange : SYNC_HELLO → SYNC_PLAN → SYNC_DATA
+   - Résolution conflits : last-write-wins par `updatedAt`
+
+2. **À chaque création/modification d'agent** (local)
+   - Push immédiat à l'autre côté (via BLE/WiFi)
+   - Flag dirty jusqu'à ACK
+
+3. **Polling périodique** : toutes les 2–3 h
+   - Batterie : limite à 1–2 requêtes par jour (ultra-léger)
+   - Évite une perte de sync silencieuse
+
+### Protocole GATT
+
+**Caractéristiques** :
+
+| UUID | Direction | Contenu |
 |---|---|---|
-| Nestor | `LV_SYMBOL_WIFI` | `#0D1B3E` |
-| Radars | `LV_SYMBOL_AUDIO` | `#0A0A1A` |
-| Bourse | `LV_SYMBOL_UP` | `#071A07` |
-| Météo | `LV_SYMBOL_WARNING` | `#0A0E1A` |
+| `SYNC_HELLO` | ↔ | version, deviceId, timestamp |
+| `SYNC_PLAN` | ↔ | agentIds[], updatedAt[] |
+| `SYNC_DATA` | ↔ | agents[] JSON complets |
 
----
-
-## 20. Connectivité (WiFi / OTA / BLE)
-
-### WiFi — Portail captif
-
-- SSID : `Compagnon_Setup`, PSK : `compagnon`
-- Timeout : 180 s
-
-### OTA
-
-- Hostname : `compagnon`, port : 3232
-- Mot de passe : `nestor_ota`
-
-### BLE (V2 — prévu)
-
-- Services GATT : sync agents, GPS, capteurs
-
----
-
-## 21. Applications V1 — Catalogue
-
-### Nestor (nestor_app)
-
-- Chat LVGL, Groq API, TTS ES8311, micro ES7210
-
-### Radars (radar_app)
-
-- Port de la PWA `src/ui/radar-view.js`
-- GPS via BLE téléphone
-- Lufop API + Blitzer.de
-
-### Météo (meteo_app)
-
-- `api.meteo-concept.com` (METEO_API_KEY)
-- Prévisions J+3
-
-### Bourse (bourse_app)
-
-- Twelve Data (TWELVE_DATA_KEY)
-- 4 symboles : CAC40, BTC, EUR/USD, Or
-- Refresh 90s entre 9h–18h, données figées sinon
-
----
-
-## 22. Synchronisation PWA ↔ ESP32
-
-### Protocole (V2 — BLE GATT)
-
+**Handshake** :
 ```
-SYNC_HELLO  { version, deviceId, timestamp }
-SYNC_PLAN   { agentIds: [...], updatedAt: [...] }
-SYNC_DATA   { agents: [...] }
+Device A (ESP32) → SYNC_HELLO { version: 1, deviceId: "esp32-xxx", timestamp: 1715076000 }
+Device B (PWA) → SYNC_HELLO { version: 1, deviceId: "pwa-xxx", timestamp: 1715076001 }
+Device A → SYNC_PLAN { agentIds: ["a1", "a2"], updatedAt: [1715000000, 1715010000] }
+Device B → SYNC_PLAN { agentIds: ["a1", "a2", "a3"], updatedAt: [1715002000, 1715012000, 1715020000] }
+→ Merge : Device A ajoute a3, Device B met à jour a1 si updatedAt > sienne
+→ Device A → SYNC_DATA { agents: [a1, a2, a3] }
+Device B → SYNC_DATA { agents: [a1, a2, a3] }
 ```
 
-Résolution conflits : last-write-wins par `agent.updatedAt`.
+### Résolution de conflits
+
+**Stratégie** : last-write-wins
+- Chaque agent a `updatedAt` (ISO timestamp)
+- Si deux versions d'un agent existent : la plus récente (updatedAt plus tard) gagne
+- Version perdue : archive en `agents-history.json` pour audit
 
 ---
 
-## 23. Clés et secrets ESP32
+## 9. Storage PWA
 
-**Fichier :** `src/config/secrets.h` (gitignorée)
+### IndexedDB
 
-| Constante | Service |
+**Base** : `nestor-agents-v1`
+**Stores** :
+- `agents` : agents avec schéma complet
+- `chat-history` : historiques par agentId
+
+### localStorage
+
+| Clé | Contenu |
 |---|---|
-| `WIFI_AP_PSK` | Portail captif |
-| `OTA_PASSWORD` | OTA Arduino |
-| `GROQ_API_KEY` | LLM (app Nestor) |
-| `GEMINI_API_KEY` | TTS cloud |
-| `METEO_API_KEY` | api.meteo-concept.com |
-| `SERPER_KEY` | Recherche web |
-| `TWELVE_DATA_KEY` | Cours boursiers |
+| `GROQ_API_KEY` | Groq LLM |
+| `OPENROUTER_API_KEY` | OpenRouter |
+| `GEMINI_API_KEY` | Gemini TTS |
+| `SERPER_KEY` | Serper.dev recherche |
+| `TWELVE_DATA_KEY` | Bourse |
+| `FINNHUB_KEY` | Bourse option |
+| `METEO_API_KEY` | Météo Concept |
+| `NESTOR_SILENT_MODE` | TTS silence toggle |
+| `NESTOR_TTS_ENGINE` | browser / gemini |
+| `NESTOR_BOURSE_CACHE` | Cache derniers cours |
+| `NESTOR_TIMEZONE` | Europe/Paris (défaut) |
+| `NESTOR_LANGUAGE` | fr / en |
 
 ---
 
-## 24. Procédure Arduino IDE
+## 10. Storage ESP32
 
-### Bibliothèques requises
+### NVS Preferences (chiffré)
 
-| Bibliothèque | Notes |
+| Clé | Contenu | Type |
+|---|---|---|
+| `wifi_ssid` | SSID dernier WiFi | string |
+| `wifi_psk` | PWD dernier WiFi | string |
+| `wifi_list` | JSON liste WiFi connus | blob |
+| `ble_code` | Code 6 chiffres | int |
+| `ble_paired` | Paired status | uint8 |
+| `GROQ_API_KEY` | Groq LLM | string |
+| `GEMINI_API_KEY` | Gemini TTS | string |
+| `METEO_API_KEY` | Météo Concept | string |
+| `TWELVE_DATA_KEY` | Twelve Data | string |
+| `FINNHUB_KEY` | Finnhub option | string |
+| `SERPER_KEY` | Serper recherche | string |
+| `nestor_silent_mode` | TTS silence | uint8 |
+| `bourse_tickers` | JSON tickers | blob |
+| `meteo_cities` | JSON villes favorites | blob |
+| `radar_radius` | Rayon recherche (km) | int |
+| `radar_alerts` | JSON types d'alertes | blob |
+| `last_gps_lat` | Dernière latitude | float |
+| `last_gps_lon` | Dernière longitude | float |
+| `timezone` | POSIX TZ string | string |
+| `language` | fr / en | string |
+
+### LittleFS
+
+```
+/agents/
+├── agent-xxx.json          (agents individuels)
+├── agent-yyy.json
+└── ...
+
+/sync/
+├── agents-history.json     (versions perdues)
+└── sync-log.json           (audit sync)
+
+/storage/
+├── bourse-cache.json       (derniers cours)
+├── meteo-cache.json        (dernière météo)
+└── ...
+```
+
+Charge agents en PSRAM au boot (chaud), sync LittleFS à la demande (froid).
+
+---
+
+## 11. Clés API
+
+### Source unique : stockage sécurisé
+
+| Clé | Service | Obligatoire | Stockage |
+|---|---|---|---|
+| `GROQ_API_KEY` | Groq LLM (Nestor) | ✅ | PWA localStorage + NVS ESP32 |
+| `GEMINI_API_KEY` | Gemini TTS | ❌ | PWA localStorage + NVS ESP32 |
+| `METEO_API_KEY` | api.meteo-concept.com | ✅ (Météo) | PWA localStorage + NVS ESP32 |
+| `TWELVE_DATA_KEY` | Twelve Data (Bourse) | ✅ (Bourse) | PWA localStorage + NVS ESP32 |
+| `FINNHUB_KEY` | Finnhub (Bourse option) | ❌ | PWA localStorage + NVS ESP32 |
+| `SERPER_KEY` | Serper.dev (recherche) | ❌ (DDG fallback) | PWA localStorage + NVS ESP32 |
+
+**Flux** :
+1. Utilisateur rentre les clés dans PWA Compagnon (Réglages)
+2. Stockées en localStorage PWA
+3. Au premier BLE pairing : PWA → ESP32 via GATT
+4. ESP32 stocke en NVS chiffré
+5. Mise à jour clé PWA : push automatique à l'ESP32 à la prochaine sync
+6. Mise à jour clé ESP32 : remontée à la PWA à la prochaine sync
+
+---
+
+## 12. Préférences & Toggles apps
+
+### Compagnon PWA — Réglages généraux
+
+| Paramètre | Stockage | Valeur défaut |
+|---|---|---|
+| Fuseau horaire | localStorage | Europe/Paris (POSIX TZ) |
+| Langue | localStorage | fr |
+| Clés API | localStorage | (vides) |
+| BLE pairing | localStorage | (device list) |
+
+### Toggles apps
+
+| App | Toggle | Stockage | Défaut |
+|---|---|---|---|
+| Nestor | Actif / Inactif | localStorage + NVS | ✅ |
+| Radars | Actif / Inactif | localStorage + NVS | ✅ |
+| Météo | Actif / Inactif | localStorage + NVS | ✅ |
+| Bourse | Actif / Inactif | localStorage + NVS | ✅ |
+
+**Sync** : toggles synchronisés via SYNC_DATA (options appliquée sur les deux côtés).
+
+### Préférences par app
+
+#### Nestor
+- TTS mode : silence on/off
+- Historique : sauvegardé par agentId
+
+#### Radars
+- Rayon recherche : 50 km (configurable)
+- Types d'alertes : radar fixe, mobile, section danger (toggles)
+
+#### Météo
+- Villes favorites : Paris, Lyon, etc. (V2)
+- Unités : °C (défaut), °F (option)
+
+#### Bourse
+- Tickers à suivre : CAC40, BTC, EUR/USD, Or (modifiable)
+- Raffraîchissement : 1.5 min (Twelve Data), 10 sec (Finnhub)
+
+---
+
+## 13. Interface LVGL ESP32
+
+### Architecture UI
+
+- `lv_layer_top()` → status bar fixe
+- `lv_tileview` → carousel 4 apps (horizontal swipe)
+- Boutons physiques GPIO0/GPIO18 → navigation carousel
+
+### Status bar
+
+Affichage permanent en haut (20 px hauteur) :
+```
+[Time: 14:35] [WiFi 📶] [BLE 📡] [Battery 75%] [Sync ↔]
+```
+
+Couleurs :
+- WiFi vert (connecté) / gris (déconnecté)
+- BLE bleu (appairé) / gris (non appairé)
+- Batterie vert >30%, orange 15–30%, rouge <15%
+- Sync animation lors d'une synchronisation
+
+### Carousel 4 apps
+
+| Écran | App | Conteneur |
+|---|---|---|
+| 0 | Launcher | Liste apps avec icônes |
+| 1 | Nestor | Chat LVGL |
+| 2 | Radars | Liste radars proches |
+| 3 | Météo | Prévisions J+3 |
+| 4 | Bourse | Tableau tickers + cours |
+
+**Navigation** :
+- Swipe gauche/droit
+- Bouton LEFT (GPIO18) = slide précédent
+- Bouton RIGHT (GPIO0) = slide suivant
+- Boucle (dernière → première)
+
+### Launcher (slide 0)
+
+Écran d'accueil avec liste des apps :
+```
+🤖 Nestor
+📍 Radars
+🌦 Météo
+📈 Bourse
+
+[⚙ Réglages]
+```
+
+Appui sur app → charge app (passe à son écran).
+Appui long → options app (si dispo).
+
+### Réglages (écran additionnel accessible depuis launcher)
+
+```
+WiFi :
+  [Liste WiFi connus]
+  [Connecter / Oublier]
+
+Apps :
+  ☑ Nestor
+  ☑ Radars
+  ☑ Météo
+  ☑ Bourse
+
+Nestor :
+  ☑ Mode silence
+
+Bourse :
+  [Tickers configurés]
+  [+] [−]
+
+Météo :
+  Ville : [Paris ▼]
+
+Retour
+```
+
+Accès via bouton long power → menu (Veille / Arrêt / Annuler) ou via launcher → "Réglages".
+
+---
+
+## 14. Gestion de l'alimentation ESP32
+
+### Bouton Power (AXP2101 GPIO13)
+
+| Action | Résultat |
 |---|---|
-| Waveshare ESP32-S3 AMOLED | Via URL board manager |
-| LVGL 9.x (Waveshare patched) | `lv_conf.h` à copier |
-| Arduino_GFX_Library | `Arduino_CO5300` driver |
-| SensorLib (lewisxhe) | `TouchDrvCSTXXX.hpp` |
-| XPowersLib 0.3.3 | `XPowersAXP2101` |
-| WiFiManager (tzapu) | Portail captif |
+| Appui court (<1 s) | Écran ON/OFF (toggle) |
+| Appui long (>1 s) | Menu Power modal |
+
+### Menu Power
+
+```
+┌──────────────────┐
+│  Alimentation    │
+├──────────────────┤
+│  💤 Veille       │
+│  🔴 Arrêt        │
+│  ❌ Annuler      │
+└──────────────────┘
+```
+
+**Veille** :
+- `esp_light_sleep_start()`
+- RAM préservée, LVGL état intact
+- Réveil sur appui bouton (~100 ms)
+- Conso : 0,8–2 mA
+
+**Arrêt** :
+- Écran OFF
+- `pmu.shutdown()` (AXP2101 coupe rails, conso quasi-nulle)
+- Réveil bouton power
+- Equivalent "off" complet
+
+### Batterie — Affichage
+
+Status bar : `[Battery 75%]`
+- >30% : `#44CC44` vert
+- 15–30% : `#F4A236` orange
+- <15% : `#F44336` rouge
+- <5% : clignotement rouge + alerte "Batterie faible"
+
+---
+
+## 15. Connectivité ESP32 (WiFi, OTA, BLE)
+
+### WiFi
+
+**Pas de captive portal** (sécurité). Configuration par :
+1. BLE pairing + PWA Compagnon (préféré)
+2. Écran réglages tactile (fallback)
+
+Stockage : NVS (SSID + PWD), liste de WiFi connus.
+
+### OTA (Over-The-Air)
+
+**Première mise à jour** : USB-C obligatoire
+- Arduino IDE : brancher ESP32, Outils → Port USB → Téléverser
+
+**Mises à jour suivantes** : WiFi
+- Arduino IDE : Outils → Port → sélectionner `compagnon at 192.168.x.x`
+- Téléverser comme d'habitude (~30 sec)
+
+**Paramètres** :
+- Hostname : `compagnon`
+- Port : 3232
+- Mot de passe : `nestor_ota` (modifiable dans secrets.h)
+
+### BLE
+
+**Appairage** :
+- GATT services : sync agents, GPS partagé, config WiFi
+- Protocole : SYNC_HELLO/SYNC_PLAN/SYNC_DATA
+
+**Data sharing** :
+- GPS téléphone → ESP32 (Radars, Météo)
+- WiFi configuration → ESP32
+- Agents updates ↔ bidirectionnel
+
+---
+
+## 16. Procédure Arduino IDE
+
+### Prérequis
+
+1. **Arduino IDE** (version 2.x recommandée)
+2. **URL board manager** : https://espressif.github.io/arduino-esp32/package_esp32_index.json
+3. **Bibliothèques** : installer via Sketch → Include Library → Manage Libraries
+   - `LVGL` (Waveshare patched, v9.x)
+   - `Arduino_GFX_Library`
+   - `SensorLib` (lewisxhe) — pour TouchDrvCSTXXX
+   - `XPowersLib` (0.3.3)
+   - `WiFiManager` (tzapu)
+
+### Installation Board ESP32-S3
+
+1. Arduino IDE → Préférences → URLs supplémentaires du gestionnaire de cartes
+2. Ajouter : `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+3. Outils → Board → Board manager → chercher "esp32"
+4. Installer "esp32 by Espressif Systems" (version **3.3.8** ou plus récent)
+
+### Configuration Board
+
+```
+Board           : ESP32S3 Dev Module
+Upload Speed    : 921600 bps
+CPU Frequency   : 240 MHz
+Flash Size      : 16 MB
+Flash Mode      : QIO
+Flash Frequency : 80 MHz
+PSRAM           : OPI PSRAM (OPI 80 MHz)
+Partition Scheme: 16M Flash (3MB APP / 9.9MB FATFS)
+USB Mode        : USB CDC On Boot: Enabled
+USB CDC on Boot : Enabled
+Core Debug Level: None
+```
 
 ### Placement lv_conf.h
 
@@ -576,14 +739,52 @@ Résolution conflits : last-write-wins par `agent.updatedAt`.
 ~/Documents/Arduino/libraries/lv_conf.h
 ```
 
-### Paramètres de compilation
+Copier depuis `compagnon/src/config/lv_conf.h` ou télécharger depuis LVGL.
 
-| Paramètre | Valeur |
-|---|---|
-| Board | ESP32S3 Dev Module |
-| Flash Size | 16 MB |
-| Partition Scheme | 16M Flash (3 MB APP/9 MB FATFS) |
-| PSRAM | OPI PSRAM (OPI 80 MHz) |
-| USB Mode | USB CDC On Boot: Enabled |
-| Upload Speed | 921600 |
-| CPU Frequency | 240 MHz |
+### Compilation et upload
+
+**Première fois** (USB) :
+```
+Sketch → Upload (Ctrl+U)
+```
+
+**Après première fois** (OTA WiFi) :
+```
+Outils → Port → sélectionner "compagnon at 192.168.x.x"
+Sketch → Upload
+```
+
+---
+
+## 17. Roadmap
+
+### ✅ V1 Complete
+- [x] Compagnon PWA hub
+- [x] 4 apps modulaires (Nestor, Radars, Météo, Bourse)
+- [x] ESP32 autonome LVGL
+- [x] BLE pairing + WiFi config
+- [x] STT/TTS autonome
+- [x] Sync bidirectionnelle agents
+- [x] Status bar + carousel
+- [x] Power menu veille/arrêt
+- [x] OTA WiFi
+
+### 🚀 V2 (roadmap)
+- [ ] Gardener local ESP32 (anti-collision avec PWA gardener)
+- [ ] Villes favorites Météo
+- [ ] QR code portail WiFi ESP32 (si ajout caméra)
+- [ ] Rotation auto écran (IMU QMI8658)
+- [ ] Historique de conversation exportable
+- [ ] Métriques enrichies (tokens, temps réponse)
+- [ ] Support multi-langues (EN, ES)
+- [ ] Backend Ollama local
+
+### 📋 V3+ (distant)
+- [ ] Autre appareil Compagnon (montre, hub)
+- [ ] Sync multi-devices (PWA + 2 ESP32)
+- [ ] Intégrations calendario / email
+- [ ] Mode autonome complet (aucun cloud si Ollama local)
+
+---
+
+**FIN SPEC.md — Verrouillée V3. Prête pour restructure repo + code.**

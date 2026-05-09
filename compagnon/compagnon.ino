@@ -72,5 +72,5 @@ void loop() {
     orchestrator_tick();      // Boucle cerveau / sync agents
     ui_launcher_btn_tick();   // Polling boutons hors timer LVGL (latence ~5 ms max)
 
-    delay(5);
+    delay(1);   // 1ms → LVGL plus réactif (~1000 Hz max vs 200 Hz)
 }

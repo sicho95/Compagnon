@@ -32,13 +32,14 @@ async function main() {
     menuOpen: false,
     _radarPrevView: 'chat',
     _boursePrevView: 'chat',
+    _meteoPrevView: 'chat',
   };
 
   renderFrame(root, state);
 }
 
 export function renderFrame(root, state) {
-  const safeViews = ['agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse'];
+  const safeViews = ['agents', 'settings', 'chat', 'edit', 'fabrique', 'radar', 'bourse', 'meteo'];
   if (!safeViews.includes(state.view)) state.view = 'chat';
 
   // Nettoyage radar si on quitte la vue
@@ -64,6 +65,7 @@ export function renderFrame(root, state) {
     edit: '✏️ Édition',
     radar: '🚨 Radars',
     bourse: '📈 Bourse',
+    meteo: '🌤 Météo',
     agents: '🤖 Agents',
   };
   titleEl.textContent = titles[state.view] || '🤖 Agents';
@@ -190,6 +192,13 @@ export function renderFrame(root, state) {
       state.menuOpen = false;
       rerender();
     }, state.view === 'bourse'));
+
+    drawer.appendChild(mkItem('🌤', 'Météo', () => {
+      state._meteoPrevView = state.view;
+      state.view = 'meteo';
+      state.menuOpen = false;
+      rerender();
+    }, state.view === 'meteo'));
 
     const sep3 = document.createElement('div');
     sep3.style.cssText = 'height:1px;background:#1a1a1a;margin:6px 0;';

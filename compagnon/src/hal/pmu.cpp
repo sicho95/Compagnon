@@ -82,8 +82,8 @@ void hal_pmu_screen_on() {
     if (gfx) {
         gfx->displayOn();
         gfx->setBrightness(200);
-        // Restaurer MADCTL CO5300 après réveil (peut être perdu)
-        if (gfx_bus) gfx_bus->writeC8D8(0x36, 0xA0);
+        // Restaurer MADCTL CO5300 après réveil : rotation=2 → 0xC0
+        if (gfx_bus) gfx_bus->writeC8D8(0x36, 0xC0);
     }
     Serial.println("[HAL/PMU] Ecran ON");
 }

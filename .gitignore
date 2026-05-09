@@ -1,0 +1,53 @@
+# Secrets et clés (jamais commit)
+**/secrets.h
+secrets.template.h.swp
+
+# Node & npm
+node_modules/
+npm-debug.log
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.o
+*.a
+*.so
+
+# Arduino IDE
+*.elf
+*.bin
+.pioenvs/
+.pioassets/
+compagnon/.pio/
+
+# Backups & logs
+*.bak
+*.log
+*.tmp
+
+# Legacy
+compagnon/_legacy/
+
+# Cache
+.cache/
+*.cache
+
+# Test
+__pycache__/
+*.pyc

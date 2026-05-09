@@ -3,12 +3,13 @@
 #include "../hal/pmu.h"
 #include "../system/orchestrator.h"
 #include "../apps/nestor/nestor_app.h"
-#include "../apps/radars/radar_app.h"    // dossier "radars" (pas "radar")
+#include "../apps/radars/radar_app.h"
 #include "../apps/bourse/bourse_app.h"
 #include "../apps/meteo/meteo_app.h"
 
-#define APP_COUNT 4
-#define LONG_MS   800
+#define APP_COUNT  4
+#define LONG_MS    800
+#define BORDER_PX  5     // bordure noire pour boîtier arrondi
 
 struct AppEntry {
     const char *label;
@@ -17,13 +18,14 @@ struct AppEntry {
     uint32_t    color_txt;
     const char *icon;
     void (*launch)();
+    void (*stop)();
 };
 
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",     0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
-    { "Radars",  "Alertes routieres",0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
-    { "Bourse",  "Marches & Actifs", 0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
-    { "Meteo",   "Previsions",       0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
+    { "Nestor",  "IA Compagnon",      0x000000, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nullptr         },
+    { "Radars",  "Alertes routieres", 0x000000, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop  },
+    { "Bourse",  "Marches & Actifs",  0x000000, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop },
+    { "Meteo",   "Previsions",        0x000000, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop  },
 };
 
 static lv_obj_t *scr_launcher = nullptr;
@@ -50,13 +52,28 @@ static void go_to(int8_t idx) {
     cur_idx = (idx + APP_COUNT) % APP_COUNT;
     lv_obj_set_tile_id(tileview, cur_idx, 0, LV_ANIM_ON);
 }
-
 static void open_current() {
     if (APPS[cur_idx].launch) APPS[cur_idx].launch();
 }
+static void stop_active_app() {
+    ActiveApp a = orchestrator_get_app();
+    for (int i = 0; i < APP_COUNT; i++) {
+        const AppEntry &e = APPS[i];
+        // Chaque app gère son propre stop via orchestrator_set_app(APP_LAUNCHER)
+        // on appelle stop() de l'app correspondant au enum actif
+    }
+    // Mapping enum → stop()
+    switch (a) {
+        case APP_NESTOR:  /* nestor_app_stop(); */ break;  // nestor gère l'arrêt via son bouton retour
+        case APP_RADAR:   radar_app_stop();   break;
+        case APP_BOURSE:  bourse_app_stop();  break;
+        case APP_METEO:   meteo_app_stop();   break;
+        default: break;
+    }
+}
 
 static void on_tile_changed(lv_event_t *e) {
-    lv_obj_t *tv = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *tv     = (lv_obj_t *)lv_event_get_target(e);
     lv_obj_t *active = (lv_obj_t *)lv_tileview_get_tile_active(tv);
     cur_idx = (int8_t)lv_obj_get_index(active);
 }
@@ -94,36 +111,70 @@ static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
     }
 }
 
-static void bl_s() { go_to(cur_idx - 1); }
-static void br_s() { go_to(cur_idx + 1); }
-static void br_l() { open_current(); }
+// Après rotation 90°CCW : BTN_LEFT = next, BTN_RIGHT = prev
+static void bl_s() { go_to(cur_idx + 1); }   // BTN_LEFT court → suivant
+static void br_s() { go_to(cur_idx - 1); }   // BTN_RIGHT court → précédent
+static void br_l() { open_current(); }        // BTN_RIGHT long  → ouvrir (launcher)
+static void bl_l_app() {                      // BTN_LEFT long   → retour launcher (dans une app)
+    stop_active_app();
+    ui_launcher_return();
+}
 
 // Appelée directement depuis loop() — hors timer LVGL pour éviter toute latence
 // liée au temps de rendu (lv_timer_handler() peut bloquer 30–100 ms).
 void ui_launcher_btn_tick() {
-    if (orchestrator_get_app() != APP_LAUNCHER) return;
-    poll_btn(btnLeft,  bl_s, nullptr);
-    poll_btn(btnRight, br_s, br_l);
+    if (orchestrator_get_app() == APP_LAUNCHER) {
+        poll_btn(btnLeft,  bl_s,    nullptr);
+        poll_btn(btnRight, br_s,    br_l);
+    } else {
+        // Dans une app : BTN_LEFT long = retour launcher
+        poll_btn(btnLeft,  nullptr, bl_l_app);
+        poll_btn(btnRight, nullptr, nullptr);
+    }
 }
 
+// ── Bordure noire pour boîtier arrondi ────────────────────────────────────────
+static void add_screen_border() {
+    const int B = BORDER_PX;
+    lv_obj_t *sys = lv_layer_sys();
+
+    auto mk = [&](int x, int y, int w, int h) {
+        lv_obj_t *r = lv_obj_create(sys);
+        lv_obj_set_pos(r, x, y);
+        lv_obj_set_size(r, w, h);
+        lv_obj_set_style_bg_color(r, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(r, 0, 0);
+        lv_obj_set_style_radius(r, 0, 0);
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    };
+
+    mk(0,                  0,           LCD_WIDTH,  B);           // haut
+    mk(0,                  LCD_HEIGHT-B, LCD_WIDTH, B);           // bas
+    mk(0,                  0,           B,           LCD_HEIGHT); // gauche
+    mk(LCD_WIDTH-B,        0,           B,           LCD_HEIGHT); // droite
+}
+
+// ── Construction d'une tuile ──────────────────────────────────────────────────
 static void make_tile(int i) {
     const AppEntry &a = APPS[i];
     tiles[i] = lv_tileview_add_tile(tileview, i, 0, LV_DIR_HOR);
-    lv_obj_set_style_bg_color(tiles[i], lv_color_hex(a.color_bg), 0);
+    lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tiles[i], LV_OPA_COVER, 0);
 
+    // Carte centrale
     lv_obj_t *card = lv_obj_create(tiles[i]);
     lv_obj_set_size(card, 220, 180);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(a.color_bg), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0A), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(card, lv_color_hex(a.color_txt), 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_radius(card, 20, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_shadow_width(card, 30, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(a.color_txt), 0);
-    lv_obj_set_style_shadow_opa(card, LV_OPA_30, 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
 
     lv_obj_t *ico = lv_label_create(card);
     lv_label_set_text(ico, a.icon);
@@ -141,28 +192,29 @@ static void make_tile(int i) {
     lv_label_set_text(sub, a.sub);
     lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(sub, lv_color_hex(a.color_txt), 0);
-    lv_obj_set_style_text_opa(sub, LV_OPA_70, 0);
+    lv_obj_set_style_text_opa(sub, LV_OPA_60, 0);
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, 52);
 
     // Indicateur x/4
-    lv_obj_t *idx = lv_label_create(tiles[i]);
+    lv_obj_t *idx_lbl = lv_label_create(tiles[i]);
     char buf[8]; snprintf(buf, sizeof(buf), "%d/%d", i + 1, APP_COUNT);
-    lv_label_set_text(idx, buf);
-    lv_obj_set_style_text_color(idx, lv_color_hex(0x445566), 0);
-    lv_obj_set_style_text_font(idx, &lv_font_montserrat_12, 0);
-    lv_obj_align(idx, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_label_set_text(idx_lbl, buf);
+    lv_obj_set_style_text_color(idx_lbl, lv_color_hex(0x334455), 0);
+    lv_obj_set_style_text_font(idx_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align(idx_lbl, LV_ALIGN_BOTTOM_MID, 0, -10);
 }
 
 void ui_launcher_init() {
     scr_launcher = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(scr_launcher, lv_color_hex(0x050510), 0);
+    lv_obj_set_style_bg_color(scr_launcher, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 
     tileview = lv_tileview_create(scr_launcher);
     lv_obj_set_size(tileview, LV_PCT(100), LV_PCT(100));
     lv_obj_align(tileview, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_opa(tileview, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(tileview, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(tileview, LV_OPA_COVER, 0);
     lv_obj_clear_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(tileview, on_tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -170,14 +222,16 @@ void ui_launcher_init() {
 
     lv_obj_t *hint = lv_label_create(scr_launcher);
     lv_label_set_text(hint, "glisser | btn droit long = ouvrir");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x223344), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);  // 10 n'est pas active
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x1A2233), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 
     pinMode(BTN_LEFT,  INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
 
     lv_scr_load(scr_launcher);
+    add_screen_border();   // bordure noire par-dessus tout (lv_layer_sys)
+
     Serial.println("[UI/LAUNCH] Launcher OK");
 }
 
@@ -186,7 +240,7 @@ void ui_launcher_return() {
     lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
 }
 
-// ── Menu power (appui long bouton power) ─────────────────────────────
+// ── Menu power (appui long bouton power PMU) ──────────────────────────────────
 static lv_obj_t *_power_overlay = nullptr;
 
 static void _power_close(lv_event_t *) {
@@ -223,7 +277,7 @@ void ui_power_menu_show() {
     _power_overlay = lv_obj_create(lv_layer_top());
     lv_obj_set_size(_power_overlay, 250, 210);
     lv_obj_align(_power_overlay, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(_power_overlay, lv_color_hex(0x0D1B2E), 0);
+    lv_obj_set_style_bg_color(_power_overlay, lv_color_hex(0x080810), 0);
     lv_obj_set_style_bg_opa(_power_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(_power_overlay, lv_color_hex(0x2A3A5A), 0);
     lv_obj_set_style_border_width(_power_overlay, 1, 0);
@@ -236,7 +290,7 @@ void ui_power_menu_show() {
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
-    _make_btn(_power_overlay, "Veille",         0x1A3A1A, _power_sleep, 54);
-    _make_btn(_power_overlay, "Arret complet",  0x3A1A1A, _power_off,   106);
-    _make_btn(_power_overlay, "Annuler",        0x1A1A2A, _power_close, 158);
+    _make_btn(_power_overlay, "Veille",        0x1A3A1A, _power_sleep, 54);
+    _make_btn(_power_overlay, "Arret complet", 0x3A1A1A, _power_off,   106);
+    _make_btn(_power_overlay, "Annuler",       0x080810, _power_close, 158);
 }

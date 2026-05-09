@@ -49,8 +49,8 @@ void hal_display_init() {
     LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3
   );
 
-  // Rotation 3 = landscape correct pour CO5300 (corrige le 90° vers la droite)
-  gfx = new Arduino_CO5300(gfx_bus, LCD_RESET, 3,
+  // Rotation 2 = 180° (90°CCW depuis rotation=3 précédente)
+  gfx = new Arduino_CO5300(gfx_bus, LCD_RESET, 2,
                             LCD_WIDTH, LCD_HEIGHT, 0, 0, 0, 0);
 
   if (!gfx->begin()) {

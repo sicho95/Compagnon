@@ -20,16 +20,16 @@ static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
 }
 
 void hal_touch_init() {
-    // Wire peut avoir été reconfiguré par hal_pmu_init → restaurer
+    // Réinitialiser Wire proprement après les inits PMU/display qui l'ont perturbé
+    Wire.end();
+    delay(20);
     Wire.begin(IIC_SDA, IIC_SCL);
     Wire.setClock(400000);
 
-    // TOUCH_RES = LCD_RESET = pin 2 : partagé, déjà géré par hal_display_init()
-    // Le CST9220 a besoin de ~1s après reset pour booter.
-    // hal_display_init() a effectué le reset avec 120ms de délai.
-    // On attend le reste ici pour atteindre ~620ms de boot total.
-    Serial.println("[HAL/TOUCH] Attente boot CST9220...");
-    delay(500);
+    // CST9220 nécessite ~800 ms minimum après reset hardware (pin 2 partagée avec LCD)
+    // hal_display_init() a attendu 120 ms → on complète ici
+    Serial.println("[HAL/TOUCH] Attente boot CST9220 (800 ms)...");
+    delay(680);
 
     if (TOUCH_INT >= 0) pinMode(TOUCH_INT, INPUT_PULLUP);
     // -1 pour RST et INT : active le mode polling I²C pur.
@@ -46,6 +46,7 @@ void hal_touch_init() {
     }
     if (!touch_ok) {
         Serial.println("[HAL/TOUCH] 0x15 echoue, essai 0x5A...");
+        Wire.end(); delay(50); Wire.begin(IIC_SDA, IIC_SCL); Wire.setClock(400000); delay(100);
         touch_ok = touch.begin(Wire, 0x5A, IIC_SDA, IIC_SCL);
     }
 
@@ -53,10 +54,10 @@ void hal_touch_init() {
         Serial.println("[HAL/TOUCH] CST9220 non detecte — touch desactive");
     } else {
         Serial.printf("[HAL/TOUCH] %s OK\n", touch.getModelName());
-        // Calibration pour 480×480 avec rotation=3 (270° CW)
         touch.setMaxCoordinates(LCD_WIDTH, LCD_HEIGHT);
-        touch.setSwapXY(true);
-        touch.setMirrorXY(true, false);
+        // Rotation=2 (180°) : miroir X et Y, pas de swap
+        touch.setSwapXY(false);
+        touch.setMirrorXY(true, true);
     }
 
     lv_indev_t *indev = lv_indev_create();
