@@ -306,11 +306,14 @@ static int scan_airplay_speakers() {
     // _raop._tcp = protocole AirPlay 1 (RAOP)
     int n = MDNS.queryService("raop", "tcp");
     for (int i = 0; i < n && _nb_speakers < 8; i++) {
+        // ESP32 Arduino core 3.x : MDNS.IP() supprimé → résoudre via queryHost()
+        String host = MDNS.hostname(i);
+        IPAddress resolved = MDNS.queryHost(host.c_str());
         strlcpy(_speakers[_nb_speakers].ip,
-                MDNS.IP(i).toString().c_str(), sizeof(_speakers[0].ip));
+                resolved.toString().c_str(), sizeof(_speakers[0].ip));
         _speakers[_nb_speakers].port = MDNS.port(i);
         // Le nom RAOP est "MACADDR@Nom appareil" → extraire la partie après @
-        String sname = MDNS.hostname(i);
+        String sname = host;
         int at = sname.indexOf('@');
         if (at >= 0) sname = sname.substring(at + 1);
         strlcpy(_speakers[_nb_speakers].name, sname.c_str(), sizeof(_speakers[0].name));
@@ -321,11 +324,13 @@ static int scan_airplay_speakers() {
     if (_nb_speakers == 0) {
         n = MDNS.queryService("airplay", "tcp");
         for (int i = 0; i < n && _nb_speakers < 8; i++) {
+            String host = MDNS.hostname(i);
+            IPAddress resolved = MDNS.queryHost(host.c_str());
             strlcpy(_speakers[_nb_speakers].ip,
-                    MDNS.IP(i).toString().c_str(), sizeof(_speakers[0].ip));
+                    resolved.toString().c_str(), sizeof(_speakers[0].ip));
             _speakers[_nb_speakers].port = MDNS.port(i);
             strlcpy(_speakers[_nb_speakers].name,
-                    MDNS.hostname(i).c_str(), sizeof(_speakers[0].name));
+                    host.c_str(), sizeof(_speakers[0].name));
             _nb_speakers++;
         }
     }
@@ -473,7 +478,9 @@ static void ui_update_files() {
         lv_obj_set_style_bg_color(btn_f, lv_color_hex(C_BG), 0);
         lv_obj_set_user_data(btn_f, (void *)(intptr_t)i);
         lv_obj_add_event_cb(btn_f, [](lv_event_t *e) {
-            int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            // LVGL9: lv_event_get_target() retourne lv_obj_t* — cast direct sans void*
+            lv_obj_t *target = (lv_obj_t *)lv_event_get_target(e);
+            int idx = (int)(intptr_t)lv_obj_get_user_data(target);
             if (idx < 0 || idx >= _nb_files) return;
             strlcpy(_current_track,
                     strrchr(_audio_files[idx].path, '/') ? strrchr(_audio_files[idx].path, '/') + 1
@@ -570,7 +577,7 @@ static void build_main_screen() {
     _scr_main = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(_scr_main, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr_main, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(_scr_main, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(_scr_main, LV_OBJ_FLAG_SCROLLABLE);
 
     // ── Bouton retour ───────────────────────────────────────────────────
     lv_obj_t *btn_back = lv_btn_create(_scr_main);
@@ -656,7 +663,7 @@ static void build_main_screen() {
     lv_obj_set_style_border_width(card_center, 1, 0);
     lv_obj_set_style_border_opa(card_center, LV_OPA_40, 0);
     lv_obj_set_style_radius(card_center, 18, 0);
-    lv_obj_clear_flag(card_center, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(card_center, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *ico_note = lv_label_create(card_center);
     lv_label_set_text(ico_note, LV_SYMBOL_AUDIO);
@@ -738,7 +745,7 @@ static void build_sources_screen() {
     _scr_sources = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(_scr_sources, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr_sources, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(_scr_sources, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(_scr_sources, LV_OBJ_FLAG_SCROLLABLE);
 
     // Bouton retour
     lv_obj_t *btn_b = lv_btn_create(_scr_sources);
@@ -786,7 +793,7 @@ static void build_sources_screen() {
     lv_obj_set_style_border_width(card_sp, 1, 0);
     lv_obj_set_style_border_opa(card_sp, LV_OPA_40, 0);
     lv_obj_set_style_radius(card_sp, 14, 0);
-    lv_obj_clear_flag(card_sp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(card_sp, LV_OBJ_FLAG_SCROLLABLE);
 
     _lbl_spotify = lv_label_create(card_sp);
     lv_label_set_text(_lbl_spotify, "Spotify Connect\n(stub — brancher SpotifyArduino)");
@@ -802,7 +809,7 @@ static void build_sources_screen() {
     lv_obj_set_style_bg_color(card_am, lv_color_hex(C_DISABLED), 0);
     lv_obj_set_style_bg_opa(card_am, LV_OPA_50, 0);
     lv_obj_set_style_radius(card_am, 14, 0);
-    lv_obj_clear_flag(card_am, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(card_am, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *lbl_am = lv_label_create(card_am);
     lv_label_set_text(lbl_am, "Amazon Music — Non disponible (DRM propriétaire)");
     lv_obj_set_style_text_font(lbl_am, &lv_font_montserrat_12, 0);

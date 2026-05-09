@@ -160,7 +160,8 @@ static void btn_next_l() {
     } else {
         lv_group_t *g = lv_group_get_default();
         lv_obj_t   *f = g ? lv_group_get_focused(g) : nullptr;
-        if (f) lv_event_send(f, LV_EVENT_CLICKED, nullptr);
+        // LVGL9: lv_obj_send_event() remplace lv_event_send()
+        if (f) lv_obj_send_event(f, LV_EVENT_CLICKED, nullptr);
     }
 }
 
@@ -197,7 +198,10 @@ static void add_screen_border() {
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_radius(r,    0, 0);
         lv_obj_set_style_pad_all(r,   0, 0);
-        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        // LVGL9: lv_obj_remove_flag() remplace lv_obj_clear_flag()
+        // Le OR bitwise de deux lv_obj_flag_t produit un int — appels séparés
+        lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(r, LV_OBJ_FLAG_CLICKABLE);
     }
 }
 
@@ -217,7 +221,7 @@ static void make_tile(int i) {
     lv_obj_set_style_border_color(card, lv_color_hex(a.color_txt), 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_radius(card, 20, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_shadow_width(card, 30, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(a.color_txt), 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_50, 0);
@@ -253,14 +257,14 @@ void ui_launcher_init() {
     scr_launcher = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr_launcher, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 
     tileview = lv_tileview_create(scr_launcher);
     lv_obj_set_size(tileview, LV_PCT(100), LV_PCT(100));
     lv_obj_align(tileview, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(tileview, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tileview, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(tileview, on_tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     for (int i = 0; i < APP_COUNT; i++) make_tile(i);
@@ -330,7 +334,7 @@ void ui_power_menu_show() {
     lv_obj_set_style_border_color(_power_overlay, lv_color_hex(0x2A3A5A), 0);
     lv_obj_set_style_border_width(_power_overlay, 1, 0);
     lv_obj_set_style_radius(_power_overlay, 18, 0);
-    lv_obj_clear_flag(_power_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(_power_overlay, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(_power_overlay);
     lv_label_set_text(title, "Alimentation");
