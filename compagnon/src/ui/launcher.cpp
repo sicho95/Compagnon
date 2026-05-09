@@ -35,7 +35,48 @@ static lv_obj_t *tiles[APP_COUNT];
 static lv_obj_t *_cards[APP_COUNT];  // cartes pour l'opacité dynamique
 static int8_t    cur_idx        = 0;
 
-// ── Boutons physiques ─────────────────────────────────────────────────
+// ── Bordure de focus via lv_layer_top() ──────────────────────────────────────
+// 4 rectangles noirs de 5 px plaqués sur les bords de l'écran
+#define BORDER_W 5
+static lv_obj_t *_border[4] = {};
+
+// Ramener la bordure au premier plan après tout nouvel overlay
+void ui_frame_to_front() {
+    for (int i = 0; i < 4; i++) {
+        if (_border[i]) lv_obj_move_foreground(_border[i]);
+    }
+}
+
+static void _border_create() {
+    lv_obj_t *top = lv_layer_top();
+    // Ordre : haut, bas, gauche, droite
+    static const struct { int16_t x, y, w, h; } RECTS[4] = {
+        { 0, 0,  480, BORDER_W },
+        { 0, 480 - BORDER_W, 480, BORDER_W },
+        { 0, 0,  BORDER_W, 480 },
+        { 480 - BORDER_W, 0, BORDER_W, 480 },
+    };
+    for (int i = 0; i < 4; i++) {
+        _border[i] = lv_obj_create(top);
+        lv_obj_set_pos(_border[i],  RECTS[i].x, RECTS[i].y);
+        lv_obj_set_size(_border[i], RECTS[i].w, RECTS[i].h);
+        lv_obj_set_style_bg_color(_border[i], lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(_border[i],   LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(_border[i], 0, 0);
+        lv_obj_set_style_radius(_border[i],    0, 0);
+        lv_obj_clear_flag(_border[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+// ── Mise à jour de l'opacité selon la tuile active ───────────────────────────
+static void _update_opacity() {
+    for (int i = 0; i < APP_COUNT; i++) {
+        lv_opa_t opa = (i == cur_idx) ? LV_OPA_70 : LV_OPA_30;
+        lv_obj_set_style_bg_opa(cards[i], opa, 0);
+    }
+}
+
+// ── Boutons physiques ─────────────────────────────────────────────────────────
 #define BTN_DEBOUNCE_MS 20
 
 struct BtnState {
@@ -210,7 +251,7 @@ static void add_screen_border() {
 static void make_tile(int i) {
     const AppEntry &a = APPS[i];
     tiles[i] = lv_tileview_add_tile(tileview, i, 0, LV_DIR_HOR);
-    // fond tuile noir — pixels noirs = éteints sur AMOLED
+    // Fond noir : seule la carte centrale est colorée
     lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tiles[i], LV_OPA_COVER, 0);
 
@@ -261,7 +302,6 @@ static void make_tile(int i) {
 
 void ui_launcher_init() {
     scr_launcher = lv_obj_create(NULL);
-    // fond noir AMOLED — pixel éteint
     lv_obj_set_style_bg_color(scr_launcher, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
@@ -348,7 +388,10 @@ void ui_power_menu_show() {
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
-    _make_btn(_power_overlay, "Veille",        0x1A3A1A, _power_sleep, 54);
-    _make_btn(_power_overlay, "Arret complet", 0x3A1A1A, _power_off,   106);
-    _make_btn(_power_overlay, "Annuler",       0x080810, _power_close, 158);
+    _make_btn(_power_overlay, "Veille",         0x1A3A1A, _power_sleep, 54);
+    _make_btn(_power_overlay, "Arret complet",  0x3A1A1A, _power_off,   106);
+    _make_btn(_power_overlay, "Annuler",        0x1A1A2A, _power_close, 158);
+
+    // Bordure écran toujours au premier plan, même au-dessus de l'overlay power
+    ui_frame_to_front();
 }

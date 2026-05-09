@@ -26,7 +26,6 @@ static void set_status(const char *msg, uint32_t col) {
 
 static void build_ui() {
     scr = lv_obj_create(NULL);
-    // fond noir AMOLED — pixel éteint économise la batterie
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);

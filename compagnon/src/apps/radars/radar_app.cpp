@@ -236,7 +236,6 @@ static void back_cb(lv_event_t *) { radar_app_stop(); ui_launcher_return(); }
 void radar_app_start() {
     orchestrator_set_app(APP_RADAR);
     _scr_radar = lv_obj_create(NULL);
-    // fond noir AMOLED — pixel éteint économise la batterie
     lv_obj_set_style_bg_color(_scr_radar, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(_scr_radar, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr_radar, LV_OBJ_FLAG_SCROLLABLE);

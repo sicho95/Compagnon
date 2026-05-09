@@ -212,7 +212,6 @@ static void back_cb(lv_event_t *) { bourse_app_stop(); ui_launcher_return(); }
 void bourse_app_start() {
     orchestrator_set_app(APP_BOURSE);
     _scr_bourse = lv_obj_create(NULL);
-    // fond noir AMOLED — pixel éteint économise la batterie
     lv_obj_set_style_bg_color(_scr_bourse, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(_scr_bourse, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr_bourse, LV_OBJ_FLAG_SCROLLABLE);
