@@ -11,6 +11,7 @@
 
 #define APP_COUNT 5
 #define LONG_MS   800
+#define BORDER_PX 5
 
 struct AppEntry {
     const char *label;
@@ -19,62 +20,29 @@ struct AppEntry {
     uint32_t    color_txt;
     const char *icon;
     void (*launch)();
-    void (*stop)();   // quitter proprement depuis le bouton matériel
+    void (*stop)();
 };
 
 // palette AMOLED cohérente avec les apps respectives
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",     0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start  },
-    { "Radars",  "Alertes routieres",0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start   },
-    { "Bourse",  "Marches & Actifs", 0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start  },
-    { "Meteo",   "Previsions",       0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start   },
-    { "Musique", "AirPlay & SD",     0x1b0030, 0xCC99FF, LV_SYMBOL_AUDIO,   musique_app_start },
+    { "Nestor",  "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nullptr          },
+    { "Radars",  "Alertes routieres", 0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop   },
+    { "Bourse",  "Marches & Actifs",  0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop  },
+    { "Meteo",   "Previsions",        0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop   },
+    { "Musique", "AirPlay & SD",      0x1b0030, 0xCC99FF, LV_SYMBOL_AUDIO,   musique_app_start, musique_app_stop },
 };
 
 static lv_obj_t *scr_launcher   = nullptr;
 static lv_obj_t *tileview       = nullptr;
 static lv_obj_t *tiles[APP_COUNT];
-static lv_obj_t *_cards[APP_COUNT];  // cartes pour l'opacité dynamique
+static lv_obj_t *_cards[APP_COUNT];
 static int8_t    cur_idx        = 0;
-
-// ── Bordure de focus via lv_layer_top() ──────────────────────────────────────
-// 4 rectangles noirs de 5 px plaqués sur les bords de l'écran
-#define BORDER_W 5
-static lv_obj_t *_border[4] = {};
-
-// Ramener la bordure au premier plan après tout nouvel overlay
-void ui_frame_to_front() {
-    for (int i = 0; i < 4; i++) {
-        if (_border[i]) lv_obj_move_foreground(_border[i]);
-    }
-}
-
-static void _border_create() {
-    lv_obj_t *top = lv_layer_top();
-    // Ordre : haut, bas, gauche, droite
-    static const struct { int16_t x, y, w, h; } RECTS[4] = {
-        { 0, 0,  480, BORDER_W },
-        { 0, 480 - BORDER_W, 480, BORDER_W },
-        { 0, 0,  BORDER_W, 480 },
-        { 480 - BORDER_W, 0, BORDER_W, 480 },
-    };
-    for (int i = 0; i < 4; i++) {
-        _border[i] = lv_obj_create(top);
-        lv_obj_set_pos(_border[i],  RECTS[i].x, RECTS[i].y);
-        lv_obj_set_size(_border[i], RECTS[i].w, RECTS[i].h);
-        lv_obj_set_style_bg_color(_border[i], lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(_border[i],   LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(_border[i], 0, 0);
-        lv_obj_set_style_radius(_border[i],    0, 0);
-        lv_obj_clear_flag(_border[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    }
-}
 
 // ── Mise à jour de l'opacité selon la tuile active ───────────────────────────
 static void _update_opacity() {
     for (int i = 0; i < APP_COUNT; i++) {
         lv_opa_t opa = (i == cur_idx) ? LV_OPA_70 : LV_OPA_30;
-        lv_obj_set_style_bg_opa(cards[i], opa, 0);
+        lv_obj_set_style_bg_opa(_cards[i], opa, 0);
     }
 }
 
@@ -100,37 +68,37 @@ static void go_to(int8_t idx) {
     cur_idx = (idx + APP_COUNT) % APP_COUNT;
     lv_obj_set_tile_id(tileview, cur_idx, 0, LV_ANIM_ON);
 }
+
 static void open_current() {
     if (APPS[cur_idx].launch) APPS[cur_idx].launch();
 }
+
+// Arrête proprement l'app active par son enum
 static void stop_active_app() {
     ActiveApp a = orchestrator_get_app();
-    for (int i = 0; i < APP_COUNT; i++) {
-        const AppEntry &e = APPS[i];
-        // Chaque app gère son propre stop via orchestrator_set_app(APP_LAUNCHER)
-        // on appelle stop() de l'app correspondant au enum actif
-    }
-    // Mapping enum → stop()
     switch (a) {
-        case APP_NESTOR:  /* nestor_app_stop(); */ break;  // nestor gère l'arrêt via son bouton retour
+        case APP_NESTOR:  /* nestor gère son propre retour via bouton interne */ break;
         case APP_RADAR:   radar_app_stop();   break;
         case APP_BOURSE:  bourse_app_stop();  break;
         case APP_METEO:   meteo_app_stop();   break;
+        case APP_MUSIQUE: musique_app_stop(); break;
         default: break;
     }
 }
 
-// Appelle le stop de l'app active, puis revient au launcher
+// Arrête l'app active et revient au launcher
 static void stop_current_and_return() {
     ActiveApp app = orchestrator_get_app();
     if (app == APP_LAUNCHER) return;
-    // APP_NESTOR=1..APP_METEO=4 → APPS[0..3]
+    // APP_NESTOR=1 → APPS[0], APP_RADAR=2 → APPS[1], …, APP_MUSIQUE=5 → APPS[4]
     int idx = (int)app - 1;
-    if (idx >= 0 && idx < APP_COUNT && APPS[idx].stop) APPS[idx].stop();
+    if (idx >= 0 && idx < APP_COUNT && APPS[idx].stop) {
+        APPS[idx].stop();
+    }
     ui_launcher_return();
 }
 
-// mettre à jour l'opacité des cartes selon la tuile active
+// Mettre à jour l'opacité des cartes selon la tuile active
 static void update_tile_opacities(int8_t focus) {
     for (int i = 0; i < APP_COUNT; i++) {
         if (!_cards[i]) continue;
@@ -149,14 +117,12 @@ static void on_tile_changed(lv_event_t *e) {
 static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
     bool cur = (bool)digitalRead(b.pin);
 
-    // Toute transition brute redémarre la fenêtre anti-rebond
     if (cur != b.raw) {
         b.raw    = cur;
         b.edge_t = millis();
     }
     if (millis() - b.edge_t < BTN_DEBOUNCE_MS) return;
 
-    // État stabilisé — traiter uniquement si différent du dernier état confirmé
     if (cur == b.stable) {
         if (b.pressed && !b.long_done && millis() - b.press_t >= LONG_MS) {
             b.long_done = true;
@@ -166,11 +132,11 @@ static void poll_btn(BtnState &b, void(*on_s)(), void(*on_l)()) {
     }
 
     b.stable = cur;
-    if (!cur) {                               // front descendant : appui confirmé
+    if (!cur) {
         b.pressed   = true;
         b.press_t   = millis();
         b.long_done = false;
-    } else {                                  // front montant : relâchement
+    } else {
         if (b.pressed && !b.long_done && on_s) on_s();
         b.pressed = false;
     }
@@ -181,7 +147,6 @@ static void btn_prev_s() {
     if (orchestrator_get_app() == APP_LAUNCHER) go_to(cur_idx - 1);
 }
 static void btn_prev_l() {
-    // Appui long = Retour : arrête proprement l'app et revient au launcher
     stop_current_and_return();
 }
 
@@ -191,79 +156,62 @@ static void btn_next_s() {
 }
 static void btn_next_l() {
     if (orchestrator_get_app() == APP_LAUNCHER) {
-        open_current();  // depuis launcher = ouvrir l'app sélectionnée
+        open_current();
     } else {
-        // Depuis une app : envoyer CLICKED à l'objet focusé (valider/confirmer)
         lv_group_t *g = lv_group_get_default();
         lv_obj_t   *f = g ? lv_group_get_focused(g) : nullptr;
         if (f) lv_event_send(f, LV_EVENT_CLICKED, nullptr);
     }
 }
 
-// Appelée en PREMIER dans loop() — hors timer LVGL pour latence minimale
 void ui_launcher_btn_tick() {
     poll_btn(btnRight, btn_prev_s, btn_prev_l);  // pin 0  = gauche = Préc
     poll_btn(btnLeft,  btn_next_s, btn_next_l);  // pin 18 = droite = Suiv
 }
 
-// ── Bordure noire 5 px sur les 4 bords ───────────────────────────────
-void ui_screen_border_init() {
-    static const struct { int16_t x; int16_t y; int16_t w; int16_t h; } BANDS[4] = {
-        { 0,              0,               LCD_WIDTH,  5          },
-        { 0,              LCD_HEIGHT - 5,  LCD_WIDTH,  5          },
-        { 0,              0,               5,          LCD_HEIGHT },
-        { LCD_WIDTH - 5,  0,               5,          LCD_HEIGHT },
-    };
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *b = lv_obj_create(lv_layer_top());
-        lv_obj_set_pos(b, BANDS[i].x, BANDS[i].y);
-        lv_obj_set_size(b, BANDS[i].w, BANDS[i].h);
-        lv_obj_set_style_bg_color(b, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(b, 0, 0);
-        lv_obj_set_style_radius(b, 0, 0);
-        lv_obj_set_style_pad_all(b, 0, 0);
-        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    }
+// ── Ramener la bordure au premier plan après tout nouvel overlay ───────────────
+void ui_frame_to_front() {
+    // La bordure est dans lv_layer_sys() qui est toujours au-dessus de tout —
+    // cette fonction est conservée pour compatibilité avec les overlays qui l'appellent.
+    // lv_layer_sys() n'a pas besoin d'être explicitement remis au premier plan.
 }
 
-// ── Bordure noire pour boîtier arrondi ────────────────────────────────────────
+// ── Bordure noire 5 px sur les 4 bords via lv_layer_sys() ────────────────────
+// Une seule implémentation — appelée une fois depuis ui_launcher_init()
 static void add_screen_border() {
-    const int B = BORDER_PX;
     lv_obj_t *sys = lv_layer_sys();
 
-    auto mk = [&](int x, int y, int w, int h) {
-        lv_obj_t *r = lv_obj_create(sys);
-        lv_obj_set_pos(r, x, y);
-        lv_obj_set_size(r, w, h);
-        lv_obj_set_style_bg_color(r, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(r, 0, 0);
-        lv_obj_set_style_radius(r, 0, 0);
-        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    struct { int16_t x, y, w, h; } bands[4] = {
+        { 0,               0,                LCD_WIDTH,  BORDER_PX },  // haut
+        { 0,               LCD_HEIGHT - BORDER_PX, LCD_WIDTH, BORDER_PX },  // bas
+        { 0,               0,                BORDER_PX,  LCD_HEIGHT },  // gauche
+        { LCD_WIDTH - BORDER_PX, 0,           BORDER_PX,  LCD_HEIGHT },  // droite
     };
 
-    mk(0,                  0,           LCD_WIDTH,  B);           // haut
-    mk(0,                  LCD_HEIGHT-B, LCD_WIDTH, B);           // bas
-    mk(0,                  0,           B,           LCD_HEIGHT); // gauche
-    mk(LCD_WIDTH-B,        0,           B,           LCD_HEIGHT); // droite
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *r = lv_obj_create(sys);
+        lv_obj_set_pos(r,  bands[i].x, bands[i].y);
+        lv_obj_set_size(r, bands[i].w, bands[i].h);
+        lv_obj_set_style_bg_color(r, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(r,   LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(r, 0, 0);
+        lv_obj_set_style_radius(r,    0, 0);
+        lv_obj_set_style_pad_all(r,   0, 0);
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 
 // ── Construction d'une tuile ──────────────────────────────────────────────────
 static void make_tile(int i) {
     const AppEntry &a = APPS[i];
     tiles[i] = lv_tileview_add_tile(tileview, i, 0, LV_DIR_HOR);
-    // Fond noir : seule la carte centrale est colorée
     lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tiles[i], LV_OPA_COVER, 0);
 
-    // Carte centrale
     lv_obj_t *card = lv_obj_create(tiles[i]);
     lv_obj_set_size(card, 220, 180);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
-    // Opacité pleine pour que la couleur de l'app soit bien visible
     lv_obj_set_style_bg_color(card, lv_color_hex(a.color_bg), 0);
-    // opacité mise à jour dynamiquement (30 = voisin, 70 = focus)
     lv_obj_set_style_bg_opa(card, LV_OPA_30, 0);
     _cards[i] = card;
     lv_obj_set_style_border_color(card, lv_color_hex(a.color_txt), 0);
@@ -293,7 +241,6 @@ static void make_tile(int i) {
     lv_obj_set_style_text_opa(sub, LV_OPA_60, 0);
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, 52);
 
-    // Indicateur x/4
     lv_obj_t *idx_lbl = lv_label_create(tiles[i]);
     char buf[8]; snprintf(buf, sizeof(buf), "%d/%d", i + 1, APP_COUNT);
     lv_label_set_text(idx_lbl, buf);
@@ -317,6 +264,7 @@ void ui_launcher_init() {
     lv_obj_add_event_cb(tileview, on_tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     for (int i = 0; i < APP_COUNT; i++) make_tile(i);
+    update_tile_opacities(0);  // opacité initiale correcte dès le démarrage
 
     lv_obj_t *hint = lv_label_create(scr_launcher);
     lv_label_set_text(hint, "glisser | btn droit long = ouvrir");
@@ -327,11 +275,10 @@ void ui_launcher_init() {
     pinMode(BTN_LEFT,  INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
 
-    // Relier les commandes BLE music: à l'app Musique
     ble_mgr_set_music_cb(musique_ble_cmd);
 
     lv_scr_load(scr_launcher);
-    add_screen_border();   // bordure noire par-dessus tout (lv_layer_sys)
+    add_screen_border();  // bordure noire 5 px via lv_layer_sys() — toujours au-dessus
 
     Serial.println("[UI/LAUNCH] Launcher OK");
 }
@@ -395,6 +342,5 @@ void ui_power_menu_show() {
     _make_btn(_power_overlay, "Arret complet",  0x3A1A1A, _power_off,   106);
     _make_btn(_power_overlay, "Annuler",        0x1A1A2A, _power_close, 158);
 
-    // Bordure écran toujours au premier plan, même au-dessus de l'overlay power
-    ui_frame_to_front();
+    // lv_layer_sys() reste toujours au-dessus — pas besoin d'appel supplémentaire
 }

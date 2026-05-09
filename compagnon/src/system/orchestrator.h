@@ -7,7 +7,8 @@ typedef enum {
     APP_RADAR,
     APP_BOURSE,
     APP_METEO,
-    APP_MUSIQUE
+    APP_MUSIQUE,
+    APP_COMPANION
 } ActiveApp;
 
 void orchestrator_init();
