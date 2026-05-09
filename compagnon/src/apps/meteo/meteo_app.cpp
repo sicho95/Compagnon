@@ -2,26 +2,50 @@
  * Afficher prévisions météo J+3 via api.meteo-concept.com.
  * Position GPS : BLE téléphone → dernière position NVS → Paris (fallback final).
  * Fetch async via FreeRTOS pour ne pas bloquer le thread LVGL.
+ *
+ * Clé API Météo Concept : fournie par la PWA via BLE
+ *   commande : cfg:meteo_api_key:<VOTRE_CLE>
+ *   La clé est persistée en NVS (namespace "cfg", clé "meteo_key").
  */
 #include "meteo_app.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
 #include "../../net/ble_mgr.h"
-#include "../../config/secrets.h"
-#include <lvgl.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <Arduino.h>
+#include <lvgl.h>
 #include <Preferences.h>
+#include <time.h>
 
-// ─── Couleurs thème Météo ──────────────────────────────────────────────
-#define C_BG    0x000000  // fond noir AMOLED
-#define C_TXT   0xFFCC44
+// ─── Clé API Météo Concept (chargée depuis NVS, écrite par la PWA via BLE) ────
+char g_meteo_api_key[128] = {};
+
+static void load_meteo_key() {
+    Preferences p;
+    p.begin("cfg", true);
+    strlcpy(g_meteo_api_key, p.getString("meteo_key", "").c_str(), sizeof(g_meteo_api_key));
+    p.end();
+}
+
+// Appeler depuis le gestionnaire BLE quand la commande cfg:meteo_api_key:<val> arrive
+void meteo_set_api_key(const char *key) {
+    strlcpy(g_meteo_api_key, key, sizeof(g_meteo_api_key));
+    Preferences p;
+    p.begin("cfg", false);
+    p.putString("meteo_key", key);
+    p.end();
+    Serial.printf("[METEO] Clé API mise à jour (%d chars)\n", (int)strlen(key));
+}
+
+// ─── Couleurs thème Météo ──────────────────────────────────────────────────────
+#define C_BG   0x000000   // fond noir AMOLED
+#define C_TXT  0xFFCC44
 #define C_MUTED 0xAA8822
 #define C_CARD  0x1b5e20  // vert sombre semi-transparent
+#define C_ERR   0xFF4444  // rouge erreur
 
-// ─── NVS pour la dernière position GPS connue ──────────────────────────────────
+// ─── NVS pour la dernière position GPS connue ─────────────────────────────────
 static Preferences _prefs;
 
 static void nvs_save_pos(double lat, double lon) {
@@ -30,6 +54,7 @@ static void nvs_save_pos(double lat, double lon) {
     _prefs.putDouble("lon", lon);
     _prefs.end();
 }
+
 static bool nvs_load_pos(double &lat, double &lon) {
     _prefs.begin("meteo", true);
     bool ok = _prefs.isKey("lat");
@@ -38,16 +63,16 @@ static bool nvs_load_pos(double &lat, double &lon) {
     return ok;
 }
 
-// ─── Prévision J+0..J+2 ──────────────────────────────────────────────────────
+// ─── Prévision J+0..J+2 ───────────────────────────────────────────────────────
 struct DayForecast { char date[12]; int tmin, tmax, code, rain10; };
 
-// ─── Résultat fetch (partagé tâche FreeRTOS ↔ callback LVGL) ─────────────────
+// ─── Résultat fetch (partagé tâche FreeRTOS ↔ callback LVGL) ──────────────────
 struct MeteoResult {
-    bool        ok;
-    char        city[32];
+    bool ok;
+    char city[32];
     DayForecast days[3];
-    int         nb_days;
-    char        err[48];
+    int nb_days;
+    char err[48];
 };
 static MeteoResult _result;
 
@@ -57,10 +82,10 @@ static lv_obj_t *_lbl_gps    = nullptr;
 static lv_obj_t *_lbl_status = nullptr;
 static lv_obj_t *_cards[3]   = {};
 
-static bool     _app_active    = false;
-static uint32_t _last_fetch    = 0;
+static bool     _app_active     = false;
+static uint32_t _last_fetch     = 0;
 static double   _lat = 48.8566, _lon = 2.3522;
-static bool     _gps_ok        = false;
+static bool     _gps_ok         = false;
 static volatile bool _fetch_running = false;
 
 // ─── Noms jours / mois ────────────────────────────────────────────────────────
@@ -69,24 +94,25 @@ static const char *MOIS[]  = {"","jan","fev","mar","avr","mai","juin",
                                "juil","aou","sep","oct","nov","dec"};
 
 static const char *meteo_icon(int code) {
-    if (code >= 1 && code <= 4)   return LV_SYMBOL_WIFI;
-    if (code >= 10 && code <= 16) return LV_SYMBOL_WARNING;
-    if (code >= 20 && code <= 48) return LV_SYMBOL_AUDIO;
-    if (code >= 60 && code <= 78) return LV_SYMBOL_DOWN;
-    if (code >= 100)              return LV_SYMBOL_UP;
+    if (code >= 1   && code <= 4)  return LV_SYMBOL_WIFI;
+    if (code >= 10  && code <= 16) return LV_SYMBOL_WARNING;
+    if (code >= 20  && code <= 48) return LV_SYMBOL_AUDIO;
+    if (code >= 60  && code <= 78) return LV_SYMBOL_DOWN;
+    if (code >= 100)               return LV_SYMBOL_UP;
     return LV_SYMBOL_WARNING;
 }
+
 static const char *meteo_label(int code) {
-    if (code >= 1 && code <= 4)   return "Ensoleille";
-    if (code >= 10 && code <= 16) return "Nuageux";
-    if (code >= 20 && code <= 26) return "Pluie";
-    if (code >= 40 && code <= 48) return "Forte pluie";
-    if (code >= 60 && code <= 78) return "Neige";
-    if (code >= 100)              return "Orage";
+    if (code >= 1   && code <= 4)  return "Ensoleille";
+    if (code >= 10  && code <= 16) return "Nuageux";
+    if (code >= 20  && code <= 26) return "Pluie";
+    if (code >= 40  && code <= 48) return "Forte pluie";
+    if (code >= 60  && code <= 78) return "Neige";
+    if (code >= 100)               return "Orage";
     return "Variable";
 }
 
-// ─── Mise à jour cartes (thread LVGL uniquement) ─────────────────────────────
+// ─── Mise à jour cartes (thread LVGL uniquement) ──────────────────────────────
 static void refresh_cards() {
     for (int i = 0; i < 3; i++) {
         if (!_cards[i]) continue;
@@ -98,9 +124,11 @@ static void refresh_cards() {
             lv_obj_center(lbl);
             continue;
         }
+
         const DayForecast &d = _result.days[i];
 
-        auto mk_lbl = [&](const char *txt, const lv_font_t *fnt, uint32_t col, lv_align_t align, int ox, int oy) {
+        auto mk_lbl = [&](const char *txt, const lv_font_t *fnt, uint32_t col,
+                          lv_align_t align, int ox, int oy) {
             lv_obj_t *l = lv_label_create(_cards[i]);
             lv_label_set_text(l, txt);
             lv_obj_set_style_text_font(l, fnt, 0);
@@ -142,17 +170,24 @@ static void on_fetch_done(void *) {
     refresh_cards();
 }
 
-// ─── Tâche FreeRTOS — fetch HTTP ─────────────────────────────────────────────
+// ─── Tâche FreeRTOS — fetch HTTP ──────────────────────────────────────────────
 static void fetch_task(void *) {
     _result = {};
+
     if (!WiFi.isConnected()) {
         strncpy(_result.err, "WiFi non connecte", sizeof(_result.err));
         lv_async_call(on_fetch_done, nullptr);
         vTaskDelete(NULL); return;
     }
 
+    if (g_meteo_api_key[0] == '\0') {
+        strncpy(_result.err, "Cle API manquante (PWA Config)", sizeof(_result.err));
+        lv_async_call(on_fetch_done, nullptr);
+        vTaskDelete(NULL); return;
+    }
+
     String url_loc = "https://api.meteo-concept.com/api/location/near?latlng=";
-    url_loc += String(_lat, 5) + "," + String(_lon, 5) + "&token=" + String(METEO_API_KEY);
+    url_loc += String(_lat, 5) + "," + String(_lon, 5) + "&token=" + String(g_meteo_api_key);
 
     HTTPClient http;
     http.setTimeout(6000);
@@ -162,6 +197,7 @@ static void fetch_task(void *) {
         snprintf(_result.err, sizeof(_result.err), "Erreur loc %d", rc);
         http.end(); lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
+
     DynamicJsonDocument doc_loc(2048);
     deserializeJson(doc_loc, http.getString());
     http.end();
@@ -171,10 +207,11 @@ static void fetch_task(void *) {
         strncpy(_result.err, "Ville introuvable", sizeof(_result.err));
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
+
     strncpy(_result.city, doc_loc["city"]["nom"] | "?", sizeof(_result.city) - 1);
 
     String url_fc = "https://api.meteo-concept.com/api/forecast/daily?insee=";
-    url_fc += String(insee) + "&token=" + String(METEO_API_KEY);
+    url_fc += String(insee) + "&token=" + String(g_meteo_api_key);
 
     HTTPClient http2;
     http2.setTimeout(8000);
@@ -184,6 +221,7 @@ static void fetch_task(void *) {
         snprintf(_result.err, sizeof(_result.err), "Erreur previsions %d", rc);
         http2.end(); lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
+
     DynamicJsonDocument doc_fc(4096);
     deserializeJson(doc_fc, http2.getString());
     http2.end();
@@ -203,12 +241,13 @@ static void fetch_task(void *) {
         int mod = (mo > 12) ? mo - 12 : mo;
         snprintf(d.date, sizeof(d.date), "%s %d %s", JOURS[wd], da,
                  (mod >= 1 && mod <= 12) ? MOIS[mod] : "?");
-        d.tmin   = day["tmin"]      | 0;
-        d.tmax   = day["tmax"]      | 0;
-        d.code   = day["weather"]   | 0;
-        d.rain10 = day["probarain"] | 0;
+        d.tmin    = day["tmin"]      | 0;
+        d.tmax    = day["tmax"]      | 0;
+        d.code    = day["weather"]   | 0;
+        d.rain10  = day["probarain"] | 0;
         _result.nb_days++;
     }
+
     _result.ok = true;
     Serial.printf("[APP/METEO] %d jours — %s (%.4f,%.4f)\n",
                   _result.nb_days, _result.city, _lat, _lon);
@@ -228,6 +267,7 @@ static void back_cb(lv_event_t *) { meteo_app_stop(); ui_launcher_return(); }
 
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void meteo_app_start() {
+    load_meteo_key();
     orchestrator_set_app(APP_METEO);
     _app_active = true;
     _last_fetch = 0;
@@ -266,20 +306,20 @@ void meteo_app_start() {
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
 
     _lbl_gps = lv_label_create(_scr);
-    {
-        char buf[48];
-        if (_gps_ok)       snprintf(buf, sizeof(buf), "GPS: %.3f, %.3f", _lat, _lon);
-        else if (!_gps_ok && (_lat != 48.8566 || _lon != 2.3522))
-                           snprintf(buf, sizeof(buf), "Derniere pos: %.3f, %.3f", _lat, _lon);
-        else               snprintf(buf, sizeof(buf), "Paris (fallback)");
-        lv_label_set_text(_lbl_gps, buf);
-    }
+    char buf[48];
+    if (_gps_ok)
+        snprintf(buf, sizeof(buf), "GPS: %.3f, %.3f", _lat, _lon);
+    else if (_lat != 48.8566 || _lon != 2.3522)
+        snprintf(buf, sizeof(buf), "Derniere pos: %.3f, %.3f", _lat, _lon);
+    else
+        snprintf(buf, sizeof(buf), "Paris (fallback)");
+    lv_label_set_text(_lbl_gps, buf);
     lv_obj_set_style_text_font(_lbl_gps, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_gps, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_gps, LV_ALIGN_TOP_MID, 0, 82);
 
     _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, "");
+    lv_label_set_text(_lbl_status, g_meteo_api_key[0] ? "" : "Config clé API dans la PWA");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_ERR), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 104);
@@ -287,12 +327,13 @@ void meteo_app_start() {
     static const int CARD_W = 140, CARD_H = 180, GAP = 12;
     int total_w = 3 * CARD_W + 2 * GAP;
     int start_x = (480 - total_w) / 2;
+    // card_y : centré verticalement sous le label GPS (~140px depuis le haut)
+    int card_y  = 140;
 
     for (int i = 0; i < 3; i++) {
         _cards[i] = lv_obj_create(_scr);
         lv_obj_set_size(_cards[i], CARD_W, CARD_H);
         lv_obj_set_pos(_cards[i], start_x + i * (CARD_W + GAP), card_y);
-        // carte vert sombre semi-transparent
         lv_obj_set_style_bg_color(_cards[i], lv_color_hex(C_CARD), 0);
         lv_obj_set_style_bg_opa(_cards[i], LV_OPA_50, 0);
         lv_obj_set_style_border_color(_cards[i], lv_color_hex(C_TXT), 0);
@@ -314,11 +355,14 @@ void meteo_app_start() {
 
     lv_scr_load_anim(_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
     Serial.println("[APP/METEO] Ouverte");
+
+    if (g_meteo_api_key[0]) start_fetch();
 }
 
 // ─── Tick ─────────────────────────────────────────────────────────────────────
 void meteo_app_tick() {
     if (!_app_active || !_scr) return;
+    if (g_meteo_api_key[0] == '\0') return; // pas de clé → ne pas appeler l'API
 
     double lat, lon;
     if (ble_mgr_get_gps(&lat, &lon)) {
@@ -343,4 +387,5 @@ void meteo_app_stop() {
     for (int i = 0; i < 3; i++) _cards[i] = nullptr;
     _lbl_gps = nullptr; _lbl_status = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
+    Serial.println("[APP/METEO] Fermee");
 }

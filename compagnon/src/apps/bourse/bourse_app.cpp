@@ -1,19 +1,42 @@
 /**
  * App Bourse — Affiche 4 cours boursiers via Twelve Data
- * Tickers  : CAC40, BTC/EUR, EUR/USD, XAU/USD
- * Refresh  : 90 s si marché ouvert (9h-18h lun-ven), 10 min sinon
+ * Tickers : CAC40, BTC/EUR, EUR/USD, XAU/USD
+ * Refresh : 90 s si marché ouvert (9h-18h lun-ven), 10 min sinon
  * Résolution : 480×480 px (écran carré Compagnon)
+ *
+ * Clé API Twelve Data : fournie par la PWA via BLE
+ *   commande : cfg:twelve_data_key:<VOTRE_CLE>
+ *   La clé est persistée en NVS (namespace "cfg", clé "twelve_key").
  */
 #include "bourse_app.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
-#include "../../config/secrets.h"
-#include <lvgl.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <Arduino.h>
+#include <lvgl.h>
+#include <Preferences.h>
 #include <time.h>
+
+// ─── Clé API Twelve Data (chargée depuis NVS, écrite par la PWA via BLE) ──────
+char g_twelve_data_key[64] = {};
+
+static void load_twelve_key() {
+    Preferences p;
+    p.begin("cfg", true);
+    strlcpy(g_twelve_data_key, p.getString("twelve_key", "").c_str(), sizeof(g_twelve_data_key));
+    p.end();
+}
+
+// Appeler depuis le gestionnaire BLE quand la commande cfg:twelve_data_key:<val> arrive
+void bourse_set_twelve_key(const char *key) {
+    strlcpy(g_twelve_data_key, key, sizeof(g_twelve_data_key));
+    Preferences p;
+    p.begin("cfg", false);
+    p.putString("twelve_key", key);
+    p.end();
+    Serial.printf("[BOURSE] Clé Twelve Data mise à jour (%d chars)\n", (int)strlen(key));
+}
 
 // ─── Thème ────────────────────────────────────────────────────────────────────
 #define C_BG      0x061A06
@@ -29,29 +52,29 @@
 struct Ticker {
     const char *symbol;
     const char *label;
-    float  price;
-    float  change;
-    float  pct;
-    bool   valid;
+    float price;
+    float change;
+    float pct;
+    bool valid;
 };
 
 static Ticker _tickers[] = {
-    { "CAC40",   "CAC 40",    0, 0, 0, false },
-    { "BTC/EUR", "Bitcoin",   0, 0, 0, false },
-    { "EUR/USD", "EUR/USD",   0, 0, 0, false },
-    { "XAU/USD", "Or (once)", 0, 0, 0, false },
+    { "CAC40",   "CAC 40",   0, 0, 0, false },
+    { "BTC/EUR", "Bitcoin",  0, 0, 0, false },
+    { "EUR/USD", "EUR/USD",  0, 0, 0, false },
+    { "XAU/USD", "Or (once)",0, 0, 0, false },
 };
 static constexpr int NB_TICKERS = 4;
 
-// ─── État UI — un seul pointeur _scr ─────────────────────────────────────────
-static lv_obj_t *_scr              = nullptr;
-static lv_obj_t *_lbl_status       = nullptr;
+// ─── État UI ──────────────────────────────────────────────────────────────────
+static lv_obj_t *_scr        = nullptr;
+static lv_obj_t *_lbl_status = nullptr;
 static lv_obj_t *_rows[NB_TICKERS] = {};
 
-static bool      _app_active        = false;
-static uint32_t  _last_fetch        = 0;
+static bool     _app_active   = false;
+static uint32_t _last_fetch   = 0;
 static volatile bool _fetch_running = false;
-static char      _err_buf[64]       = {};
+static char     _err_buf[64]  = {};
 
 // ─── Marché ouvert ? (9h-18h lun-ven, heure locale) ──────────────────────────
 static bool market_open() {
@@ -64,9 +87,9 @@ static bool market_open() {
 
 // ─── Formatage prix ───────────────────────────────────────────────────────────
 static void fmt_price(char *buf, size_t sz, int idx, float price) {
-    if (idx == 2)             snprintf(buf, sz, "%.4f", price);
-    else if (price >= 1000.f) snprintf(buf, sz, "%.0f",  price);
-    else                      snprintf(buf, sz, "%.2f",  price);
+    if (idx == 2)          snprintf(buf, sz, "%.4f", price);
+    else if (price >= 1000.f) snprintf(buf, sz, "%.0f", price);
+    else                   snprintf(buf, sz, "%.2f", price);
 }
 
 // ─── Mise à jour d'une ligne ──────────────────────────────────────────────────
@@ -125,7 +148,7 @@ static void on_fetch_done(void *) {
         char buf[48];
         snprintf(buf, sizeof(buf), "Mis à jour %02d:%02d%s",
                  t ? t->tm_hour : 0, t ? t->tm_min : 0,
-                 market_open() ? "" : "  (marché fermé)");
+                 market_open() ? "" : " (marché fermé)");
         lv_label_set_text(_lbl_status, buf);
     }
 }
@@ -140,15 +163,24 @@ static void fetch_task(void *) {
         vTaskDelete(NULL); return;
     }
 
+    if (g_twelve_data_key[0] == '\0') {
+        lv_async_call([](void *) {
+            _fetch_running = false;
+            if (_lbl_status) lv_label_set_text(_lbl_status, "Clé API manquante (PWA → Config)");
+        }, nullptr);
+        vTaskDelete(NULL); return;
+    }
+
     String symbols;
     for (int i = 0; i < NB_TICKERS; i++) {
         if (i > 0) symbols += ",";
         symbols += _tickers[i].symbol;
     }
+
     String url = "https://api.twelvedata.com/quote?symbol=";
     url += symbols;
     url += "&apikey=";
-    url += TWELVE_DATA_KEY;
+    url += g_twelve_data_key;
     url += "&dp=2";
 
     HTTPClient http;
@@ -182,7 +214,7 @@ static void fetch_task(void *) {
         Ticker &tk = _tickers[i];
         JsonObject q = doc[tk.symbol];
         if (q.isNull() || q["status"] == "error") { tk.valid = false; continue; }
-        tk.price  = atof(q["close"]         | "0");
+        tk.price  = atof(q["close"]          | "0");
         tk.change = atof(q["change"]         | "0");
         tk.pct    = atof(q["percent_change"] | "0");
         tk.valid  = (tk.price > 0.0f);
@@ -192,6 +224,7 @@ static void fetch_task(void *) {
             if (prev > 0.0f) tk.pct = (tk.change / prev) * 100.0f;
         }
     }
+
     Serial.println("[APP/BOURSE] Tickers mis à jour");
     lv_async_call(on_fetch_done, nullptr);
     vTaskDelete(NULL);
@@ -202,6 +235,7 @@ static void back_cb(lv_event_t *) { bourse_app_stop(); ui_launcher_return(); }
 
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void bourse_app_start() {
+    load_twelve_key();
     orchestrator_set_app(APP_BOURSE);
 
     _scr = lv_obj_create(NULL);
@@ -230,7 +264,7 @@ void bourse_app_start() {
 
     // Label statut
     _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, "Chargement...");
+    lv_label_set_text(_lbl_status, g_twelve_data_key[0] ? "Chargement..." : "Config clé API dans la PWA");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_STATUS), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 86);
@@ -258,7 +292,7 @@ void bourse_app_start() {
 
     // Légende
     lv_obj_t *hint = lv_label_create(_scr);
-    lv_label_set_text(hint, "Twelve Data  |  90 s / 10 min");
+    lv_label_set_text(hint, "Twelve Data | 90 s / 10 min");
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(0x1A3A1A), 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -272,10 +306,11 @@ void bourse_app_start() {
 // ─── Tick ─────────────────────────────────────────────────────────────────────
 void bourse_app_tick() {
     if (!_app_active || !_scr) return;
-    uint32_t now      = millis();
+    if (g_twelve_data_key[0] == '\0') return; // pas de clé → ne pas appeler l'API
+    uint32_t now = millis();
     uint32_t interval = market_open() ? 90000UL : 600000UL;
     if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= interval)) {
-        _last_fetch    = now;
+        _last_fetch = now;
         _fetch_running = true;
         if (_lbl_status) lv_label_set_text(_lbl_status, "Chargement...");
         xTaskCreatePinnedToCore(fetch_task, "bourse_http", 8192, nullptr, 1, nullptr, 0);
