@@ -1,21 +1,34 @@
-const CACHE = 'nestor-v4';
+const CACHE = 'nestor-v5';
 const PRECACHE = [
   './',
   './index.html',
   './css/style.css',
   './manifest.json',
   './src/app.js',
+  './src/api/alexa.js',
   './src/api/backends.js',
   './src/api/backends.json',
+  './src/api/ecovacs.js',
   './src/api/search.js',
+  './src/api/stt.js',
   './src/api/tts.js',
-  './src/storage/agents-db.js',
+  './src/bt/ble.js',
+  './src/bt/ble_protocol.js',
+  './src/bt/ble_status.js',
   './src/core/default-agents.js',
   './src/core/gardener.js',
   './src/core/orchestrator-engine.js',
-  './src/ui/dashboard.js',
-  './src/ui/radar-view.js',
+  './src/device/device_settings.js',
+  './src/device/provisioning.js',
+  './src/input/bt_keyboard.js',
+  './src/storage/agents-db.js',
+  './src/sync/agents_sync.js',
   './src/ui/bourse-view.js',
+  './src/ui/companion.js',
+  './src/ui/dashboard.js',
+  './src/ui/meteo-view.js',
+  './src/ui/musique-view.js',
+  './src/ui/radar-view.js',
 ];
 
 self.addEventListener('install', (event) => {
