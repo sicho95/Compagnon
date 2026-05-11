@@ -23,6 +23,30 @@
 #include "src/net/ble_mgr.h"
 #include "src/ui/status_bar.h"
 #include "src/ui/launcher.h"
+#include <ArduinoJson.h>
+
+// ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
+// La PWA envoie un JSON {"s":"SSID","p":"password"} via la caractéristique
+// WIFI_PROV du service BLE. Ce callback parse le JSON et appelle
+// wifi_mgr_provision() qui enregistre en NVS et reconnecte.
+static void ble_wifi_prov_cb(const char *json) {
+    if (!json) return;
+    StaticJsonDocument<256> doc;
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        Serial.print("[BLE/WIFI] JSON invalide: ");
+        Serial.println(err.c_str());
+        return;
+    }
+    const char *ssid = doc["s"] | doc["ssid"] | "";
+    const char *pwd  = doc["p"] | doc["pwd"]  | "";
+    if (!ssid || !ssid[0]) {
+        Serial.println("[BLE/WIFI] SSID vide — ignore");
+        return;
+    }
+    Serial.printf("[BLE/WIFI] Provision %s (len=%u)\n", ssid, (unsigned)strlen(pwd));
+    wifi_mgr_provision(ssid, pwd);
+}
 
 void setup() {
     Serial.begin(115200);
@@ -38,6 +62,7 @@ void setup() {
     wifi_mgr_init();       // Portail captif "Compagnon_Setup"
     net_ota_init();        // ArduinoOTA (hostname: compagnon, port 3232)
     ble_mgr_init();        // BLE GATT : service GPS (push depuis téléphone)
+    ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);  // Provisioning WiFi depuis la PWA
 
     orchestrator_init();   // Planificateur + cerveau (stubs V1)
     ui_launcher_init();    // Carousel 4 apps → charge l'écran
