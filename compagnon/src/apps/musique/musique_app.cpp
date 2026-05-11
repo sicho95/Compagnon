@@ -56,6 +56,7 @@ static bool     _sd_ok         = false;
 static bool     _airplay_conn  = false;
 static bool     _playing       = false;
 static uint8_t  _volume        = 70;   // 0-100
+static int      _current_file_idx = -1;   // index du fichier en cours (-1 = aucun)
 static char     _current_track[128] = {};
 static char     _current_artist[64] = {};
 static char     _airplay_name[64]   = {};
@@ -421,6 +422,7 @@ static void notify_status() {
     doc["vol"]     = _volume;
     doc["airplay"] = _airplay_name;
     doc["ok"]      = _airplay_conn;
+    doc["idx"]     = _current_file_idx;
     char buf[256];
     serializeJson(doc, buf, sizeof(buf));
     ble_mgr_music_notify(buf);
@@ -482,6 +484,7 @@ static void ui_update_files() {
             lv_obj_t *target = (lv_obj_t *)lv_event_get_target(e);
             int idx = (int)(intptr_t)lv_obj_get_user_data(target);
             if (idx < 0 || idx >= _nb_files) return;
+            _current_file_idx = idx;
             strlcpy(_current_track,
                     strrchr(_audio_files[idx].path, '/') ? strrchr(_audio_files[idx].path, '/') + 1
                                                           : _audio_files[idx].path,
@@ -501,6 +504,19 @@ static void ui_update_files() {
     }
 }
 
+// ─── Navigation fichiers (précédent / suivant) ───────────────────────────
+static void play_file(int idx) {
+    if (idx < 0 || idx >= _nb_files) return;
+    _current_file_idx = idx;
+    const char *p = strrchr(_audio_files[idx].path, '/');
+    strlcpy(_current_track, p ? p + 1 : _audio_files[idx].path, sizeof(_current_track));
+    _current_artist[0] = '\0';
+    _playing = true;
+    Serial.printf("[MUSIQUE] Lecture : %s\n", _audio_files[idx].path);
+    ui_update_track();
+    notify_status();
+}
+
 // ─── Callbacks boutons UI ─────────────────────────────────────────────────
 static void cb_back(lv_event_t *) {
     musique_app_stop();
@@ -514,13 +530,15 @@ static void cb_play(lv_event_t *) {
 }
 
 static void cb_prev(lv_event_t *) {
-    // Passer au fichier précédent
-    notify_status();
+    if (_nb_files == 0) return;
+    int next = (_current_file_idx <= 0) ? _nb_files - 1 : _current_file_idx - 1;
+    play_file(next);
 }
 
 static void cb_next(lv_event_t *) {
-    // Passer au fichier suivant
-    notify_status();
+    if (_nb_files == 0) return;
+    int next = (_current_file_idx + 1) % _nb_files;
+    play_file(next);
 }
 
 static void cb_volume(lv_event_t *e) {
@@ -839,4 +857,133 @@ void musique_app_tick() {
         if (_lbl_status) lv_label_set_text(_lbl_status, "AirPlay déconnecté");
         notify_status();
     }
+}
+
+// ─── Callback BLE commandes musique depuis la PWA ─────────────────────────
+// Format des commandes acceptées :
+//   "play"           → reprendre la lecture
+//   "pause"          → mettre en pause
+//   "toggle"         → basculer play/pause
+//   "stop"           → arrêter la lecture
+//   "next"           → fichier suivant (SD)
+//   "prev"           → fichier précédent (SD)
+//   "vol:NN"         → volume de 0 à 100 (ex: "vol:75")
+//   "seek:NN"        → position en secondes (stub — futur AudioPlayer)
+//   "file:NN"        → jouer le fichier à l'index NN de la liste SD
+//   "scan_speakers"  → relancer le scan mDNS AirPlay
+//   "disconnect"     → déconnecter l'enceinte AirPlay active
+//   "status"         → forcer un envoi notify_status() vers la PWA
+//   "list_files"     → envoyer notify_files() vers la PWA
+//   "list_speakers"  → envoyer notify_speakers() vers la PWA
+void musique_ble_cmd(const char *cmd) {
+    if (!cmd || !cmd[0]) return;
+    Serial.printf("[MUSIQUE/BLE] cmd=%s\n", cmd);
+
+    // ── Contrôle lecture ──────────────────────────────────────────────────
+    if (strcmp(cmd, "play") == 0) {
+        if (!_playing) {
+            _playing = true;
+            ui_update_track();
+        }
+
+    } else if (strcmp(cmd, "pause") == 0) {
+        if (_playing) {
+            _playing = false;
+            ui_update_track();
+        }
+
+    } else if (strcmp(cmd, "toggle") == 0) {
+        _playing = !_playing;
+        ui_update_track();
+
+    } else if (strcmp(cmd, "stop") == 0) {
+        _playing = false;
+        _current_track[0]  = '\0';
+        _current_artist[0] = '\0';
+        _current_file_idx  = -1;
+        ui_update_track();
+
+    // ── Navigation fichiers ───────────────────────────────────────────────
+    } else if (strcmp(cmd, "next") == 0) {
+        if (_nb_files > 0) {
+            int next = (_current_file_idx + 1) % _nb_files;
+            play_file(next);
+        } else {
+            Serial.println("[MUSIQUE/BLE] next: aucun fichier SD");
+        }
+
+    } else if (strcmp(cmd, "prev") == 0) {
+        if (_nb_files > 0) {
+            int prev = (_current_file_idx <= 0) ? _nb_files - 1 : _current_file_idx - 1;
+            play_file(prev);
+        } else {
+            Serial.println("[MUSIQUE/BLE] prev: aucun fichier SD");
+        }
+
+    // ── Volume : "vol:NN" (0-100) ─────────────────────────────────────────
+    } else if (strncmp(cmd, "vol:", 4) == 0) {
+        int v = atoi(cmd + 4);
+        if (v < 0)   v = 0;
+        if (v > 100) v = 100;
+        _volume = (uint8_t)v;
+        if (_airplay_conn) _airplay_client.set_volume(_volume);
+        if (_slider_vol) lv_slider_set_value(_slider_vol, _volume, LV_ANIM_ON);
+        Serial.printf("[MUSIQUE/BLE] Volume -> %d%%\n", v);
+
+    // ── Seek (stub) : "seek:NN" en secondes ──────────────────────────────
+    } else if (strncmp(cmd, "seek:", 5) == 0) {
+        int pos = atoi(cmd + 5);
+        Serial.printf("[MUSIQUE/BLE] Seek %ds — en attente AudioPlayer\n", pos);
+        // TODO: brancher AudioPlayer.seekTo(pos) quand disponible
+
+    // ── Jouer fichier par index : "file:NN" ───────────────────────────────
+    } else if (strncmp(cmd, "file:", 5) == 0) {
+        int idx = atoi(cmd + 5);
+        if (idx >= 0 && idx < _nb_files) {
+            play_file(idx);
+        } else {
+            Serial.printf("[MUSIQUE/BLE] file: index %d hors limites (0-%d)\n",
+                          idx, _nb_files - 1);
+        }
+
+    // ── AirPlay ───────────────────────────────────────────────────────────
+    } else if (strcmp(cmd, "scan_speakers") == 0) {
+        if (_lbl_status) lv_label_set_text(_lbl_status, "Scan AirPlay...");
+        scan_airplay_speakers();
+        ui_update_dropdown();
+        if (_lbl_status) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%d enceinte(s) trouvee(s)", _nb_speakers);
+            lv_label_set_text(_lbl_status, buf);
+        }
+        notify_speakers();
+
+    } else if (strcmp(cmd, "disconnect") == 0) {
+        _airplay_client.disconnect();
+        _airplay_conn = false;
+        _airplay_name[0] = '\0';
+        _connected_ip[0] = '\0';
+        ui_update_track();
+        if (_lbl_status) lv_label_set_text(_lbl_status, "AirPlay déconnecté");
+        Serial.println("[MUSIQUE/BLE] AirPlay déconnecté manuellement");
+
+    // ── Requêtes de données vers la PWA ──────────────────────────────────
+    } else if (strcmp(cmd, "status") == 0) {
+        // Forcer l'envoi de l'état courant sans rien modifier
+        Serial.println("[MUSIQUE/BLE] status demandé");
+
+    } else if (strcmp(cmd, "list_files") == 0) {
+        notify_files();
+        return;  // notify_files() appelle déjà ble_mgr_music_notify
+
+    } else if (strcmp(cmd, "list_speakers") == 0) {
+        notify_speakers();
+        return;  // notify_speakers() appelle déjà ble_mgr_music_notify
+
+    } else {
+        Serial.printf("[MUSIQUE/BLE] commande non reconnue: '%s'\n", cmd);
+    }
+
+    // Notifier la PWA de l'état mis à jour après chaque commande
+    notify_status();
 }
