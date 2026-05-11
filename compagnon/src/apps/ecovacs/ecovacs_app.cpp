@@ -62,7 +62,6 @@ static lv_obj_t *_btn_charge   = nullptr;
 static bool           _app_active    = false;
 static volatile bool  _fetch_running = false;
 static uint32_t       _last_fetch    = 0;
-static lv_obj_t      *_scr_to_delete = nullptr;
 
 static char _eco_user[64] = {};
 static char _eco_pass[64] = {};
@@ -320,26 +319,26 @@ static void btn_clean_cb(lv_event_t *)  { xTaskCreatePinnedToCore(cmd_task, "eco
 static void btn_stop_cb(lv_event_t *)   { xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 6144, (void*)"stop",   1, nullptr, 0); }
 static void btn_charge_cb(lv_event_t *) { xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 6144, (void*)"charge", 1, nullptr, 0); }
 
-// ─── Anim / close ─────────────────────────────────────────────────────────────
-static void anim_ready_cb(lv_anim_t *a) {
-    LV_UNUSED(a);
-    if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
-}
-
+// ─── Close ────────────────────────────────────────────────────────────────────
 static void do_close() {
     if (!_app_active) return;
     _app_active    = false;
     _fetch_running = false;
     orchestrator_set_app(APP_LAUNCHER);
-    _scr_to_delete = _scr;
+
+    lv_obj_t *scr_old = _scr;
     _scr           = nullptr;
     _lbl_status    = nullptr; _lbl_battery = nullptr; _lbl_mode = nullptr;
     _lbl_state     = nullptr; _bar_battery = nullptr;
     _btn_clean     = nullptr; _btn_stop = nullptr; _btn_charge = nullptr;
+
+    // Lance l'animation de retour vers le launcher.
+    // lv_scr_load_anim() prend ownership de scr_old : on le supprime après le
+    // délai d'animation (300 ms) + 50 ms de marge, sans dépendre de callbacks
+    // d'animation non disponibles dans toutes les versions LVGL 9.
     lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-    lv_anim_t *anim = lv_screen_get_active_anim();
-    if (anim) lv_anim_set_ready_cb(anim, anim_ready_cb);
-    else if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    if (scr_old) lv_obj_del_delayed(scr_old, 400);
+
     Serial.println("[APP/ECOVACS] Fermee");
 }
 
@@ -394,7 +393,7 @@ void ecovacs_app_start() {
     lv_obj_set_style_border_color(card, lv_color_hex(0x30363d), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Icône robot (emoji-like avec symbole LVGL)
+    // Icône robot
     lv_obj_t *icon = lv_label_create(card);
     lv_label_set_text(icon, LV_SYMBOL_REFRESH);
     lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
@@ -418,7 +417,7 @@ void ecovacs_app_start() {
     lv_obj_set_style_bg_color(_bar_battery, lv_color_hex(C_GREEN), LV_PART_INDICATOR);
 
     _lbl_battery = lv_label_create(card);
-    lv_label_set_text(_lbl_battery, "--%%");
+    lv_label_set_text(_lbl_battery, "--%");
     lv_obj_set_style_text_font(_lbl_battery, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(C_GREEN), 0);
     lv_obj_align(_lbl_battery, LV_ALIGN_BOTTOM_MID, 20, -6);

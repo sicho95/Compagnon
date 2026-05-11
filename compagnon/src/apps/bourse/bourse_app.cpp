@@ -69,17 +69,6 @@ static uint32_t _last_fetch   = 0;
 static volatile bool _fetch_running = false;
 static char     _err_buf[64]  = {};
 
-// ─── Suppression différée (après fin d'animation de retour) ──────────────────
-static lv_obj_t *_scr_to_delete = nullptr;
-
-static void anim_ready_cb(lv_anim_t *a) {
-    LV_UNUSED(a);
-    if (_scr_to_delete) {
-        lv_obj_del(_scr_to_delete);
-        _scr_to_delete = nullptr;
-    }
-}
-
 // ─── Marché ouvert ? (9h-18h lun-ven, heure locale) ──────────────────────────
 static bool market_open() {
     time_t now = time(nullptr);
@@ -234,27 +223,24 @@ static void fetch_task(void *) {
     vTaskDelete(NULL);
 }
 
-// ─── Retour safe : attend la fin de l'animation avant de supprimer _scr ───────
+// ─── Close ────────────────────────────────────────────────────────────────────
 static void do_close() {
-    if (!_app_active) return;   // anti-double-appel
+    if (!_app_active) return;
     _app_active    = false;
     _fetch_running = false;
     orchestrator_set_app(APP_LAUNCHER);
-    Serial.println("[APP/BOURSE] Fermée");
 
-    _scr_to_delete = _scr;
-    _scr           = nullptr;
-    _lbl_status    = nullptr;
+    lv_obj_t *scr_old = _scr;
+    _scr        = nullptr;
+    _lbl_status = nullptr;
     for (int i = 0; i < NB_TICKERS; i++) _rows[i] = nullptr;
 
+    // Anime le retour vers le launcher puis supprime l'écran après 400 ms
+    // (durée anim 300 ms + 100 ms marge) — compatible toutes versions LVGL 9.
     lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+    if (scr_old) lv_obj_del_delayed(scr_old, 400);
 
-    lv_anim_t *anim = lv_screen_get_active_anim();
-    if (anim) {
-        lv_anim_set_ready_cb(anim, anim_ready_cb);
-    } else {
-        if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
-    }
+    Serial.println("[APP/BOURSE] Fermée");
 }
 
 static void back_cb(lv_event_t *) { do_close(); }
@@ -340,5 +326,5 @@ void bourse_app_tick() {
 
 // ─── Stop (appelé depuis stop_current_and_return du launcher) ─────────────────
 void bourse_app_stop() {
-    do_close();   // logique centralisée — ui_launcher_return() sera appelé ensuite
+    do_close();
 }
