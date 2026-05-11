@@ -31,14 +31,14 @@
 // ─── Ecovacs API constants ────────────────────────────────────────────────────
 #define ECOVACS_AUTH_URL  "https://gl-eu-openapi.ecovacs.com/v1/private/eu/user/login"
 #define ECOVACS_API_URL   "https://portal-eu.ecouser.net/api"
-#define APP_KEY           "1520391301804" // app key publique connue
-#define APP_SECRET        "6c319b2ea5df3fed1f2cfd78825f6e4b" // secret app publique
+#define APP_KEY           "1520391301804"
+#define APP_SECRET        "6c319b2ea5df3fed1f2cfd78825f6e4b"
 
 // ─── État robot ───────────────────────────────────────────────────────────────
 struct EcovacsState {
-    int  battery;       // 0-100
-    char status[24];    // "idle", "cleaning", "returning", "charging", "error"
-    char mode[24];      // "auto", "spot", "edge"
+    int  battery;
+    char status[24];
+    char mode[24];
     bool online;
     char robot_id[32];
     char uid[64];
@@ -94,16 +94,14 @@ void ecovacs_set_credentials(const char *user, const char *pass) {
     nvs_set_api_key(NVS_KEY_ECOVACS_U, user);
     nvs_set_api_key(NVS_KEY_ECOVACS_P, pass);
     _creds_ready = true;
-    _state.authenticated = false;  // force re-auth
+    _state.authenticated = false;
 }
 
 // ─── Auth Ecovacs ──────────────────────────────────────────────────────────────
 static bool ecovacs_auth() {
-    // MD5 du mot de passe
     char pass_md5[33];
     md5_hex(_eco_pass, pass_md5);
 
-    // Payload auth
     char body[512];
     snprintf(body, sizeof(body),
         "{\"account\":\"%s\",\"password\":\"%s\","
@@ -161,7 +159,6 @@ static bool ecovacs_get_device_list() {
     JsonArray devices = doc["devices"].as<JsonArray>();
     if (!devices || devices.size() == 0) return false;
 
-    // Premier robot trouvé
     JsonObject dev = devices[0];
     strlcpy(_state.robot_id, dev["did"] | "", sizeof(_state.robot_id));
     _state.online = dev["online"] | false;
@@ -203,10 +200,8 @@ static bool ecovacs_cmd(const char *todo, const char *cmd_json, char *out, size_
 static void ecovacs_parse_state(const char *json) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
-    // Batterie
     int bat = doc["ret"]["battery"]["power"] | doc["battery"] | -1;
     if (bat >= 0) _state.battery = bat;
-    // Statut
     const char *st = doc["ret"]["clean"]["status"] | doc["status"] | nullptr;
     if (st) strlcpy(_state.status, st, sizeof(_state.status));
     const char *charging = doc["ret"]["chargeState"]["status"] | nullptr;
@@ -265,26 +260,22 @@ static void eco_fetch_task(void *) {
         strlcpy(_efres.err, "Creds Ecovacs manquants (PWA)", sizeof(_efres.err));
         lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
     }
-    // Auth si nécessaire
     if (!_state.authenticated) {
         if (!ecovacs_auth()) {
             strlcpy(_efres.err, "Erreur auth Ecovacs", sizeof(_efres.err));
             lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
         }
     }
-    // Liste devices si robot_id vide
     if (_state.robot_id[0] == '\0') {
         if (!ecovacs_get_device_list()) {
             strlcpy(_efres.err, "Aucun robot trouve", sizeof(_efres.err));
             lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
         }
     }
-    // Batterie
     char resp[512];
     if (ecovacs_cmd("GetBatteryInfo", nullptr, resp, sizeof(resp))) {
         ecovacs_parse_state(resp);
     }
-    // Statut nettoyage
     if (ecovacs_cmd("GetCleanState", nullptr, resp, sizeof(resp))) {
         ecovacs_parse_state(resp);
     }
@@ -310,7 +301,6 @@ static void cmd_task(void *param) {
     else if (strcmp(cmd, "charge") == 0)
         ecovacs_cmd("Charge", "{\"act\":\"go\"}", nullptr, 0);
     vTaskDelay(500 / portTICK_PERIOD_MS);
-    // Refresh état après commande
     eco_fetch_task(nullptr);
     vTaskDelete(NULL);
 }
@@ -332,12 +322,9 @@ static void do_close() {
     _lbl_state     = nullptr; _bar_battery = nullptr;
     _btn_clean     = nullptr; _btn_stop = nullptr; _btn_charge = nullptr;
 
-    // Lance l'animation de retour vers le launcher.
-    // lv_scr_load_anim() prend ownership de scr_old : on le supprime après le
-    // délai d'animation (300 ms) + 50 ms de marge, sans dépendre de callbacks
-    // d'animation non disponibles dans toutes les versions LVGL 9.
-    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-    if (scr_old) lv_obj_del_delayed(scr_old, 400);
+    // Retour vers le launcher puis supprime l'écran après l'animation
+    ui_launcher_return();
+    if (scr_old) lv_obj_delete_delayed(scr_old, 400);
 
     Serial.println("[APP/ECOVACS] Fermee");
 }
@@ -356,7 +343,6 @@ void ecovacs_app_start() {
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bouton retour
     lv_obj_t *btn = lv_btn_create(_scr);
     lv_obj_set_size(btn, 52, 36);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
@@ -368,21 +354,18 @@ void ecovacs_app_start() {
     lv_obj_set_style_text_color(lbl_back, lv_color_hex(C_TXT), 0);
     lv_obj_center(lbl_back);
 
-    // Titre
     lv_obj_t *title = lv_label_create(_scr);
     lv_label_set_text(title, LV_SYMBOL_REFRESH " DEEBOT X8 Pro");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(C_TXT), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
 
-    // Status
     _lbl_status = lv_label_create(_scr);
     lv_label_set_text(_lbl_status, _creds_ready ? "" : "Configurer compte Ecovacs dans la PWA");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(_creds_ready ? C_MUTED : C_ERR), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 82);
 
-    // Carte état robot
     lv_obj_t *card = lv_obj_create(_scr);
     lv_obj_set_size(card, 420, 140);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 110);
@@ -393,21 +376,18 @@ void ecovacs_app_start() {
     lv_obj_set_style_border_color(card, lv_color_hex(0x30363d), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Icône robot
     lv_obj_t *icon = lv_label_create(card);
     lv_label_set_text(icon, LV_SYMBOL_REFRESH);
     lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(icon, lv_color_hex(C_ACCENT), 0);
     lv_obj_align(icon, LV_ALIGN_LEFT_MID, 16, 0);
 
-    // État
     _lbl_state = lv_label_create(card);
     lv_label_set_text(_lbl_state, "---");
     lv_obj_set_style_text_font(_lbl_state, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(_lbl_state, lv_color_hex(C_TXT), 0);
     lv_obj_align(_lbl_state, LV_ALIGN_TOP_MID, 20, 16);
 
-    // Barre batterie
     _bar_battery = lv_bar_create(card);
     lv_obj_set_size(_bar_battery, 180, 12);
     lv_obj_align(_bar_battery, LV_ALIGN_BOTTOM_MID, 20, -24);
@@ -422,14 +402,12 @@ void ecovacs_app_start() {
     lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(C_GREEN), 0);
     lv_obj_align(_lbl_battery, LV_ALIGN_BOTTOM_MID, 20, -6);
 
-    // Mode
     _lbl_mode = lv_label_create(card);
     lv_label_set_text(_lbl_mode, "");
     lv_obj_set_style_text_font(_lbl_mode, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_mode, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_mode, LV_ALIGN_TOP_MID, 20, 42);
 
-    // Boutons de commande
     const struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ref; } btns[] = {
         { LV_SYMBOL_REFRESH " Nettoyer", C_GREEN,  btn_clean_cb,  &_btn_clean  },
         { LV_SYMBOL_PAUSE   " Arreter",  C_ORANGE, btn_stop_cb,   &_btn_stop   },

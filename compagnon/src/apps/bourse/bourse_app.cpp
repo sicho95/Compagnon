@@ -235,10 +235,9 @@ static void do_close() {
     _lbl_status = nullptr;
     for (int i = 0; i < NB_TICKERS; i++) _rows[i] = nullptr;
 
-    // Anime le retour vers le launcher puis supprime l'écran après 400 ms
-    // (durée anim 300 ms + 100 ms marge) — compatible toutes versions LVGL 9.
-    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-    if (scr_old) lv_obj_del_delayed(scr_old, 400);
+    // Retour vers le launcher puis supprime l'écran après l'animation
+    ui_launcher_return();
+    if (scr_old) lv_obj_delete_delayed(scr_old, 400);
 
     Serial.println("[APP/BOURSE] Fermée");
 }

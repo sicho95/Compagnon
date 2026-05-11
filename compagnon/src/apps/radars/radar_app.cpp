@@ -54,17 +54,6 @@ static double   _lat = 0.0, _lon = 0.0;
 static bool     _has_gps     = false;
 static volatile bool _fetch_running = false;
 
-// ─── Suppression différée (après fin d'animation de retour) ──────────────────
-static lv_obj_t *_scr_to_delete = nullptr;
-
-static void anim_ready_cb(lv_anim_t *a) {
-    LV_UNUSED(a);
-    if (_scr_to_delete) {
-        lv_obj_del(_scr_to_delete);
-        _scr_to_delete = nullptr;
-    }
-}
-
 // ─── Haversine (mètres) ───────────────────────────────────────────────────────
 static float haversine(double la1, double lo1, double la2, double lo2) {
     const double R = 6371e3;
@@ -243,28 +232,23 @@ static void fetch_task(void *) {
     vTaskDelete(NULL);
 }
 
-// ─── Retour safe : attend la fin de l'animation avant de supprimer _scr ───────
+// ─── Close ────────────────────────────────────────────────────────────────────
 static void do_close() {
-    if (!_app_active) return;   // anti-double-appel
+    if (!_app_active) return;
     _app_active    = false;
     _fetch_running = false;
     orchestrator_set_app(APP_LAUNCHER);
     Serial.println("[APP/RADARS] Fermée");
 
-    _scr_to_delete = _scr;
-    _scr           = nullptr;
-    _list          = nullptr;
-    _lbl_gps       = nullptr;
-    _lbl_status    = nullptr;
+    lv_obj_t *scr_old = _scr;
+    _scr        = nullptr;
+    _list       = nullptr;
+    _lbl_gps    = nullptr;
+    _lbl_status = nullptr;
 
-    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-
-    lv_anim_t *anim = lv_screen_get_active_anim();
-    if (anim) {
-        lv_anim_set_ready_cb(anim, anim_ready_cb);
-    } else {
-        if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
-    }
+    // Retour vers le launcher puis supprime l'écran après l'animation
+    ui_launcher_return();
+    if (scr_old) lv_obj_delete_delayed(scr_old, 400);
 }
 
 static void back_cb(lv_event_t *) { do_close(); }
@@ -355,7 +339,7 @@ void radar_app_tick() {
     }
 }
 
-// ─── Stop (appelé depuis stop_current_and_return du launcher) ─────────────────
+// ─── Stop ─────────────────────────────────────────────────────────────────────
 void radar_app_stop() {
-    do_close();   // logique centralisée — ui_launcher_return() sera appelé ensuite
+    do_close();
 }
