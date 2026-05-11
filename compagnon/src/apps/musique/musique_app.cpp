@@ -705,120 +705,82 @@ static void build_main_screen() {
         lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(b);
         lv_label_set_text(lbl, icon);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(C_TXT), 0);
         lv_obj_center(lbl);
         return b;
     };
 
-    int cx = (480 - 3 * BTN_SZ - 2 * 24) / 2;
-    make_ctrl_btn(LV_SYMBOL_PREV, cx,             cb_prev);
-    _btn_play = make_ctrl_btn(LV_SYMBOL_PLAY, cx + BTN_SZ + 24, cb_play);
-    make_ctrl_btn(LV_SYMBOL_NEXT, cx + 2 * (BTN_SZ + 24), cb_next);
+    make_ctrl_btn(LV_SYMBOL_PREV, 100, cb_prev);
+    _btn_play = make_ctrl_btn(LV_SYMBOL_PLAY, 186, cb_play);
+    make_ctrl_btn(LV_SYMBOL_NEXT, 272, cb_next);
 
     // ── Slider volume ────────────────────────────────────────────────────
-    lv_obj_t *lbl_vol = lv_label_create(_scr_main);
-    lv_label_set_text(lbl_vol, LV_SYMBOL_VOLUME_MAX);
-    lv_obj_set_style_text_color(lbl_vol, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(lbl_vol, LV_ALIGN_TOP_LEFT, 20, 410);
-
     _slider_vol = lv_slider_create(_scr_main);
-    lv_obj_set_size(_slider_vol, 400, 12);
-    lv_obj_align(_slider_vol, LV_ALIGN_TOP_MID, 0, 415);
+    lv_obj_set_size(_slider_vol, 340, 8);
+    lv_obj_align(_slider_vol, LV_ALIGN_TOP_MID, 0, 416);
     lv_slider_set_range(_slider_vol, 0, 100);
     lv_slider_set_value(_slider_vol, _volume, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(_slider_vol, lv_color_hex(C_MUTED), LV_PART_MAIN);
     lv_obj_set_style_bg_color(_slider_vol, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(_slider_vol, lv_color_hex(C_TXT), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(_slider_vol, lv_color_white(), LV_PART_KNOB);
     lv_obj_add_event_cb(_slider_vol, cb_volume, LV_EVENT_VALUE_CHANGED, NULL);
 
     // ── Label statut ─────────────────────────────────────────────────────
     _lbl_status = lv_label_create(_scr_main);
-    lv_label_set_text(_lbl_status, _sd_ok ? "" : "SD non détectée");
-    lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
+    lv_label_set_text(_lbl_status, _sd_ok ? "" : "SD non detectee");
+    lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(_lbl_status, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(_lbl_status, LV_ALIGN_BOTTOM_MID, 0, -10);
 }
 
-// ─── Construire l'écran sources ──────────────────────────────────────────
+// ─── Construire l'écran des sources ───────────────────────────────────────
 static void build_sources_screen() {
     _scr_sources = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(_scr_sources, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr_sources, LV_OPA_COVER, 0);
     lv_obj_remove_flag(_scr_sources, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bouton retour
-    lv_obj_t *btn_b = lv_btn_create(_scr_sources);
-    lv_obj_set_size(btn_b, 52, 36);
-    lv_obj_align(btn_b, LV_ALIGN_TOP_LEFT, 10, 46);
-    lv_obj_set_style_bg_color(btn_b, lv_color_hex(C_BG), 0);
-    lv_obj_set_style_radius(btn_b, 10, 0);
-    lv_obj_add_event_cb(btn_b, cb_back_sources, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *ic_b = lv_label_create(btn_b);
-    lv_label_set_text(ic_b, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(ic_b, lv_color_hex(C_TXT), 0);
-    lv_obj_center(ic_b);
+    // ── Bouton retour ───────────────────────────────────────────────────
+    lv_obj_t *btn_back = lv_btn_create(_scr_sources);
+    lv_obj_set_size(btn_back, 52, 36);
+    lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 10, 46);
+    lv_obj_set_style_bg_color(btn_back, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_radius(btn_back, 10, 0);
+    lv_obj_add_event_cb(btn_back, cb_back_sources, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ic_back = lv_label_create(btn_back);
+    lv_label_set_text(ic_back, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(ic_back, lv_color_hex(C_TXT), 0);
+    lv_obj_center(ic_back);
 
-    lv_obj_t *ttl = lv_label_create(_scr_sources);
-    lv_label_set_text(ttl, "Sources");
-    lv_obj_set_style_text_font(ttl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(ttl, lv_color_hex(C_TXT), 0);
-    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 48);
+    // ── Titre ────────────────────────────────────────────────────────────
+    lv_obj_t *title = lv_label_create(_scr_sources);
+    lv_label_set_text(title, "Sources");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(C_TXT), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
 
-    // ── Section SD card ──────────────────────────────────────────────────
+    // ── Liste fichiers SD ─────────────────────────────────────────────────
     lv_obj_t *lbl_sd = lv_label_create(_scr_sources);
-    lv_label_set_text(lbl_sd, _sd_ok ? LV_SYMBOL_SD_CARD " SD card" : LV_SYMBOL_SD_CARD " SD (absent)");
-    lv_obj_set_style_text_font(lbl_sd, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_sd, lv_color_hex(_sd_ok ? C_TXT : C_MUTED), 0);
-    lv_obj_align(lbl_sd, LV_ALIGN_TOP_LEFT, 16, 96);
+    lv_label_set_text(lbl_sd, "Carte SD");
+    lv_obj_set_style_text_font(lbl_sd, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_sd, lv_color_hex(C_TXT), 0);
+    lv_obj_align(lbl_sd, LV_ALIGN_TOP_LEFT, 14, 96);
 
-    // Liste scrollable des fichiers
     _list_files = lv_list_create(_scr_sources);
-    lv_obj_set_size(_list_files, 460, 170);
-    lv_obj_align(_list_files, LV_ALIGN_TOP_MID, 0, 124);
+    lv_obj_set_size(_list_files, LCD_WIDTH - 20, 260);
+    lv_obj_align(_list_files, LV_ALIGN_TOP_MID, 0, 120);
     lv_obj_set_style_bg_color(_list_files, lv_color_hex(C_CARD), 0);
-    lv_obj_set_style_bg_opa(_list_files, LV_OPA_40, 0);
-    lv_obj_set_style_radius(_list_files, 14, 0);
-    lv_obj_set_style_border_color(_list_files, lv_color_hex(C_ACCENT), 0);
-    lv_obj_set_style_border_opa(_list_files, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(_list_files, 0, 0);
     ui_update_files();
 
-    // ── Section Spotify ──────────────────────────────────────────────────
-    lv_obj_t *card_sp = lv_obj_create(_scr_sources);
-    lv_obj_set_size(card_sp, 460, 76);
-    lv_obj_align(card_sp, LV_ALIGN_TOP_MID, 0, 306);
-    lv_obj_set_style_bg_color(card_sp, lv_color_hex(0x001A08), 0);
-    lv_obj_set_style_bg_opa(card_sp, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card_sp, lv_color_hex(0x1DB954), 0);
-    lv_obj_set_style_border_width(card_sp, 1, 0);
-    lv_obj_set_style_border_opa(card_sp, LV_OPA_40, 0);
-    lv_obj_set_style_radius(card_sp, 14, 0);
-    lv_obj_remove_flag(card_sp, LV_OBJ_FLAG_SCROLLABLE);
-
-    _lbl_spotify = lv_label_create(card_sp);
-    lv_label_set_text(_lbl_spotify, "Spotify Connect\n(stub — brancher SpotifyArduino)");
+    // ── Spotify stub ──────────────────────────────────────────────────────
+    _lbl_spotify = lv_label_create(_scr_sources);
+    lv_label_set_text(_lbl_spotify, "Spotify (bientôt)");
     lv_obj_set_style_text_font(_lbl_spotify, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(_lbl_spotify, lv_color_hex(0x1DB954), 0);
-    lv_obj_set_style_text_align(_lbl_spotify, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(_lbl_spotify);
-
-    // ── Section Amazon Music (désactivée) ────────────────────────────────
-    lv_obj_t *card_am = lv_obj_create(_scr_sources);
-    lv_obj_set_size(card_am, 460, 60);
-    lv_obj_align(card_am, LV_ALIGN_TOP_MID, 0, 394);
-    lv_obj_set_style_bg_color(card_am, lv_color_hex(C_DISABLED), 0);
-    lv_obj_set_style_bg_opa(card_am, LV_OPA_50, 0);
-    lv_obj_set_style_radius(card_am, 14, 0);
-    lv_obj_remove_flag(card_am, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *lbl_am = lv_label_create(card_am);
-    lv_label_set_text(lbl_am, "Amazon Music — Non disponible (DRM propriétaire)");
-    lv_obj_set_style_text_font(lbl_am, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(lbl_am, lv_color_hex(0x666666), 0);
-    lv_obj_set_style_text_align(lbl_am, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl_am);
+    lv_obj_set_style_text_color(_lbl_spotify, lv_color_hex(C_DISABLED), 0);
+    lv_obj_align(_lbl_spotify, LV_ALIGN_BOTTOM_LEFT, 14, -20);
 }
 
-// Callback "sources" défini après build_sources_screen pour éviter la dépendance
 static void cb_sources(lv_event_t *) {
     if (!_scr_sources) build_sources_screen();
     lv_scr_load_anim(_scr_sources, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
@@ -826,128 +788,55 @@ static void cb_sources(lv_event_t *) {
 
 // ─── API publique ─────────────────────────────────────────────────────────
 void musique_app_start() {
-    orchestrator_set_app(APP_MUSIQUE);
-    _app_active  = false;  // marqué actif après init
-    _playing     = false;
-    _airplay_conn = false;
-    _nb_speakers  = 0;
-    _nb_files     = 0;
-    _current_track[0] = '\0';
-    _current_artist[0] = '\0';
-
-    // Initialiser SD card
-    _sd_ok = sd_init();
-    if (_sd_ok) list_audio_files();
-
-    // Initialiser mDNS si pas déjà fait
-    if (WiFi.isConnected() && !MDNS.begin("nestor-compagnon")) {
-        Serial.println("[MUSIQUE] MDNS init echoue — decouverte AirPlay desactivee");
+    _app_active = true;
+    _sd_ok      = sd_init();
+    if (_sd_ok && !_sd_files_loaded) {
+        list_audio_files();
+        _sd_files_loaded = true;
     }
-
     spotify_connect_init();
 
     build_main_screen();
-    _app_active = true;
-
-    lv_scr_load_anim(_scr_main, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+    lv_scr_load_anim(_scr_main, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
     Serial.println("[APP/MUSIQUE] Ouverte");
 }
 
-void musique_app_tick() {
-    if (!_app_active || !_scr_main) return;
-
-    // Rafraîchir le statut AirPlay si la connexion tombe
-    uint32_t now = millis();
-    if (_airplay_conn && !_airplay_client.connected()) {
-        _airplay_conn = false;
-        ui_update_track();
-    }
-
-    // TODO: quand arduino-audio-tools est installé, appeler player.copy() ici
-    // _audio_player.copy();
-    _tick_audio = now;
-}
-
 void musique_app_stop() {
-    _app_active = false;
-    _playing    = false;
+    _app_active   = false;
+    _playing      = false;
     _airplay_client.disconnect();
     _airplay_conn = false;
 
-    if (_scr_sources) { lv_obj_del(_scr_sources); _scr_sources = nullptr; }
-    if (_scr_main)    { lv_obj_del(_scr_main);    _scr_main    = nullptr; }
+    // lv_obj_del_async : suppression différée, sans supprimer l'écran actif
+    // immédiatement (évite freeze LVGL si l'écran courant est encore affiché).
+    if (_scr_sources) { lv_obj_del_async(_scr_sources); _scr_sources = nullptr; }
+    if (_scr_main)    { lv_obj_del_async(_scr_main);    _scr_main    = nullptr; }
 
-    _lbl_track = nullptr; _lbl_artist   = nullptr;
-    _lbl_airplay = nullptr; _lbl_status = nullptr;
-    _btn_play   = nullptr; _slider_vol  = nullptr;
-    _dd_speakers = nullptr; _list_files = nullptr;
+    _lbl_track   = nullptr; _lbl_artist  = nullptr;
+    _lbl_airplay = nullptr; _lbl_status  = nullptr;
+    _btn_play    = nullptr; _slider_vol  = nullptr;
+    _dd_speakers = nullptr; _list_files  = nullptr;
     _lbl_spotify = nullptr;
 
     orchestrator_set_app(APP_LAUNCHER);
     Serial.println("[APP/MUSIQUE] Fermee");
 }
 
-// ─── Traitement des commandes BLE reçues de la PWA ───────────────────────
-void musique_ble_cmd(const char *cmd) {
-    if (!cmd) return;
-    Serial.printf("[MUSIQUE/BLE] cmd: %s\n", cmd);
+void musique_app_tick() {
+    if (!_app_active) return;
 
-    if (strcmp(cmd, "music:scan") == 0) {
-        scan_airplay_speakers();
-        notify_speakers();
-        if (_app_active) ui_update_dropdown();
+    // Envoi audio AirPlay (si connecté et en lecture)
+    if (_playing && _airplay_conn && (millis() - _tick_audio >= 8)) {
+        _tick_audio = millis();
+        // Générer silence (ou lire depuis SD quand AudioPlayer branché)
+        static int16_t silence[AIRPLAY_FRAMES_PER_PKT * AIRPLAY_CHANNELS] = {};
+        _airplay_client.send_pcm(silence, AIRPLAY_FRAMES_PER_PKT, _connected_ip);
+    }
 
-    } else if (strncmp(cmd, "music:connect:", 14) == 0) {
-        // Format: music:connect:{ip}:{port}
-        char buf[80]; strlcpy(buf, cmd + 14, sizeof(buf));
-        char *colon = strrchr(buf, ':');
-        int port = colon ? atoi(colon + 1) : 5000;
-        if (colon) *colon = '\0';
-        strlcpy(_connected_ip, buf, sizeof(_connected_ip));
-        strlcpy(_airplay_name, buf, sizeof(_airplay_name));  // IP comme nom provisoire
-        _airplay_client.disconnect();
-        _airplay_conn = _airplay_client.connect(buf, port);
-        if (_airplay_conn) _airplay_client.set_volume(_volume);
-        if (_app_active) ui_update_track();
-        notify_status();
-
-    } else if (strcmp(cmd, "music:list_files") == 0) {
-        if (_sd_ok) list_audio_files();
-        notify_files();
-
-    } else if (strncmp(cmd, "music:play:", 11) == 0) {
-        strlcpy(_current_track, cmd + 11, sizeof(_current_track));
-        _current_artist[0] = '\0';
-        _playing = true;
-        if (_app_active) ui_update_track();
-        notify_status();
-        // TODO: _audio_player.setPath(_current_track); _audio_player.play();
-
-    } else if (strcmp(cmd, "music:pause") == 0) {
-        _playing = !_playing;
-        if (_app_active) ui_update_track();
-        notify_status();
-
-    } else if (strcmp(cmd, "music:stop") == 0) {
-        _playing = false;
-        _current_track[0] = '\0';
-        if (_app_active) ui_update_track();
-        notify_status();
-
-    } else if (strcmp(cmd, "music:next") == 0) {
-        // TODO: player.next()
-        notify_status();
-
-    } else if (strcmp(cmd, "music:prev") == 0) {
-        // TODO: player.previous()
-        notify_status();
-
-    } else if (strncmp(cmd, "music:vol:", 10) == 0) {
-        int v = atoi(cmd + 10);
-        _volume = (uint8_t)constrain(v, 0, 100);
-        if (_airplay_conn) _airplay_client.set_volume(_volume);
-        if (_app_active && _slider_vol)
-            lv_slider_set_value(_slider_vol, _volume, LV_ANIM_OFF);
+    // Vérifier déconnexion AirPlay
+    if (_airplay_conn && !_airplay_client.connected()) {
+        _airplay_conn = false;
+        if (_lbl_status) lv_label_set_text(_lbl_status, "AirPlay déconnecté");
         notify_status();
     }
 }
