@@ -228,30 +228,32 @@ static void fetch_task(void *) {
         strlcpy(_fres.err, "Cles Tuya manquantes (PWA)", sizeof(_fres.err));
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
-    // Token
-    if (!tuya_api_is_ready()) {
-        tuya_api_init(_tuya_id, _tuya_sec);
-        if (!tuya_api_get_token()) {
-            strlcpy(_fres.err, "Erreur token Tuya", sizeof(_fres.err));
-            lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
-        }
+
+    // Auth Tuya
+    if (!tuya_api_auth(_tuya_id, _tuya_sec)) {
+        strlcpy(_fres.err, "Auth Tuya echouee", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
-    // Devices
+
+    // Devices list (premier fetch uniquement)
     if (_dev_count == 0) {
-        char resp[2048];
-        if (!tuya_api_get_devices(resp, sizeof(resp))) {
-            strlcpy(_fres.err, "Erreur liste devices", sizeof(_fres.err));
-            lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
+        char *buf = (char *)malloc(8192);
+        if (buf && tuya_api_get_devices(buf, 8192)) {
+            parse_devices(buf);
         }
-        parse_devices(resp);
+        free(buf);
     }
+
     // Status de chaque device
-    for (int i = 0; i < _dev_count; i++) {
-        char resp[512];
-        if (tuya_api_get_device_status(_devices[i].id, resp, sizeof(resp)))
-            parse_status(i, resp);
-        vTaskDelay(100 / portTICK_PERIOD_MS);  // 100 ms entre requêtes
+    for (int i = 0; i < _dev_count && _app_active; i++) {
+        char *buf = (char *)malloc(2048);
+        if (buf && tuya_api_get_status(_devices[i].id, buf, 2048)) {
+            parse_status(i, buf);
+        }
+        free(buf);
+        vTaskDelay(pdMS_TO_TICKS(100)); // Throttle
     }
+
     _fres.ok = true;
     lv_async_call(on_fetch_done, nullptr);
     vTaskDelete(NULL);
@@ -260,14 +262,13 @@ static void fetch_task(void *) {
 static void start_fetch() {
     if (_fetch_running) return;
     _fetch_running = true;
-    if (_lbl_status) lv_label_set_text(_lbl_status, "Chargement...");
-    xTaskCreatePinnedToCore(fetch_task, "tuya_fetch", 10240, nullptr, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(fetch_task, "smarthome_fetch", 8192, nullptr, 1, nullptr, 0);
 }
 
 // ─── Anim ready (suppression écran) ──────────────────────────────────────────
 static void anim_ready_cb(lv_anim_t *a) {
     LV_UNUSED(a);
-    if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    if (_scr_to_delete) { lv_obj_delete(_scr_to_delete); _scr_to_delete = nullptr; }
 }
 
 static void do_close() {
@@ -280,10 +281,9 @@ static void do_close() {
     _lbl_status    = nullptr;
     _list_cont     = nullptr;
     for (int i = 0; i < MAX_DEVICES; i++) { _dev_cards[i] = nullptr; _lbl_power[i] = nullptr; _lbl_sensor[i] = nullptr; }
-    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-    lv_anim_t *anim = lv_screen_get_active_anim();
-    if (anim) lv_anim_set_ready_cb(anim, anim_ready_cb);
-    else if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    ui_launcher_return();             // retour au launcher avec animation
+    lv_obj_delete_delayed(_scr_to_delete, 350); // supprime l'écran après l'anim
+    _scr_to_delete = nullptr;
     Serial.println("[APP/SMARTHOME] Fermee");
 }
 
@@ -293,65 +293,89 @@ static void back_cb(lv_event_t *) { do_close(); }
 void smarthome_app_start() {
     load_credentials();
     orchestrator_set_app(APP_SMARTHOME);
-    _app_active = true;
-    _last_fetch = 0;
-    _dev_count  = 0;
-    for (int i = 0; i < MAX_DEVICES; i++) { _dev_cards[i] = nullptr; _lbl_power[i] = nullptr; _lbl_sensor[i] = nullptr; }
+    _app_active    = true;
+    _fetch_running = false;
+    _dev_count     = 0;
+    _scr_to_delete = nullptr;
+    memset(_dev_cards, 0, sizeof(_dev_cards));
+    memset(_lbl_power, 0, sizeof(_lbl_power));
+    memset(_lbl_sensor, 0, sizeof(_lbl_sensor));
 
-    _scr = lv_obj_create(NULL);
+    // ─── Écran ────────────────────────────────────────────────────────────────
+    _scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(_scr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Header
+    lv_obj_t *hdr = lv_obj_create(_scr);
+    lv_obj_set_size(hdr, LV_HOR_RES, 48);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(hdr, 0, 0);
+    lv_obj_set_style_pad_all(hdr, 0, 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
     // Bouton retour
-    lv_obj_t *btn = lv_btn_create(_scr);
-    lv_obj_set_size(btn, 52, 36);
-    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(C_CARD), 0);
-    lv_obj_set_style_radius(btn, 10, 0);
-    lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_back = lv_label_create(btn);
+    lv_obj_t *btn_back = lv_btn_create(hdr);
+    lv_obj_set_size(btn_back, 44, 44);
+    lv_obj_align(btn_back, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_style_bg_color(btn_back, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_radius(btn_back, 22, 0);
+    lv_obj_add_event_cb(btn_back, back_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_back = lv_label_create(btn_back);
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(lbl_back, lv_color_hex(C_TXT), 0);
     lv_obj_center(lbl_back);
 
     // Titre
-    lv_obj_t *title = lv_label_create(_scr);
-    lv_label_set_text(title, LV_SYMBOL_HOME " Domotique");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(C_TXT), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
+    lv_obj_t *lbl_title = lv_label_create(hdr);
+    lv_label_set_text(lbl_title, LV_SYMBOL_HOME " Maison");
+    lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl_title, lv_color_hex(C_TXT), 0);
+    lv_obj_align(lbl_title, LV_ALIGN_CENTER, 0, 0);
 
-    // Status
+    // Bouton refresh
+    lv_obj_t *btn_ref = lv_btn_create(hdr);
+    lv_obj_set_size(btn_ref, 44, 44);
+    lv_obj_align(btn_ref, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_set_style_bg_color(btn_ref, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_radius(btn_ref, 22, 0);
+    lv_obj_add_event_cb(btn_ref, [](lv_event_t *) { start_fetch(); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_ref = lv_label_create(btn_ref);
+    lv_label_set_text(lbl_ref, LV_SYMBOL_REFRESH);
+    lv_obj_center(lbl_ref);
+
+    // Status label
     _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, _tuya_ready ? "" : "Configurer Tuya dans la PWA");
+    lv_label_set_text(_lbl_status, "Chargement...");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(_lbl_status, lv_color_hex(_tuya_ready ? C_MUTED : C_ERR), 0);
-    lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 82);
+    lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 56);
 
-    // Conteneur scrollable pour les cartes
+    // ─── Liste scrollable des devices (2 colonnes) ────────────────────────────
     _list_cont = lv_obj_create(_scr);
-    lv_obj_set_size(_list_cont, 460, 280);
-    lv_obj_align(_list_cont, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_bg_opa(_list_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_size(_list_cont, LV_HOR_RES, LV_VER_RES - 56);
+    lv_obj_align(_list_cont, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(_list_cont, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(_list_cont, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(_list_cont, 0, 0);
-    lv_obj_set_style_pad_all(_list_cont, 6, 0);
+    lv_obj_set_style_pad_all(_list_cont, 8, 0);
     lv_obj_set_layout(_list_cont, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_list_cont, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(_list_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_gap(_list_cont, 8, 0);
+    lv_obj_set_style_pad_row(_list_cont, 8, 0);
+    lv_obj_set_style_pad_column(_list_cont, 8, 0);
 
+    // Chargement écran
     lv_scr_load_anim(_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
-    Serial.println("[APP/SMARTHOME] Ouverte");
-    if (_tuya_ready) start_fetch();
+    start_fetch();
 }
 
-// ─── Tick ─────────────────────────────────────────────────────────────────────
 void smarthome_app_tick() {
-    if (!_app_active || !_scr) return;
-    if (!_tuya_ready) return;
+    if (!_app_active) return;
     uint32_t now = millis();
-    if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= 60000UL)) {
+    if (now - _last_fetch > 60000) {
         _last_fetch = now;
         start_fetch();
     }
