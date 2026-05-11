@@ -1,5 +1,6 @@
 /**
  * nvs_config.cpp — Implémentation lecture/écriture clés API en NVS
+ * Namespace unique : NVS_NAMESPACE = "compagnon" (défini dans nvs_config.h)
  */
 #include "nvs_config.h"
 #include <Arduino.h>
@@ -7,7 +8,7 @@
 
 static Preferences _nvs;
 
-// Clés reconnues (pour la liste exhaustive)
+// Clés reconnues (pour nvs_list_api_keys_json)
 static const char *KNOWN_KEYS[] = {
   NVS_KEY_GROQ,
   NVS_KEY_GEMINI,
@@ -35,7 +36,7 @@ bool nvs_set_api_key(const char *key_name, const char *value) {
   _nvs.begin(NVS_NAMESPACE, false);
   bool ok = _nvs.putString(key_name, value);
   _nvs.end();
-  if (ok) Serial.printf("[NVS] clé stockée : %s\n", key_name);
+  if (ok) Serial.printf("[NVS] clé stockée : %s (namespace: %s)\n", key_name, NVS_NAMESPACE);
   return ok;
 }
 
