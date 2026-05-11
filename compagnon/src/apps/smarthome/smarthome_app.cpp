@@ -197,7 +197,6 @@ static void on_fetch_done(void *) {
                     if (idx < 0 || idx >= _dev_count) return;
                     bool new_val = !_devices[idx].power;
                     const char *code = (strncmp(_devices[idx].category, "dj", 2) == 0) ? "switch_led" : "switch_1";
-                    // Appel async (FreeRTOS)
                     struct CmdArgs { char id[32]; char code[16]; bool val; };
                     static CmdArgs args;
                     strlcpy(args.id, _devices[idx].id, sizeof(args.id));
@@ -229,8 +228,9 @@ static void fetch_task(void *) {
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
 
-    // Auth Tuya
-    if (!tuya_api_auth(_tuya_id, _tuya_sec)) {
+    // Auth Tuya : init credentials puis récupère le token
+    tuya_api_init(_tuya_id, _tuya_sec);
+    if (!tuya_api_get_token()) {
         strlcpy(_fres.err, "Auth Tuya echouee", sizeof(_fres.err));
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
@@ -247,11 +247,11 @@ static void fetch_task(void *) {
     // Status de chaque device
     for (int i = 0; i < _dev_count && _app_active; i++) {
         char *buf = (char *)malloc(2048);
-        if (buf && tuya_api_get_status(_devices[i].id, buf, 2048)) {
+        if (buf && tuya_api_get_device_status(_devices[i].id, buf, 2048)) {
             parse_status(i, buf);
         }
         free(buf);
-        vTaskDelay(pdMS_TO_TICKS(100)); // Throttle
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     _fres.ok = true;
@@ -282,7 +282,7 @@ static void do_close() {
     _list_cont     = nullptr;
     for (int i = 0; i < MAX_DEVICES; i++) { _dev_cards[i] = nullptr; _lbl_power[i] = nullptr; _lbl_sensor[i] = nullptr; }
     ui_launcher_return();             // retour au launcher avec animation
-    lv_obj_delete_delayed(_scr_to_delete, 350); // supprime l'écran après l'anim
+    lv_obj_delete_delayed(_scr_to_delete, 350);
     _scr_to_delete = nullptr;
     Serial.println("[APP/SMARTHOME] Fermee");
 }
@@ -301,7 +301,6 @@ void smarthome_app_start() {
     memset(_lbl_power, 0, sizeof(_lbl_power));
     memset(_lbl_sensor, 0, sizeof(_lbl_sensor));
 
-    // ─── Écran ────────────────────────────────────────────────────────────────
     _scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(_scr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
@@ -353,7 +352,7 @@ void smarthome_app_start() {
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 56);
 
-    // ─── Liste scrollable des devices (2 colonnes) ────────────────────────────
+    // Liste scrollable 2 colonnes
     _list_cont = lv_obj_create(_scr);
     lv_obj_set_size(_list_cont, LV_HOR_RES, LV_VER_RES - 56);
     lv_obj_align(_list_cont, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -367,7 +366,6 @@ void smarthome_app_start() {
     lv_obj_set_style_pad_row(_list_cont, 8, 0);
     lv_obj_set_style_pad_column(_list_cont, 8, 0);
 
-    // Chargement écran
     lv_scr_load_anim(_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
     start_fetch();
 }
