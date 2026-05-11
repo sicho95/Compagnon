@@ -1,12 +1,11 @@
 # SmartHome Integration — Sans serveur local
 
-Cette intégration contrôle tes appareils **uniquement via les clouds existants** (Tuya + SinricPro + Ecovacs), sans Home Assistant ni autre serveur local.
+Cette intégration contrôle tes appareils **uniquement via les clouds Tuya et Ecovacs**, sans Home Assistant ni autre serveur local.
 
 ## Architecture
 
 ```
-ESP32 ──HTTPS──► Tuya Cloud API   → lumières Zigbee/WiFi, capteurs temp/humidité
-ESP32 ──WSS──►  SinricPro Cloud   → prises connectées Alexa
+ESP32 ──HTTPS──► Tuya Cloud API   → lumières Zigbee/WiFi, capteurs temp/humidité, prises
 ESP32 ──HTTPS──► Ecovacs Cloud    → aspirateur X8 Pro Omni
 ```
 
@@ -18,11 +17,7 @@ ESP32 ──HTTPS──► Ecovacs Cloud    → aspirateur X8 Pro Omni
 #define TUYA_CLIENT_SECRET  "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 #define TUYA_SENSOR_ID      "device_id_de_ton_capteur"
 #define TUYA_LIGHT_ID       "device_id_de_ta_lumiere"
-
-// SinricPro (https://sinric.pro → ton app)
-#define SINRIC_APP_KEY      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-#define SINRIC_APP_SECRET   "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-#define SINRIC_PLUG_ID      "device_id_sinric_de_ta_prise"
+#define TUYA_PLUG_ID        "device_id_de_ta_prise"
 
 // Ecovacs
 #define ECOVACS_EMAIL          "ton@email.com"
@@ -39,24 +34,20 @@ ESP32 ──HTTPS──► Ecovacs Cloud    → aspirateur X8 Pro Omni
 
 ```cpp
 #include "src/api/tuya_api.h"
-#include "src/api/sinricpro_bridge.h"
 #include "src/ui/smarthome_app.h"
 #include "src/ui/ecovacs_app.h"
 
 TuyaAPI tuya(TUYA_CLIENT_ID, TUYA_CLIENT_SECRET);
-SinricProBridge sinric(SINRIC_APP_KEY, SINRIC_APP_SECRET);
-SmartHomeApp smartHomeApp(&tuya, &sinric);
+SmartHomeApp smartHomeApp(&tuya);
 EcovacsApp ecovacsApp;
 
 void setup() {
     // ... WiFi connect ...
     tuya.refreshToken();
-    sinric.begin();
     // ... register dans ton app manager ...
 }
 
 void loop() {
-    sinric.handle();  // WebSocket SinricPro
     // refresh toutes les 30s
     static unsigned long lastRefresh = 0;
     if (millis() - lastRefresh > 30000) {
@@ -71,5 +62,4 @@ void loop() {
 ## Libs Arduino nécessaires
 
 - `ArduinoJson` >= 7.x
-- `SinricPro` par Boris Jaeger (library manager)
 - `HTTPClient` (inclus ESP32 Arduino core)

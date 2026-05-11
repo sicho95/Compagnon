@@ -1,19 +1,18 @@
 #pragma once
 #include <lvgl.h>
 #include "../api/tuya_api.h"
-#include "../api/sinricpro_bridge.h"
 
 // ============================================================
 // SmartHome App — UI LVGL
 // Affiche :
 //  - Capteurs temp/humidité (Tuya)
 //  - Contrôle lumières (Tuya)
-//  - Contrôle prises Alexa (SinricPro)
+//  - Contrôle prise connectée (Tuya)
 // ============================================================
 
 class SmartHomeApp {
 public:
-    SmartHomeApp(TuyaAPI* tuya, SinricProBridge* sinric);
+    SmartHomeApp(TuyaAPI* tuya);
 
     void        create(lv_obj_t* parent);   // créer l'UI
     void        destroy();                  // libérer l'UI
@@ -21,7 +20,6 @@ public:
 
 private:
     TuyaAPI*            _tuya;
-    SinricProBridge*    _sinric;
 
     lv_obj_t*           _root;
     lv_obj_t*           _temp_label;
@@ -32,7 +30,7 @@ private:
     lv_obj_t*           _status_label;
 
     // IDs devices — à configurer dans config.h
-    // TUYA_SENSOR_ID, TUYA_LIGHT_ID, SINRIC_PLUG_ID
+    // TUYA_SENSOR_ID, TUYA_LIGHT_ID, TUYA_PLUG_ID
 
     static void _onLightToggle(lv_event_t* e);
     static void _onBrightnessChange(lv_event_t* e);
@@ -41,4 +39,5 @@ private:
     void        _setStatus(const char* msg);
     void        _refreshSensor();
     void        _refreshLight();
+    void        _refreshPlug();
 };

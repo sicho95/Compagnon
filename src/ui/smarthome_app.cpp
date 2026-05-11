@@ -8,12 +8,12 @@
 #ifndef TUYA_LIGHT_ID
 #define TUYA_LIGHT_ID   "YOUR_TUYA_LIGHT_DEVICE_ID"
 #endif
-#ifndef SINRIC_PLUG_ID
-#define SINRIC_PLUG_ID  "YOUR_SINRIC_PLUG_DEVICE_ID"
+#ifndef TUYA_PLUG_ID
+#define TUYA_PLUG_ID    "YOUR_TUYA_PLUG_DEVICE_ID"
 #endif
 
-SmartHomeApp::SmartHomeApp(TuyaAPI* tuya, SinricProBridge* sinric)
-    : _tuya(tuya), _sinric(sinric), _root(nullptr) {}
+SmartHomeApp::SmartHomeApp(TuyaAPI* tuya)
+    : _tuya(tuya), _root(nullptr) {}
 
 void SmartHomeApp::create(lv_obj_t* parent) {
     _root = lv_obj_create(parent);
@@ -29,7 +29,7 @@ void SmartHomeApp::create(lv_obj_t* parent) {
     lv_label_set_text(title, LV_SYMBOL_HOME " Maison");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
 
-    // --- Capteurs ---
+    // --- Capteurs temp/humidité ---
     lv_obj_t* sensor_card = lv_obj_create(_root);
     lv_obj_set_size(sensor_card, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(sensor_card, LV_FLEX_FLOW_ROW);
@@ -42,9 +42,9 @@ void SmartHomeApp::create(lv_obj_t* parent) {
     lv_label_set_text(_temp_label, LV_SYMBOL_CHARGE " --°C");
 
     _hum_label = lv_label_create(sensor_card);
-    lv_label_set_text(_hum_label, "💧 --%");
+    lv_label_set_text(_hum_label, "Hum: --%");
 
-    // --- Lumière ---
+    // --- Lumière (Tuya) ---
     lv_obj_t* light_row = lv_obj_create(_root);
     lv_obj_set_size(light_row, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(light_row, LV_FLEX_FLOW_ROW);
@@ -68,7 +68,7 @@ void SmartHomeApp::create(lv_obj_t* parent) {
     lv_slider_set_value(_brightness_slider, 500, LV_ANIM_OFF);
     lv_obj_add_event_cb(_brightness_slider, _onBrightnessChange, LV_EVENT_RELEASED, this);
 
-    // --- Prise Alexa ---
+    // --- Prise Tuya ---
     lv_obj_t* plug_row = lv_obj_create(_root);
     lv_obj_set_size(plug_row, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(plug_row, LV_FLEX_FLOW_ROW);
@@ -77,7 +77,7 @@ void SmartHomeApp::create(lv_obj_t* parent) {
     lv_obj_clear_flag(plug_row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* plug_label = lv_label_create(plug_row);
-    lv_label_set_text(plug_label, LV_SYMBOL_CHARGE " Prise Alexa");
+    lv_label_set_text(plug_label, LV_SYMBOL_CHARGE " Prise");
 
     _plug_sw = lv_switch_create(plug_row);
     lv_obj_add_event_cb(_plug_sw, _onPlugToggle, LV_EVENT_VALUE_CHANGED, this);
@@ -101,6 +101,7 @@ void SmartHomeApp::destroy() {
 void SmartHomeApp::update() {
     _refreshSensor();
     _refreshLight();
+    _refreshPlug();
 }
 
 void SmartHomeApp::_refreshSensor() {
@@ -110,7 +111,7 @@ void SmartHomeApp::_refreshSensor() {
         char buf[32];
         snprintf(buf, sizeof(buf), LV_SYMBOL_CHARGE " %.1f°C", temp);
         lv_label_set_text(_temp_label, buf);
-        snprintf(buf, sizeof(buf), "💧 %.0f%%", hum);
+        snprintf(buf, sizeof(buf), "Hum: %.0f%%", hum);
         lv_label_set_text(_hum_label, buf);
     }
 }
@@ -124,6 +125,17 @@ void SmartHomeApp::_refreshLight() {
             else           lv_obj_clear_state(_light_sw, LV_STATE_CHECKED);
         }
         lv_slider_set_value(_brightness_slider, dev.brightness, LV_ANIM_ON);
+    }
+}
+
+void SmartHomeApp::_refreshPlug() {
+    if (!_tuya || !_tuya->isTokenValid()) return;
+    TuyaDevice dev;
+    if (_tuya->getDeviceStatus(TUYA_PLUG_ID, dev)) {
+        if (dev.is_on != (bool)lv_obj_has_state(_plug_sw, LV_STATE_CHECKED)) {
+            if (dev.is_on) lv_obj_add_state(_plug_sw, LV_STATE_CHECKED);
+            else           lv_obj_clear_state(_plug_sw, LV_STATE_CHECKED);
+        }
     }
 }
 
@@ -155,8 +167,8 @@ void SmartHomeApp::_onPlugToggle(lv_event_t* e) {
     SmartHomeApp* self = (SmartHomeApp*)lv_event_get_user_data(e);
     bool on = lv_obj_has_state(self->_plug_sw, LV_STATE_CHECKED);
     self->_setStatus(on ? "Prise ON..." : "Prise OFF...");
-    if (self->_sinric) {
-        self->_sinric->reportSwitchState(SINRIC_PLUG_ID, on);
+    if (self->_tuya && self->_tuya->isTokenValid()) {
+        self->_tuya->switchDevice(TUYA_PLUG_ID, on);
     }
     self->_setStatus("");
 }
