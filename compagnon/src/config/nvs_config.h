@@ -5,6 +5,10 @@
  * Toutes les clés sont stockées dans le namespace unique "compagnon".
  * Elles arrivent exclusivement via BLE (cmd: set_api_key) depuis la PWA.
  *
+ * ⚠ IMPORTANT : la NVS ESP32 limite les noms de clés à 15 caractères max.
+ *   Tout nom plus long est silencieusement tronqué/ignoré, ce qui empêche
+ *   la lecture. Tous les NVS_KEY_* ci-dessous sont ≤ 15 caractères.
+ *
  * Usage :
  *   char key[128];
  *   if (nvs_get_api_key(NVS_KEY_METEO, key, sizeof(key))) { ... }
@@ -22,15 +26,18 @@
 // ── Namespace unique pour toutes les apps ─────────────────────────────────────
 #define NVS_NAMESPACE "compagnon"
 
-// ── Noms de clés ──────────────────────────────────────────────────────────────
-#define NVS_KEY_GROQ          "GROQ_API_KEY"
-#define NVS_KEY_GEMINI        "GEMINI_API_KEY"
-#define NVS_KEY_SERPER        "SERPER_API_KEY"
-#define NVS_KEY_OPENROUTER    "OPENROUTER_API_KEY"
-#define NVS_KEY_TWELVEDATA    "TWELVE_DATA_API_KEY"
-#define NVS_KEY_METEO         "METEO_CONCEPT_API_KEY"
-#define NVS_KEY_SPOTIFY_ID    "SPOTIFY_CLIENT_ID"
-#define NVS_KEY_SPOTIFY_SEC   "SPOTIFY_CLIENT_SECRET"
+// ── Noms de clés NVS (≤ 15 caractères, limite stricte ESP32-IDF) ─────────────
+// Les noms courts sont utilisés EN NVS UNIQUEMENT.
+// La PWA envoie les noms longs (ex: "GROQ_API_KEY") dans la commande BLE
+// set_api_key → le handler BLE doit mapper vers ces noms courts via ble_mgr.
+#define NVS_KEY_GROQ          "groq_key"         //  8 chars
+#define NVS_KEY_GEMINI        "gemini_key"        // 10 chars
+#define NVS_KEY_SERPER        "serper_key"        // 10 chars
+#define NVS_KEY_OPENROUTER    "openrouter_key"    // 14 chars
+#define NVS_KEY_TWELVEDATA    "twelvedata_key"    // 14 chars
+#define NVS_KEY_METEO         "meteo_key"         //  9 chars
+#define NVS_KEY_SPOTIFY_ID    "spotify_id"        // 10 chars
+#define NVS_KEY_SPOTIFY_SEC   "spotify_sec"       // 11 chars
 
 /** Lit une clé API depuis la NVS. Retourne true si trouvée et non vide. */
 bool nvs_get_api_key(const char *key_name, char *out, size_t out_len);
