@@ -49,9 +49,9 @@ static void touch_read_cb(lv_indev_t *dev, lv_indev_data_t *data) {
 }
 
 void hal_touch_init() {
-    // Restaurer la config I2C (peut avoir été modifiée par hal_pmu_init)
-    Wire.begin(IIC_SDA, IIC_SCL);
-    Wire.setClock(400000);
+    // NE PAS appeler Wire.begin() ici — le bus I2C est déjà initialisé par
+    // hal_pmu_init() (AXP2101 partage le même bus). Un double Wire.begin()
+    // corrompt l'état du driver I2C ESP32-S3 et provoque un crash/reboot.
 
     // Le CST9220 partage le reset (pin 2) avec l'écran : attendre le boot complet
     Serial.println("[HAL/TOUCH] Attente boot CST9220 (polling pur)...");
