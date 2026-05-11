@@ -11,7 +11,11 @@
 
 #define APP_COUNT 5
 #define LONG_MS   800
-#define BORDER_PX 5
+// Bordure noire : 5 px en haut/bas, 10 px à gauche/droite
+#define BORDER_TOP_PX    5
+#define BORDER_BOTTOM_PX 5
+#define BORDER_LEFT_PX   10
+#define BORDER_RIGHT_PX  10
 
 struct AppEntry {
     const char *label;
@@ -177,16 +181,16 @@ void ui_frame_to_front() {
     // lv_layer_sys() n'a pas besoin d'être explicitement remis au premier plan.
 }
 
-// ── Bordure noire 5 px sur les 4 bords via lv_layer_sys() ────────────────────
+// ── Bordure noire (5 px haut/bas, 10 px gauche/droite) via lv_layer_sys() ─────
 // Une seule implémentation — appelée une fois depuis ui_launcher_init()
 static void add_screen_border() {
     lv_obj_t *sys = lv_layer_sys();
 
     struct { int16_t x, y, w, h; } bands[4] = {
-        { 0,               0,                LCD_WIDTH,  BORDER_PX },  // haut
-        { 0,               LCD_HEIGHT - BORDER_PX, LCD_WIDTH, BORDER_PX },  // bas
-        { 0,               0,                BORDER_PX,  LCD_HEIGHT },  // gauche
-        { LCD_WIDTH - BORDER_PX, 0,           BORDER_PX,  LCD_HEIGHT },  // droite
+        { 0,                          0,                           LCD_WIDTH,           BORDER_TOP_PX    },  // haut
+        { 0,                          LCD_HEIGHT - BORDER_BOTTOM_PX, LCD_WIDTH,        BORDER_BOTTOM_PX },  // bas
+        { 0,                          0,                           BORDER_LEFT_PX,      LCD_HEIGHT       },  // gauche
+        { LCD_WIDTH - BORDER_RIGHT_PX, 0,                          BORDER_RIGHT_PX,     LCD_HEIGHT       },  // droite
     };
 
     for (int i = 0; i < 4; i++) {
@@ -282,7 +286,7 @@ void ui_launcher_init() {
     ble_mgr_set_music_cb(musique_ble_cmd);
 
     lv_scr_load(scr_launcher);
-    add_screen_border();  // bordure noire 5 px via lv_layer_sys() — toujours au-dessus
+    add_screen_border();  // bordure noire via lv_layer_sys() — toujours au-dessus
 
     Serial.println("[UI/LAUNCH] Launcher OK");
 }
