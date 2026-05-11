@@ -21,6 +21,7 @@
 #include "src/system/wifi_mgr.h"
 #include "src/net/ota.h"
 #include "src/net/ble_mgr.h"
+#include "src/config/nvs_config.h"
 #include "src/ui/status_bar.h"
 #include "src/ui/launcher.h"
 #include <ArduinoJson.h>
@@ -48,6 +49,73 @@ static void ble_wifi_prov_cb(const char *json) {
     wifi_mgr_provision(ssid, pwd);
 }
 
+// ─── Pont BLE → Agent Sync (dispatch commandes PWA) ──────────────────────────
+// La PWA envoie des commandes JSON via CHAR_AGENT_SYNC.
+// Commandes supportées :
+//   {"cmd":"set_api_key", "key":"METEO_CONCEPT_API_KEY", "val":"xxxxx"}
+//   {"cmd":"get_api_keys"}  → répond via ble_mgr_notify_agent_sync()
+//   {"cmd":"clear_api_key","key":"..."}
+static void ble_agent_sync_cb(const char *json) {
+    if (!json) return;
+    StaticJsonDocument<512> doc;
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str());
+        return;
+    }
+
+    const char *cmd = doc["cmd"] | "";
+
+    // ── set_api_key ──────────────────────────────────────────────────────────
+    if (strcmp(cmd, "set_api_key") == 0) {
+        const char *key = doc["key"] | "";
+        const char *val = doc["val"] | doc["value"] | "";
+        if (!key[0]) {
+            Serial.println("[BLE/AGENT] set_api_key: champ 'key' manquant");
+            return;
+        }
+        if (!val[0]) {
+            Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", key);
+            return;
+        }
+        bool ok = nvs_set_api_key(key, val);
+        Serial.printf("[BLE/AGENT] set_api_key %s → %s\n", key, ok ? "OK" : "ERREUR");
+
+        // Notifier la PWA du résultat
+        char ack[128];
+        snprintf(ack, sizeof(ack), "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}",
+                 key, ok ? "true" : "false");
+        ble_mgr_notify_agent_sync(ack);
+        return;
+    }
+
+    // ── get_api_keys ─────────────────────────────────────────────────────────
+    if (strcmp(cmd, "get_api_keys") == 0) {
+        char json_out[512];
+        nvs_list_api_keys_json(json_out, sizeof(json_out));
+        // Envelopper dans {"cmd":"api_keys_status","keys":{...}}
+        char resp[600];
+        snprintf(resp, sizeof(resp), "{\"cmd\":\"api_keys_status\",\"keys\":%s}", json_out);
+        ble_mgr_notify_agent_sync(resp);
+        Serial.println("[BLE/AGENT] get_api_keys envoyé");
+        return;
+    }
+
+    // ── clear_api_key ────────────────────────────────────────────────────────
+    if (strcmp(cmd, "clear_api_key") == 0) {
+        const char *key = doc["key"] | "";
+        if (!key[0]) return;
+        nvs_clear_api_key(key);
+        Serial.printf("[BLE/AGENT] clear_api_key %s\n", key);
+        char ack[128];
+        snprintf(ack, sizeof(ack), "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", key);
+        ble_mgr_notify_agent_sync(ack);
+        return;
+    }
+
+    Serial.printf("[BLE/AGENT] cmd inconnue: %s\n", cmd);
+}
+
 void setup() {
     Serial.begin(115200);
     delay(200);
@@ -62,7 +130,8 @@ void setup() {
     wifi_mgr_init();       // Portail captif "Compagnon_Setup"
     net_ota_init();        // ArduinoOTA (hostname: compagnon, port 3232)
     ble_mgr_init();        // BLE GATT : service GPS (push depuis téléphone)
-    ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);  // Provisioning WiFi depuis la PWA
+    ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);    // Provisioning WiFi depuis la PWA
+    ble_mgr_set_agent_sync_cb(ble_agent_sync_cb);  // Commandes PWA (set_api_key, etc.)
 
     orchestrator_init();   // Planificateur + cerveau (stubs V1)
     ui_launcher_init();    // Carousel 4 apps → charge l'écran
