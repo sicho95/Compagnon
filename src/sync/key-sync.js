@@ -7,6 +7,10 @@
  *  3. Clé absente sur ESP32 + présente en PWA → push BLE cmd:'set_api_key'
  *  4. Clé absente des deux côtés → listée dans report.missing
  *  5. Push manuel possible via forceApiKeySync()
+ *
+ * NOTE: L'ESP32 (nvs_config.cpp) attend le champ "val" (et non "value")
+ *       dans la commande set_api_key.
+ *       {"cmd":"set_api_key","key":"METEO_CONCEPT_API_KEY","val":"..."}
  */
 
 import { bleWrite, bleRead } from '../bt/ble.js';
@@ -27,7 +31,8 @@ export async function syncApiKeys() {
       if (deviceKeys[keyId] === true) { report.ok.push(keyId); continue; }
       if (!pwaValue || !pwaValue.trim()) { report.missing.push(keyId); continue; }
       try {
-        await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'set_api_key', key: keyId, value: pwaValue.trim() }));
+        // ⚠️ L'ESP32 attend "val", pas "value"
+        await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'set_api_key', key: keyId, val: pwaValue.trim() }));
         report.pushed.push(keyId);
         console.info('[key-sync] ✅', keyId);
       } catch (e) { console.warn('[key-sync] ❌', keyId, e.message); }
@@ -43,7 +48,8 @@ export async function forceApiKeySync() {
   for (const [keyId, pwaValue] of Object.entries(pwaKeys)) {
     if (!pwaValue || !pwaValue.trim()) { report.missing.push(keyId); continue; }
     try {
-      await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'set_api_key', key: keyId, value: pwaValue.trim() }));
+      // ⚠️ L'ESP32 attend "val", pas "value"
+      await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'set_api_key', key: keyId, val: pwaValue.trim() }));
       report.pushed.push(keyId);
     } catch (e) { report.error += keyId + ': ' + e.message + '\n'; }
   }
