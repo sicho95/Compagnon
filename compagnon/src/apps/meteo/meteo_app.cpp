@@ -3,11 +3,12 @@
  * Position GPS : BLE téléphone → dernière position NVS → Paris (fallback final).
  * Fetch async via FreeRTOS pour ne pas bloquer le thread LVGL.
  *
- * Clé API Météo Concept : fournie par la PWA via BLE
- *   commande : cfg:meteo_api_key:<VOTRE_CLE>
- *   La clé est persistée en NVS (namespace "cfg", clé "meteo_key").
+ * Clé API Météo Concept : stockée en NVS via nvs_config (namespace "compagnon",
+ *   clé NVS_KEY_METEO = "METEO_CONCEPT_API_KEY").
+ *   Écriture depuis la PWA via BLE → nvs_set_api_key(NVS_KEY_METEO, val).
  */
 #include "meteo_app.h"
+#include "../../config/nvs_config.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
 #include "../../net/ble_mgr.h"
@@ -18,32 +19,25 @@
 #include <Preferences.h>
 #include <time.h>
 
-// ─── Clé API Météo Concept (chargée depuis NVS, écrite par la PWA via BLE) ────
+// ─── Clé API Météo Concept (chargée depuis NVS via nvs_config) ───────────────
 char g_meteo_api_key[128] = {};
 
 static void load_meteo_key() {
-    Preferences p;
-    p.begin("cfg", true);
-    strlcpy(g_meteo_api_key, p.getString("meteo_key", "").c_str(), sizeof(g_meteo_api_key));
-    p.end();
+    nvs_get_api_key(NVS_KEY_METEO, g_meteo_api_key, sizeof(g_meteo_api_key));
 }
 
-// Appeler depuis le gestionnaire BLE quand la commande cfg:meteo_api_key:<val> arrive
 void meteo_set_api_key(const char *key) {
     strlcpy(g_meteo_api_key, key, sizeof(g_meteo_api_key));
-    Preferences p;
-    p.begin("cfg", false);
-    p.putString("meteo_key", key);
-    p.end();
+    nvs_set_api_key(NVS_KEY_METEO, key);
     Serial.printf("[METEO] Clé API mise à jour (%d chars)\n", (int)strlen(key));
 }
 
 // ─── Couleurs thème Météo ──────────────────────────────────────────────────────
-#define C_BG   0x000000   // fond noir AMOLED
+#define C_BG   0x000000
 #define C_TXT  0xFFCC44
 #define C_MUTED 0xAA8822
-#define C_CARD  0x1b5e20  // vert sombre semi-transparent
-#define C_ERR   0xFF4444  // rouge erreur
+#define C_CARD  0x1b5e20
+#define C_ERR   0xFF4444
 
 // ─── NVS pour la dernière position GPS connue ─────────────────────────────────
 static Preferences _prefs;
@@ -319,7 +313,7 @@ void meteo_app_start() {
     lv_obj_align(_lbl_gps, LV_ALIGN_TOP_MID, 0, 82);
 
     _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, g_meteo_api_key[0] ? "" : "Config clé API dans la PWA");
+    lv_label_set_text(_lbl_status, g_meteo_api_key[0] ? "" : "Config cle API dans la PWA");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_ERR), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 104);
@@ -327,7 +321,6 @@ void meteo_app_start() {
     static const int CARD_W = 140, CARD_H = 180, GAP = 12;
     int total_w = 3 * CARD_W + 2 * GAP;
     int start_x = (480 - total_w) / 2;
-    // card_y : centré verticalement sous le label GPS (~140px depuis le haut)
     int card_y  = 140;
 
     for (int i = 0; i < 3; i++) {
@@ -362,7 +355,7 @@ void meteo_app_start() {
 // ─── Tick ─────────────────────────────────────────────────────────────────────
 void meteo_app_tick() {
     if (!_app_active || !_scr) return;
-    if (g_meteo_api_key[0] == '\0') return; // pas de clé → ne pas appeler l'API
+    if (g_meteo_api_key[0] == '\0') return;
 
     double lat, lon;
     if (ble_mgr_get_gps(&lat, &lon)) {
@@ -383,7 +376,7 @@ void meteo_app_tick() {
 // ─── Stop ─────────────────────────────────────────────────────────────────────
 void meteo_app_stop() {
     _app_active = false;
-    if (_scr) { lv_obj_del(_scr); _scr = nullptr; }
+    if (_scr) { lv_obj_del_async(_scr); _scr = nullptr; }
     for (int i = 0; i < 3; i++) _cards[i] = nullptr;
     _lbl_gps = nullptr; _lbl_status = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
