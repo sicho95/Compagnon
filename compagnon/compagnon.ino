@@ -28,8 +28,6 @@
 #include <ArduinoJson.h>
 
 // ─── Mapping noms longs PWA → clés NVS courtes (≤ 15 chars) ──────────────────
-// La PWA envoie des noms longs (ex: "METEO_CONCEPT_API_KEY") mais la NVS ESP32
-// impose une limite stricte de 15 caractères. Ce mapping fait le pont.
 struct KeyMapping { const char *pwa_name; const char *nvs_name; };
 static const KeyMapping KEY_MAP[] = {
     { "GROQ_API_KEY",           NVS_KEY_GROQ         },
@@ -37,12 +35,11 @@ static const KeyMapping KEY_MAP[] = {
     { "SERPER_API_KEY",         NVS_KEY_SERPER       },
     { "OPENROUTER_API_KEY",     NVS_KEY_OPENROUTER   },
     { "TWELVE_DATA_API_KEY",    NVS_KEY_TWELVEDATA   },
-    { "TWELVEDATA_API_KEY",     NVS_KEY_TWELVEDATA   },  // variante PWA
+    { "TWELVEDATA_API_KEY",     NVS_KEY_TWELVEDATA   },
     { "METEO_CONCEPT_API_KEY",  NVS_KEY_METEO        },
-    { "METEO_API_KEY",          NVS_KEY_METEO        },  // variante courte
+    { "METEO_API_KEY",          NVS_KEY_METEO        },
     { "SPOTIFY_CLIENT_ID",      NVS_KEY_SPOTIFY_ID   },
     { "SPOTIFY_CLIENT_SECRET",  NVS_KEY_SPOTIFY_SEC  },
-    // Clés courtes déjà valides (passthrough)
     { NVS_KEY_GROQ,             NVS_KEY_GROQ         },
     { NVS_KEY_GEMINI,           NVS_KEY_GEMINI       },
     { NVS_KEY_SERPER,           NVS_KEY_SERPER       },
@@ -54,7 +51,6 @@ static const KeyMapping KEY_MAP[] = {
     { nullptr, nullptr }
 };
 
-// Retourne la clé NVS courte correspondant au nom PWA, ou nullptr si inconnu.
 static const char *resolve_nvs_key(const char *pwa_key) {
     if (!pwa_key || !pwa_key[0]) return nullptr;
     for (int i = 0; KEY_MAP[i].pwa_name != nullptr; i++) {
@@ -67,7 +63,7 @@ static const char *resolve_nvs_key(const char *pwa_key) {
 // ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
 static void ble_wifi_prov_cb(const char *json) {
     if (!json) return;
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;  // ArduinoJson v7+
     DeserializationError err = deserializeJson(doc, json);
     if (err) {
         Serial.print("[BLE/WIFI] JSON invalide: ");
@@ -84,10 +80,10 @@ static void ble_wifi_prov_cb(const char *json) {
     wifi_mgr_provision(ssid, pwd);
 }
 
-// ─── Pont BLE → Agent Sync (dispatch commandes PWA) ──────────────────────────
+// ─── Pont BLE → Agent Sync ──────────────────────────────────────────────────
 static void ble_agent_sync_cb(const char *json) {
     if (!json) return;
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;  // ArduinoJson v7+
     DeserializationError err = deserializeJson(doc, json);
     if (err) {
         Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str());
@@ -96,20 +92,11 @@ static void ble_agent_sync_cb(const char *json) {
 
     const char *cmd = doc["cmd"] | "";
 
-    // ── set_api_key ──────────────────────────────────────────────────────────
     if (strcmp(cmd, "set_api_key") == 0) {
         const char *pwa_key = doc["key"] | "";
         const char *val     = doc["val"] | doc["value"] | "";
-
-        if (!pwa_key[0]) {
-            Serial.println("[BLE/AGENT] set_api_key: champ 'key' manquant");
-            return;
-        }
-        if (!val[0]) {
-            Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", pwa_key);
-            return;
-        }
-
+        if (!pwa_key[0]) { Serial.println("[BLE/AGENT] set_api_key: champ 'key' manquant"); return; }
+        if (!val[0]) { Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", pwa_key); return; }
         const char *nvs_key = resolve_nvs_key(pwa_key);
         if (!nvs_key) {
             Serial.printf("[BLE/AGENT] set_api_key: clé PWA inconnue: '%s'\n", pwa_key);
@@ -120,11 +107,8 @@ static void ble_agent_sync_cb(const char *json) {
             ble_mgr_notify_agent_sync(ack);
             return;
         }
-
         bool ok = nvs_set_api_key(nvs_key, val);
-        Serial.printf("[BLE/AGENT] set_api_key '%s' → NVS '%s' : %s\n",
-                      pwa_key, nvs_key, ok ? "OK" : "ERREUR");
-
+        Serial.printf("[BLE/AGENT] set_api_key '%s' → NVS '%s' : %s\n", pwa_key, nvs_key, ok ? "OK" : "ERREUR");
         char ack[160];
         snprintf(ack, sizeof(ack),
                  "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}",
@@ -133,7 +117,6 @@ static void ble_agent_sync_cb(const char *json) {
         return;
     }
 
-    // ── get_api_keys ─────────────────────────────────────────────────────────
     if (strcmp(cmd, "get_api_keys") == 0) {
         char json_out[512];
         nvs_list_api_keys_json(json_out, sizeof(json_out));
@@ -144,15 +127,11 @@ static void ble_agent_sync_cb(const char *json) {
         return;
     }
 
-    // ── clear_api_key ────────────────────────────────────────────────────────
     if (strcmp(cmd, "clear_api_key") == 0) {
         const char *pwa_key = doc["key"] | "";
         if (!pwa_key[0]) return;
         const char *nvs_key = resolve_nvs_key(pwa_key);
-        if (!nvs_key) {
-            Serial.printf("[BLE/AGENT] clear_api_key: clé inconnue '%s'\n", pwa_key);
-            return;
-        }
+        if (!nvs_key) { Serial.printf("[BLE/AGENT] clear_api_key: clé inconnue '%s'\n", pwa_key); return; }
         nvs_clear_api_key(nvs_key);
         Serial.printf("[BLE/AGENT] clear_api_key '%s' → NVS '%s'\n", pwa_key, nvs_key);
         char ack[160];
@@ -170,47 +149,44 @@ void setup() {
     delay(200);
     Serial.println("\n[BOOT] Nestor Compagnon — demarrage");
 
-    hal_pmu_init();        // Rails ALDO1/ALDO3 + IRQ bouton power
+    hal_pmu_init();
 
-    // ⚠ DOIT être appelé avant toute opération NVS (Preferences).
-    // Crée le namespace "compagnon" dans la flash si absent (première mise
-    // en route ou après erase_flash), évitant ainsi les erreurs répétées
-    // "nvs_open failed: NOT_FOUND" dans tous les modules qui lisent la NVS.
+    // ⚠ DOIT être appelé avant toute opération NVS — crée le namespace
+    // "compagnon" si absent, évitant nvs_open NOT_FOUND dans tous les modules.
     nvs_config_init();
 
-    hal_display_init();    // AMOLED QSPI + LVGL (reset pin 2)
-    hal_touch_init();      // Attente 500 ms + CST9220 0x5A/0x1A
-    hal_imu_init();        // QMI8658
+    hal_display_init();
+    hal_touch_init();
+    hal_imu_init();
 
-    ui_status_bar_init();  // Barre d'état (toujours au-dessus)
-    wifi_mgr_init();       // Portail captif "Compagnon_Setup"
-    net_ota_init();        // ArduinoOTA (hostname: compagnon, port 3232)
-    ble_mgr_init();        // BLE GATT : service GPS (push depuis téléphone)
-    ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);    // Provisioning WiFi depuis la PWA
-    ble_mgr_set_agent_sync_cb(ble_agent_sync_cb);  // Commandes PWA (set_api_key, etc.)
+    ui_status_bar_init();
+    wifi_mgr_init();
+    net_ota_init();
+    ble_mgr_init();
+    ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);
+    ble_mgr_set_agent_sync_cb(ble_agent_sync_cb);
 
-    orchestrator_init();   // Planificateur + cerveau (stubs V1)
-    ui_launcher_init();    // Carousel 4 apps → charge l'écran
+    orchestrator_init();
+    ui_launcher_init();
 
-    // Appui long bouton power → menu Veille / Arrêt complet
     hal_pmu_set_long_press_cb(ui_power_menu_show);
 
     Serial.println("[BOOT] Pret.");
 }
 
 void loop() {
-    lv_timer_handler();    // LVGL — traitement des événements UI
+    lv_timer_handler();
 
-    hal_pmu_tick();        // Lecture IRQ AXP2101 (short/long press)
-    wifi_mgr_tick();       // Maintien connexion + portail captif
-    net_ota_tick();        // Écoute OTA Arduino IDE
-    ble_mgr_tick();        // BLE events (GPS depuis téléphone)
+    hal_pmu_tick();
+    wifi_mgr_tick();
+    net_ota_tick();
+    ble_mgr_tick();
 
-    ui_status_bar_tick();  // Mise à jour heure + batterie (toutes les 10 s)
-    hal_imu_tick();        // Lecture orientation + détection changement
+    ui_status_bar_tick();
+    hal_imu_tick();
     if (hal_imu_changed()) {
         static const lv_display_rotation_t rot_map[] = {
-            LV_DISPLAY_ROTATION_270,  // ORIENT_PORTRAIT     (défaut boot)
+            LV_DISPLAY_ROTATION_270,  // ORIENT_PORTRAIT
             LV_DISPLAY_ROTATION_0,    // ORIENT_LANDSCAPE_L
             LV_DISPLAY_ROTATION_90,   // ORIENT_PORTRAIT_INV
             LV_DISPLAY_ROTATION_180,  // ORIENT_LANDSCAPE_R
@@ -218,8 +194,8 @@ void loop() {
         lv_display_set_rotation(hal_display_get(), rot_map[hal_imu_orientation()]);
     }
 
-    orchestrator_tick();      // Boucle cerveau / sync agents
-    ui_launcher_btn_tick();   // Polling boutons hors timer LVGL (latence ~5 ms max)
+    orchestrator_tick();
+    ui_launcher_btn_tick();
 
-    delay(1);   // 1ms → LVGL plus réactif (~1000 Hz max vs 200 Hz)
+    delay(1);
 }
