@@ -4,37 +4,31 @@
  * Refresh : 90 s si marché ouvert (9h-18h lun-ven), 10 min sinon
  * Résolution : 480×480 px (écran carré Compagnon)
  *
- * Clé API Twelve Data : fournie par la PWA via BLE
- *   commande : cfg:twelve_data_key:<VOTRE_CLE>
- *   La clé est persistée en NVS (namespace "cfg", clé "twelve_key").
+ * Clé API Twelve Data : stockée en NVS via nvs_config (namespace "compagnon",
+ *   clé NVS_KEY_TWELVEDATA = "TWELVE_DATA_API_KEY").
+ *   Écriture depuis la PWA via BLE → nvs_set_api_key(NVS_KEY_TWELVEDATA, val).
  */
 #include "bourse_app.h"
+#include "../../config/nvs_config.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
-#include <Preferences.h>
 #include <time.h>
 
-// ─── Clé API Twelve Data (chargée depuis NVS, écrite par la PWA via BLE) ──────
+// ─── Clé API Twelve Data (chargée depuis NVS via nvs_config) ──────────────────
 char g_twelve_data_key[64] = {};
 
 static void load_twelve_key() {
-    Preferences p;
-    p.begin("cfg", true);
-    strlcpy(g_twelve_data_key, p.getString("twelve_key", "").c_str(), sizeof(g_twelve_data_key));
-    p.end();
+    nvs_get_api_key(NVS_KEY_TWELVEDATA, g_twelve_data_key, sizeof(g_twelve_data_key));
 }
 
-// Appeler depuis le gestionnaire BLE quand la commande cfg:twelve_data_key:<val> arrive
+// Appeler depuis le gestionnaire BLE quand la commande set_api_key:TWELVE_DATA_API_KEY:<val> arrive
 void bourse_set_twelve_key(const char *key) {
     strlcpy(g_twelve_data_key, key, sizeof(g_twelve_data_key));
-    Preferences p;
-    p.begin("cfg", false);
-    p.putString("twelve_key", key);
-    p.end();
+    nvs_set_api_key(NVS_KEY_TWELVEDATA, key);
     Serial.printf("[BOURSE] Clé Twelve Data mise à jour (%d chars)\n", (int)strlen(key));
 }
 
@@ -320,7 +314,8 @@ void bourse_app_tick() {
 // ─── Stop ─────────────────────────────────────────────────────────────────────
 void bourse_app_stop() {
     _app_active = false;
-    if (_scr) { lv_obj_del(_scr); _scr = nullptr; }
+    // lv_obj_del_async : évite de supprimer un écran actif pendant une animation LVGL
+    if (_scr) { lv_obj_del_async(_scr); _scr = nullptr; }
     for (int i = 0; i < NB_TICKERS; i++) _rows[i] = nullptr;
     _lbl_status = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
