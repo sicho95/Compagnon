@@ -1,8 +1,9 @@
 #include "ota.h"
 #include <ArduinoOTA.h>
-#include "../config/secrets.h"
 
+// Mot de passe OTA local — pas de secrets.h, tout est dans NVS pour les clés API
 #define OTA_HOSTNAME  "compagnon"
+#define OTA_PASSWORD  "nestor_ota"
 
 void net_ota_init() {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
