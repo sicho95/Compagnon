@@ -25,7 +25,6 @@ static void load_twelve_key() {
     nvs_get_api_key(NVS_KEY_TWELVEDATA, g_twelve_data_key, sizeof(g_twelve_data_key));
 }
 
-// Appeler depuis le gestionnaire BLE quand la commande set_api_key:TWELVE_DATA_API_KEY:<val> arrive
 void bourse_set_twelve_key(const char *key) {
     strlcpy(g_twelve_data_key, key, sizeof(g_twelve_data_key));
     nvs_set_api_key(NVS_KEY_TWELVEDATA, key);
@@ -69,6 +68,17 @@ static bool     _app_active   = false;
 static uint32_t _last_fetch   = 0;
 static volatile bool _fetch_running = false;
 static char     _err_buf[64]  = {};
+
+// ─── Suppression différée (après fin d'animation de retour) ──────────────────
+static lv_obj_t *_scr_to_delete = nullptr;
+
+static void anim_ready_cb(lv_anim_t *a) {
+    LV_UNUSED(a);
+    if (_scr_to_delete) {
+        lv_obj_del(_scr_to_delete);
+        _scr_to_delete = nullptr;
+    }
+}
 
 // ─── Marché ouvert ? (9h-18h lun-ven, heure locale) ──────────────────────────
 static bool market_open() {
@@ -224,8 +234,30 @@ static void fetch_task(void *) {
     vTaskDelete(NULL);
 }
 
-// ─── Bouton retour ────────────────────────────────────────────────────────────
-static void back_cb(lv_event_t *) { bourse_app_stop(); ui_launcher_return(); }
+// ─── Retour safe : attend la fin de l'animation avant de supprimer _scr ───────
+static void do_close() {
+    if (!_app_active) return;   // anti-double-appel
+    _app_active    = false;
+    _fetch_running = false;
+    orchestrator_set_app(APP_LAUNCHER);
+    Serial.println("[APP/BOURSE] Fermée");
+
+    _scr_to_delete = _scr;
+    _scr           = nullptr;
+    _lbl_status    = nullptr;
+    for (int i = 0; i < NB_TICKERS; i++) _rows[i] = nullptr;
+
+    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+
+    lv_anim_t *anim = lv_screen_get_active_anim();
+    if (anim) {
+        lv_anim_set_ready_cb(anim, anim_ready_cb);
+    } else {
+        if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    }
+}
+
+static void back_cb(lv_event_t *) { do_close(); }
 
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void bourse_app_start() {
@@ -237,7 +269,6 @@ void bourse_app_start() {
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bouton retour
     lv_obj_t *btn = lv_btn_create(_scr);
     lv_obj_set_size(btn, 52, 36);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
@@ -249,21 +280,18 @@ void bourse_app_start() {
     lv_obj_set_style_text_color(lb, lv_color_hex(C_TITLE), 0);
     lv_obj_center(lb);
 
-    // Titre
     lv_obj_t *title = lv_label_create(_scr);
     lv_label_set_text(title, "Bourse");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 50);
 
-    // Label statut
     _lbl_status = lv_label_create(_scr);
     lv_label_set_text(_lbl_status, g_twelve_data_key[0] ? "Chargement..." : "Config clé API dans la PWA");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_STATUS), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 86);
 
-    // 4 lignes ticker
     static const int ROW_H = 78;
     static const int GAP   = 8;
     static const int ROW_W = 450;
@@ -284,7 +312,6 @@ void bourse_app_start() {
         refresh_row(i);
     }
 
-    // Légende
     lv_obj_t *hint = lv_label_create(_scr);
     lv_label_set_text(hint, "Twelve Data | 90 s / 10 min");
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
@@ -300,7 +327,7 @@ void bourse_app_start() {
 // ─── Tick ─────────────────────────────────────────────────────────────────────
 void bourse_app_tick() {
     if (!_app_active || !_scr) return;
-    if (g_twelve_data_key[0] == '\0') return; // pas de clé → ne pas appeler l'API
+    if (g_twelve_data_key[0] == '\0') return;
     uint32_t now = millis();
     uint32_t interval = market_open() ? 90000UL : 600000UL;
     if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= interval)) {
@@ -311,13 +338,7 @@ void bourse_app_tick() {
     }
 }
 
-// ─── Stop ─────────────────────────────────────────────────────────────────────
+// ─── Stop (appelé depuis stop_current_and_return du launcher) ─────────────────
 void bourse_app_stop() {
-    _app_active = false;
-    // lv_obj_del_async : évite de supprimer un écran actif pendant une animation LVGL
-    if (_scr) { lv_obj_del_async(_scr); _scr = nullptr; }
-    for (int i = 0; i < NB_TICKERS; i++) _rows[i] = nullptr;
-    _lbl_status = nullptr;
-    orchestrator_set_app(APP_LAUNCHER);
-    Serial.println("[APP/BOURSE] Fermée");
+    do_close();   // logique centralisée — ui_launcher_return() sera appelé ensuite
 }

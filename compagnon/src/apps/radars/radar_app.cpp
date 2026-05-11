@@ -42,7 +42,7 @@ struct Radar {
 static Radar _radars[MAX_RADARS];
 static int   _nb_radars = 0;
 
-// ─── État UI — un seul pointeur _scr ─────────────────────────────────────────
+// ─── État UI ─────────────────────────────────────────────────────────────────
 static lv_obj_t *_scr        = nullptr;
 static lv_obj_t *_lbl_gps    = nullptr;
 static lv_obj_t *_lbl_status = nullptr;
@@ -53,6 +53,17 @@ static uint32_t _last_fetch  = 0;
 static double   _lat = 0.0, _lon = 0.0;
 static bool     _has_gps     = false;
 static volatile bool _fetch_running = false;
+
+// ─── Suppression différée (après fin d'animation de retour) ──────────────────
+static lv_obj_t *_scr_to_delete = nullptr;
+
+static void anim_ready_cb(lv_anim_t *a) {
+    LV_UNUSED(a);
+    if (_scr_to_delete) {
+        lv_obj_del(_scr_to_delete);
+        _scr_to_delete = nullptr;
+    }
+}
 
 // ─── Haversine (mètres) ───────────────────────────────────────────────────────
 static float haversine(double la1, double lo1, double la2, double lo2) {
@@ -171,7 +182,6 @@ static void fetch_task(void *) {
     int rc = http.GET();
 
     if (rc != 200) {
-        // Allouer le message sur le heap pour éviter la data race sur static char
         char *msg = (char *)malloc(48);
         if (msg) snprintf(msg, 48, "Lufop erreur %d", rc);
         http.end();
@@ -183,7 +193,6 @@ static void fetch_task(void *) {
         vTaskDelete(NULL); return;
     }
 
-    // 16 Ko : marge pour les réponses Lufop volumineuses sans OOM
     DynamicJsonDocument doc(16384);
     if (doc.capacity() == 0) {
         http.end();
@@ -234,8 +243,31 @@ static void fetch_task(void *) {
     vTaskDelete(NULL);
 }
 
-// ─── Bouton retour ────────────────────────────────────────────────────────────
-static void back_cb(lv_event_t *) { radar_app_stop(); ui_launcher_return(); }
+// ─── Retour safe : attend la fin de l'animation avant de supprimer _scr ───────
+static void do_close() {
+    if (!_app_active) return;   // anti-double-appel
+    _app_active    = false;
+    _fetch_running = false;
+    orchestrator_set_app(APP_LAUNCHER);
+    Serial.println("[APP/RADARS] Fermée");
+
+    _scr_to_delete = _scr;
+    _scr           = nullptr;
+    _list          = nullptr;
+    _lbl_gps       = nullptr;
+    _lbl_status    = nullptr;
+
+    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+
+    lv_anim_t *anim = lv_screen_get_active_anim();
+    if (anim) {
+        lv_anim_set_ready_cb(anim, anim_ready_cb);
+    } else {
+        if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    }
+}
+
+static void back_cb(lv_event_t *) { do_close(); }
 
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void radar_app_start() {
@@ -323,11 +355,7 @@ void radar_app_tick() {
     }
 }
 
-// ─── Stop ─────────────────────────────────────────────────────────────────────
+// ─── Stop (appelé depuis stop_current_and_return du launcher) ─────────────────
 void radar_app_stop() {
-    _app_active = false;
-    if (_scr) { lv_obj_del(_scr); _scr = nullptr; }
-    _list = nullptr; _lbl_gps = nullptr; _lbl_status = nullptr;
-    orchestrator_set_app(APP_LAUNCHER);
-    Serial.println("[APP/RADARS] Fermée");
+    do_close();   // logique centralisée — ui_launcher_return() sera appelé ensuite
 }

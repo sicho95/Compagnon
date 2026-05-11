@@ -82,6 +82,17 @@ static double   _lat = 48.8566, _lon = 2.3522;
 static bool     _gps_ok         = false;
 static volatile bool _fetch_running = false;
 
+// ─── Suppression différée (après fin d'animation de retour) ──────────────────
+static lv_obj_t *_scr_to_delete = nullptr;
+
+static void anim_ready_cb(lv_anim_t *a) {
+    LV_UNUSED(a);
+    if (_scr_to_delete) {
+        lv_obj_del(_scr_to_delete);
+        _scr_to_delete = nullptr;
+    }
+}
+
 // ─── Noms jours / mois ────────────────────────────────────────────────────────
 static const char *JOURS[] = {"dim","lun","mar","mer","jeu","ven","sam"};
 static const char *MOIS[]  = {"","jan","fev","mar","avr","mai","juin",
@@ -256,8 +267,36 @@ static void start_fetch() {
     xTaskCreatePinnedToCore(fetch_task, "meteo_http", 8192, nullptr, 1, nullptr, 0);
 }
 
-// ─── Bouton retour ────────────────────────────────────────────────────────────
-static void back_cb(lv_event_t *) { meteo_app_stop(); ui_launcher_return(); }
+// ─── Retour safe : attend la fin de l'animation avant de supprimer _scr ───────
+// Appelé aussi depuis meteo_app_stop() (long-press bouton physique via launcher)
+static void do_close() {
+    if (!_app_active) return;   // anti-double-appel
+    _app_active    = false;
+    _fetch_running = false;
+    orchestrator_set_app(APP_LAUNCHER);
+    Serial.println("[APP/METEO] Fermee");
+
+    // Conserve le ptr de l'écran courant pour suppression différée
+    _scr_to_delete = _scr;
+    _scr           = nullptr;
+    _lbl_gps       = nullptr;
+    _lbl_status    = nullptr;
+    for (int i = 0; i < 3; i++) _cards[i] = nullptr;
+
+    // Lance l'animation de retour vers le launcher
+    lv_scr_load_anim(scr_launcher, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+
+    // Attache anim_ready_cb pour supprimer l'ancien écran APRÈS l'animation
+    lv_anim_t *anim = lv_screen_get_active_anim();
+    if (anim) {
+        lv_anim_set_ready_cb(anim, anim_ready_cb);
+    } else {
+        // Pas d'animation en cours (délai 0 ou réduite) → suppression immédiate
+        if (_scr_to_delete) { lv_obj_del(_scr_to_delete); _scr_to_delete = nullptr; }
+    }
+}
+
+static void back_cb(lv_event_t *) { do_close(); }
 
 // ─── Création UI ──────────────────────────────────────────────────────────────
 void meteo_app_start() {
@@ -373,12 +412,7 @@ void meteo_app_tick() {
     }
 }
 
-// ─── Stop ─────────────────────────────────────────────────────────────────────
+// ─── Stop (appelé depuis stop_current_and_return du launcher) ─────────────────
 void meteo_app_stop() {
-    _app_active = false;
-    if (_scr) { lv_obj_del_async(_scr); _scr = nullptr; }
-    for (int i = 0; i < 3; i++) _cards[i] = nullptr;
-    _lbl_gps = nullptr; _lbl_status = nullptr;
-    orchestrator_set_app(APP_LAUNCHER);
-    Serial.println("[APP/METEO] Fermee");
+    do_close();   // logique centralisée — ui_launcher_return() sera appelé ensuite
 }
