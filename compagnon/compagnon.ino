@@ -40,6 +40,17 @@ static const KeyMapping KEY_MAP[] = {
     { "METEO_API_KEY",          NVS_KEY_METEO        },
     { "SPOTIFY_CLIENT_ID",      NVS_KEY_SPOTIFY_ID   },
     { "SPOTIFY_CLIENT_SECRET",  NVS_KEY_SPOTIFY_SEC  },
+    // Tuya domotique
+    { "TUYA_CLIENT_ID",         NVS_KEY_TUYA_ID      },
+    { "TUYA_CLIENT_SECRET",     NVS_KEY_TUYA_SEC     },
+    { NVS_KEY_TUYA_ID,          NVS_KEY_TUYA_ID      },
+    { NVS_KEY_TUYA_SEC,         NVS_KEY_TUYA_SEC     },
+    // Ecovacs robot
+    { "ECOVACS_EMAIL",          NVS_KEY_ECOVACS_U    },
+    { "ECOVACS_PASSWORD",       NVS_KEY_ECOVACS_P    },
+    { NVS_KEY_ECOVACS_U,        NVS_KEY_ECOVACS_U    },
+    { NVS_KEY_ECOVACS_P,        NVS_KEY_ECOVACS_P    },
+    // Clés courtes (pass-through)
     { NVS_KEY_GROQ,             NVS_KEY_GROQ         },
     { NVS_KEY_GEMINI,           NVS_KEY_GEMINI       },
     { NVS_KEY_SERPER,           NVS_KEY_SERPER       },
@@ -63,32 +74,22 @@ static const char *resolve_nvs_key(const char *pwa_key) {
 // ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
 static void ble_wifi_prov_cb(const char *json) {
     if (!json) return;
-    JsonDocument doc;  // ArduinoJson v7+
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) {
-        Serial.print("[BLE/WIFI] JSON invalide: ");
-        Serial.println(err.c_str());
-        return;
-    }
+    if (err) { Serial.print("[BLE/WIFI] JSON invalide: "); Serial.println(err.c_str()); return; }
     const char *ssid = doc["s"] | doc["ssid"] | "";
     const char *pwd  = doc["p"] | doc["pwd"]  | "";
-    if (!ssid || !ssid[0]) {
-        Serial.println("[BLE/WIFI] SSID vide — ignore");
-        return;
-    }
-    Serial.printf("[BLE/WIFI] Provision %s (len=%u)\n", ssid, (unsigned)strlen(pwd));
+    if (!ssid || !ssid[0]) { Serial.println("[BLE/WIFI] SSID vide — ignore"); return; }
+    Serial.printf("[BLE/WIFI] Provision %s\n", ssid);
     wifi_mgr_provision(ssid, pwd);
 }
 
 // ─── Pont BLE → Agent Sync ──────────────────────────────────────────────────
 static void ble_agent_sync_cb(const char *json) {
     if (!json) return;
-    JsonDocument doc;  // ArduinoJson v7+
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) {
-        Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str());
-        return;
-    }
+    if (err) { Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str()); return; }
 
     const char *cmd = doc["cmd"] | "";
 
@@ -99,20 +100,14 @@ static void ble_agent_sync_cb(const char *json) {
         if (!val[0]) { Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", pwa_key); return; }
         const char *nvs_key = resolve_nvs_key(pwa_key);
         if (!nvs_key) {
-            Serial.printf("[BLE/AGENT] set_api_key: clé PWA inconnue: '%s'\n", pwa_key);
             char ack[160];
-            snprintf(ack, sizeof(ack),
-                     "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":false,\"err\":\"unknown_key\"}",
-                     pwa_key);
+            snprintf(ack, sizeof(ack), "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":false,\"err\":\"unknown_key\"}", pwa_key);
             ble_mgr_notify_agent_sync(ack);
             return;
         }
         bool ok = nvs_set_api_key(nvs_key, val);
-        Serial.printf("[BLE/AGENT] set_api_key '%s' → NVS '%s' : %s\n", pwa_key, nvs_key, ok ? "OK" : "ERREUR");
         char ack[160];
-        snprintf(ack, sizeof(ack),
-                 "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}",
-                 pwa_key, ok ? "true" : "false");
+        snprintf(ack, sizeof(ack), "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}", pwa_key, ok ? "true" : "false");
         ble_mgr_notify_agent_sync(ack);
         return;
     }
@@ -123,7 +118,6 @@ static void ble_agent_sync_cb(const char *json) {
         char resp[600];
         snprintf(resp, sizeof(resp), "{\"cmd\":\"api_keys_status\",\"keys\":%s}", json_out);
         ble_mgr_notify_agent_sync(resp);
-        Serial.println("[BLE/AGENT] get_api_keys envoyé");
         return;
     }
 
@@ -131,12 +125,10 @@ static void ble_agent_sync_cb(const char *json) {
         const char *pwa_key = doc["key"] | "";
         if (!pwa_key[0]) return;
         const char *nvs_key = resolve_nvs_key(pwa_key);
-        if (!nvs_key) { Serial.printf("[BLE/AGENT] clear_api_key: clé inconnue '%s'\n", pwa_key); return; }
+        if (!nvs_key) return;
         nvs_clear_api_key(nvs_key);
-        Serial.printf("[BLE/AGENT] clear_api_key '%s' → NVS '%s'\n", pwa_key, nvs_key);
         char ack[160];
-        snprintf(ack, sizeof(ack),
-                 "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", pwa_key);
+        snprintf(ack, sizeof(ack), "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", pwa_key);
         ble_mgr_notify_agent_sync(ack);
         return;
     }
@@ -150,11 +142,7 @@ void setup() {
     Serial.println("\n[BOOT] Nestor Compagnon — demarrage");
 
     hal_pmu_init();
-
-    // ⚠ DOIT être appelé avant toute opération NVS — crée le namespace
-    // "compagnon" si absent, évitant nvs_open NOT_FOUND dans tous les modules.
     nvs_config_init();
-
     hal_display_init();
     hal_touch_init();
     hal_imu_init();
@@ -186,10 +174,10 @@ void loop() {
     hal_imu_tick();
     if (hal_imu_changed()) {
         static const lv_display_rotation_t rot_map[] = {
-            LV_DISPLAY_ROTATION_270,  // ORIENT_PORTRAIT
-            LV_DISPLAY_ROTATION_0,    // ORIENT_LANDSCAPE_L
-            LV_DISPLAY_ROTATION_90,   // ORIENT_PORTRAIT_INV
-            LV_DISPLAY_ROTATION_180,  // ORIENT_LANDSCAPE_R
+            LV_DISPLAY_ROTATION_270,
+            LV_DISPLAY_ROTATION_0,
+            LV_DISPLAY_ROTATION_90,
+            LV_DISPLAY_ROTATION_180,
         };
         lv_display_set_rotation(hal_display_get(), rot_map[hal_imu_orientation()]);
     }
