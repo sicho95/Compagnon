@@ -4,13 +4,14 @@
  *
  * Ordre d'initialisation critique :
  *   1. PMU  — active les rails ALDO1/ALDO3 et configure le bouton power
- *   2. Affichage — reset matériel pin 2 (partagé avec touch)
- *   3. Touch — attend 500 ms post-reset, puis init CST9220
- *   4. IMU  — QMI8658 (orientation)
- *   5. UI   — status bar (lv_layer_top), puis launcher
- *   6. Réseau — WiFiManager + OTA
- *   7. Orchestrateur — démarre le cerveau/planificateur
- *   8. Callback power — relie appui long PMU → menu UI
+ *   2. NVS  — crée le namespace "compagnon" si absent (flash vierge)
+ *   3. Affichage — reset matériel pin 2 (partagé avec touch)
+ *   4. Touch — attend 500 ms post-reset, puis init CST9220
+ *   5. IMU  — QMI8658 (orientation)
+ *   6. UI   — status bar (lv_layer_top), puis launcher
+ *   7. Réseau — WiFiManager + OTA
+ *   8. Orchestrateur — démarre le cerveau/planificateur
+ *   9. Callback power — relie appui long PMU → menu UI
  */
 
 #include "src/hal/display.h"
@@ -64,9 +65,6 @@ static const char *resolve_nvs_key(const char *pwa_key) {
 }
 
 // ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
-// La PWA envoie un JSON {"s":"SSID","p":"password"} via la caractéristique
-// WIFI_PROV du service BLE. Ce callback parse le JSON et appelle
-// wifi_mgr_provision() qui enregistre en NVS et reconnecte.
 static void ble_wifi_prov_cb(const char *json) {
     if (!json) return;
     StaticJsonDocument<256> doc;
@@ -87,11 +85,6 @@ static void ble_wifi_prov_cb(const char *json) {
 }
 
 // ─── Pont BLE → Agent Sync (dispatch commandes PWA) ──────────────────────────
-// La PWA envoie des commandes JSON via CHAR_AGENT_SYNC.
-// Commandes supportées :
-//   {"cmd":"set_api_key", "key":"METEO_CONCEPT_API_KEY", "val":"xxxxx"}
-//   {"cmd":"get_api_keys"}  → répond via ble_mgr_notify_agent_sync()
-//   {"cmd":"clear_api_key","key":"..."}
 static void ble_agent_sync_cb(const char *json) {
     if (!json) return;
     StaticJsonDocument<512> doc;
@@ -117,7 +110,6 @@ static void ble_agent_sync_cb(const char *json) {
             return;
         }
 
-        // Résoudre le nom long PWA → clé NVS courte (≤ 15 chars)
         const char *nvs_key = resolve_nvs_key(pwa_key);
         if (!nvs_key) {
             Serial.printf("[BLE/AGENT] set_api_key: clé PWA inconnue: '%s'\n", pwa_key);
@@ -133,7 +125,6 @@ static void ble_agent_sync_cb(const char *json) {
         Serial.printf("[BLE/AGENT] set_api_key '%s' → NVS '%s' : %s\n",
                       pwa_key, nvs_key, ok ? "OK" : "ERREUR");
 
-        // Notifier la PWA du résultat (on renvoie le nom PWA pour le matching côté JS)
         char ack[160];
         snprintf(ack, sizeof(ack),
                  "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}",
@@ -180,6 +171,13 @@ void setup() {
     Serial.println("\n[BOOT] Nestor Compagnon — demarrage");
 
     hal_pmu_init();        // Rails ALDO1/ALDO3 + IRQ bouton power
+
+    // ⚠ DOIT être appelé avant toute opération NVS (Preferences).
+    // Crée le namespace "compagnon" dans la flash si absent (première mise
+    // en route ou après erase_flash), évitant ainsi les erreurs répétées
+    // "nvs_open failed: NOT_FOUND" dans tous les modules qui lisent la NVS.
+    nvs_config_init();
+
     hal_display_init();    // AMOLED QSPI + LVGL (reset pin 2)
     hal_touch_init();      // Attente 500 ms + CST9220 0x5A/0x1A
     hal_imu_init();        // QMI8658
@@ -211,9 +209,6 @@ void loop() {
     ui_status_bar_tick();  // Mise à jour heure + batterie (toutes les 10 s)
     hal_imu_tick();        // Lecture orientation + détection changement
     if (hal_imu_changed()) {
-        // Correspondance orientation physique → rotation logique LVGL
-        // Rotation de base 270° (90° anti-horaire) pour l'orientation portrait,
-        // cohérente avec lv_display_set_rotation(270) dans hal_display_init()
         static const lv_display_rotation_t rot_map[] = {
             LV_DISPLAY_ROTATION_270,  // ORIENT_PORTRAIT     (défaut boot)
             LV_DISPLAY_ROTATION_0,    // ORIENT_LANDSCAPE_L
