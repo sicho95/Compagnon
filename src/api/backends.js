@@ -140,6 +140,20 @@ function waitForPuter(timeout = 8000) {
   });
 }
 
+// ─── Nettoyage des messages avant envoi ──────────────────────────────────────
+// Groq (et d'autres API OpenAI-compatibles) rejettent les messages system
+// avec un content vide ou null → 400 Bad Request.
+
+function sanitizeMessages(messages) {
+  return messages.filter(m => {
+    if (!m || typeof m !== 'object') return false;
+    const content = (m.content || '').trim();
+    // Supprimer les messages system vides — les autres rôles gardent leur place
+    if (m.role === 'system' && !content) return false;
+    return true;
+  });
+}
+
 // ─── callLLM ──────────────────────────────────────────────────────────────────
 
 export async function callLLM(backendId, { messages, agentConfig, tools }) {
@@ -149,7 +163,7 @@ export async function callLLM(backendId, { messages, agentConfig, tools }) {
   if (cfg.type === 'puter-qwen' || cfg.type === 'puter-gpt4o') {
     const puter = await waitForPuter();
     const model = cfg.model || (cfg.type === 'puter-gpt4o' ? 'gpt-4o' : 'qwen/qwen-plus');
-    const res   = await puter.ai.chat(messages, { model });
+    const res   = await puter.ai.chat(sanitizeMessages(messages), { model });
     const content = typeof res === 'string' ? res
       : res?.message?.content || res?.content || res?.toString() || '';
     return { message: { role: 'assistant', content } };
@@ -161,13 +175,15 @@ export async function callLLM(backendId, { messages, agentConfig, tools }) {
     if (cfg.requiresApiKey && !apiKey)
       throw new Error('Clé API manquante pour "' + cfg.label + '". Configure-la dans Réglages.');
 
+    const cleanMessages = sanitizeMessages(messages);
+
     const res = await fetch(cfg.baseUrl + cfg.chatPath, {
       method:  'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: 'Bearer ' + apiKey } : {}),
       },
-      body:   JSON.stringify({ model: cfg.model, messages, ...(tools?.length ? { tools } : {}) }),
+      body:   JSON.stringify({ model: cfg.model, messages: cleanMessages, ...(tools?.length ? { tools } : {}) }),
       signal: AbortSignal.timeout(30000),
     });
 
