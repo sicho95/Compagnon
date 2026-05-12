@@ -30,9 +30,13 @@
 // ── Tuya Cloud (domotique Alexa + SmartLife) ─────────────────────────────────
 #define NVS_KEY_TUYA_ID       "tuya_client_id"    // 14 chars
 #define NVS_KEY_TUYA_SEC      "tuya_client_sec"   // 15 chars
+#define NVS_KEY_TUYA_REGION   "tuya_region"       // 11 chars
+#define NVS_KEY_TUYA_USER     "tuya_user_id"      // 12 chars
 // ── Ecovacs (robot aspirateur) ───────────────────────────────────────────────
 #define NVS_KEY_ECOVACS_U     "ecovacs_user"      // 12 chars
 #define NVS_KEY_ECOVACS_P     "ecovacs_pass"      // 12 chars
+#define NVS_KEY_ECOVACS_CC    "ecovacs_cc"        // 10 chars
+#define NVS_KEY_ECOVACS_DEV   "ecovacs_dev"       // 11 chars
 
 /**
  * PWA_KEY_NAMES[][2] — correspondance NVS_KEY → nom long PWA

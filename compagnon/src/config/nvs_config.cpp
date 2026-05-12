@@ -6,6 +6,9 @@
  * LONGS PWA (ex: "METEO_CONCEPT_API_KEY") et non plus les noms courts NVS
  * ("meteo_key"). La PWA (key-sync.js) fait la comparaison sur les noms longs
  * → la détection "clé absente" fonctionnait jamais avant ce fix.
+ *
+ * 2026-05-12 : ajout TUYA_REGION, TUYA_USER_ID, ECOVACS_COUNTRY_CODE,
+ *              ECOVACS_DEVICE_ID (commit 28d2c58 settings-store.js).
  */
 #include "nvs_config.h"
 #include <Arduino.h>
@@ -25,8 +28,12 @@ static const char *KNOWN_KEYS[] = {
   NVS_KEY_SPOTIFY_SEC,
   NVS_KEY_TUYA_ID,
   NVS_KEY_TUYA_SEC,
+  NVS_KEY_TUYA_REGION,
+  NVS_KEY_TUYA_USER,
   NVS_KEY_ECOVACS_U,
   NVS_KEY_ECOVACS_P,
+  NVS_KEY_ECOVACS_CC,
+  NVS_KEY_ECOVACS_DEV,
   nullptr
 };
 
@@ -36,18 +43,22 @@ static const char *KNOWN_KEYS[] = {
  * ⚠ Ordre identique à KNOWN_KEYS[] ci-dessus.
  */
 const char * const PWA_KEY_NAMES[][2] = {
-  { NVS_KEY_GROQ,        "GROQ_API_KEY"          },
-  { NVS_KEY_GEMINI,      "GEMINI_API_KEY"         },
-  { NVS_KEY_SERPER,      "SERPER_API_KEY"         },
-  { NVS_KEY_OPENROUTER,  "OPENROUTER_API_KEY"     },
-  { NVS_KEY_TWELVEDATA,  "TWELVE_DATA_API_KEY"    },
-  { NVS_KEY_METEO,       "METEO_CONCEPT_API_KEY"  },
-  { NVS_KEY_SPOTIFY_ID,  "SPOTIFY_CLIENT_ID"      },
-  { NVS_KEY_SPOTIFY_SEC, "SPOTIFY_CLIENT_SECRET"  },
-  { NVS_KEY_TUYA_ID,     "TUYA_CLIENT_ID"         },
-  { NVS_KEY_TUYA_SEC,    "TUYA_CLIENT_SECRET"     },
-  { NVS_KEY_ECOVACS_U,   "ECOVACS_EMAIL"          },
-  { NVS_KEY_ECOVACS_P,   "ECOVACS_PASSWORD"       },
+  { NVS_KEY_GROQ,        "GROQ_API_KEY"           },
+  { NVS_KEY_GEMINI,      "GEMINI_API_KEY"          },
+  { NVS_KEY_SERPER,      "SERPER_API_KEY"          },
+  { NVS_KEY_OPENROUTER,  "OPENROUTER_API_KEY"      },
+  { NVS_KEY_TWELVEDATA,  "TWELVE_DATA_API_KEY"     },
+  { NVS_KEY_METEO,       "METEO_CONCEPT_API_KEY"   },
+  { NVS_KEY_SPOTIFY_ID,  "SPOTIFY_CLIENT_ID"       },
+  { NVS_KEY_SPOTIFY_SEC, "SPOTIFY_CLIENT_SECRET"   },
+  { NVS_KEY_TUYA_ID,     "TUYA_CLIENT_ID"          },
+  { NVS_KEY_TUYA_SEC,    "TUYA_CLIENT_SECRET"      },
+  { NVS_KEY_TUYA_REGION, "TUYA_REGION"             },
+  { NVS_KEY_TUYA_USER,   "TUYA_USER_ID"            },
+  { NVS_KEY_ECOVACS_U,   "ECOVACS_EMAIL"           },
+  { NVS_KEY_ECOVACS_P,   "ECOVACS_PASSWORD"        },
+  { NVS_KEY_ECOVACS_CC,  "ECOVACS_COUNTRY_CODE"    },
+  { NVS_KEY_ECOVACS_DEV, "ECOVACS_DEVICE_ID"       },
   { nullptr, nullptr }
 };
 
