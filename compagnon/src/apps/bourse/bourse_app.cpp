@@ -91,7 +91,7 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     bourse_app_stop();
-    orchestrator_launch_home();
+    orchestrator_set_app(APP_LAUNCHER);
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────

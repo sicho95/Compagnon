@@ -141,7 +141,7 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     meteo_app_stop();
-    orchestrator_launch_home();
+    orchestrator_set_app(APP_LAUNCHER);
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ static void build_ui() {
     lv_obj_set_style_bg_opa(_screen, LV_OPA_COVER, 0);
 
     lv_obj_t *title = lv_label_create(_screen);
-    lv_label_set_text(title, LV_SYMBOL_CLOUD " Météo");
+    lv_label_set_text(title, LV_SYMBOL_UP " Météo");  // LV_SYMBOL_CLOUD absent de LVGL9
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
