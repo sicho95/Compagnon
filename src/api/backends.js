@@ -1,15 +1,23 @@
 import { lsGet } from '../storage/agents-db.js';
+import { getNestorSettings, getBourseSettings, getMeteoSettings } from '../core/settings-store.js';
 
 let activeBackends     = {};
-let _groqDynamicModels = null; // Cache mémoire des modèles Groq (évite les appels répétés)
+let _groqDynamicModels = null;
+
+// ─── Lecture centralisée des clés API ────────────────────────────────────────
+// Toujours passer par settings-store pour éviter le mismatch lsGet/nsKey
+
+function getApiKey(envKey) {
+  switch (envKey) {
+    case 'GROQ_API_KEY':       return (getNestorSettings().apiKey          || '').trim();
+    case 'PERPLEXITY_API_KEY': return (getNestorSettings().openrouterApiKey || '').trim(); // à adapter si clé dédiée
+    case 'GEMINI_API_KEY':     return (getNestorSettings().geminiApiKey     || '').trim();
+    case 'SERPER_API_KEY':     return (getNestorSettings().serperApiKey     || '').trim();
+    default:                   return (lsGet(envKey)                        || '').trim();
+  }
+}
 
 // ─── Backends statiques de base ──────────────────────────────────────────────
-//
-// Utilisés si le fetch dynamique Groq échoue ou si aucune clé n'est renseignée.
-// La liste Groq est enrichie automatiquement par loadGroqModels() au démarrage.
-//
-// Clé unique GROQ_API_KEY pour TOUS les modèles Groq (llama, mixtral,
-// gemma, qwen, deepseek, kimi, etc.) — pas de duplication de champ.
 
 const DEFAULT_BACKENDS = {
   'groq-llama': {
@@ -19,7 +27,7 @@ const DEFAULT_BACKENDS = {
     chatPath:       '/chat/completions',
     model:          'llama-3.3-70b-versatile',
     requiresApiKey: true,
-    envKey:         'GROQ_API_KEY',  // Clé unique pour tous les backends Groq
+    envKey:         'GROQ_API_KEY',
     groqDynamic:    true,
   },
   'puter-qwen': {
@@ -40,19 +48,11 @@ const DEFAULT_BACKENDS = {
 };
 
 // ─── Fetch dynamique des modèles Groq ────────────────────────────────────────
-//
-// Récupère la liste complète des LLMs actifs via GET /openai/v1/models.
-// Une seule clé GROQ_API_KEY suffit pour tous les modèles disponibles.
-// Cache en mémoire — appel unique par session.
-//
-// Exclusions :
-//   - Whisper / distil-whisper (STT, pas LLM de chat)
-//   - Llama Guard (classification, pas LLM de chat)
 
 export async function loadGroqModels() {
-  const apiKey = (lsGet('GROQ_API_KEY') || '').trim();
-  if (!apiKey)            return; // Pas de clé → backends statiques uniquement
-  if (_groqDynamicModels) return; // Déjà chargé cette session
+  const apiKey = getApiKey('GROQ_API_KEY');
+  if (!apiKey)            return;
+  if (_groqDynamicModels) return;
 
   try {
     const res = await fetch('https://api.groq.com/openai/v1/models', {
@@ -73,12 +73,10 @@ export async function loadGroqModels() {
     if (models.length === 0) return;
     _groqDynamicModels = models;
 
-    // Supprimer les anciens backends groq-dynamic-* (re-chargement propre)
     Object.keys(activeBackends)
       .filter(k => k.startsWith('groq-dynamic-'))
       .forEach(k => delete activeBackends[k]);
 
-    // Créer un backend par modèle Groq — clé unique GROQ_API_KEY pour tous
     for (const m of models) {
       const id = 'groq-dynamic-' + m.id.replace(/[^a-z0-9-]/gi, '-');
       activeBackends[id] = {
@@ -88,12 +86,11 @@ export async function loadGroqModels() {
         chatPath:       '/chat/completions',
         model:          m.id,
         requiresApiKey: true,
-        envKey:         'GROQ_API_KEY',  // Clé unique
+        envKey:         'GROQ_API_KEY',
         groqDynamic:    true,
       };
     }
 
-    // Garder groq-llama comme alias pointant sur le modèle par défaut
     if (activeBackends['groq-llama']) {
       activeBackends['groq-llama'].model = 'llama-3.3-70b-versatile';
       activeBackends['groq-llama'].label = 'Groq — llama-3.3-70b-versatile (défaut)';
@@ -102,20 +99,15 @@ export async function loadGroqModels() {
     console.info('[Nestor/backends] Groq : ' + models.length + ' modèles chargés dynamiquement.');
   } catch (e) {
     console.warn('[Nestor/backends] Chargement modèles Groq échoué :', e.message);
-    // Non bloquant — on reste sur les backends statiques
   }
 }
 
-/**
- * Réinitialise le cache Groq.
- * À appeler depuis l'UI Réglages quand l'utilisateur change sa GROQ_API_KEY.
- */
 export async function resetGroqModelsCache() {
   _groqDynamicModels = null;
   Object.keys(activeBackends)
     .filter(k => k.startsWith('groq-dynamic-'))
     .forEach(k => delete activeBackends[k]);
-  await loadGroqModels(); // Rechargement immédiat avec la nouvelle clé
+  await loadGroqModels();
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -128,7 +120,7 @@ export async function initBackends() {
   } catch (_) {
     activeBackends = { ...DEFAULT_BACKENDS };
   }
-  await loadGroqModels(); // Enrichissement dynamique au démarrage
+  await loadGroqModels();
 }
 
 export function listBackends() {
@@ -154,7 +146,6 @@ export async function callLLM(backendId, { messages, agentConfig, tools }) {
   const cfg = activeBackends[backendId] || activeBackends['groq-llama'];
   if (!cfg) throw new Error('Aucun backend LLM disponible.');
 
-  // ── Puter (sans clé, secours) ────────────────────────────────────────────
   if (cfg.type === 'puter-qwen' || cfg.type === 'puter-gpt4o') {
     const puter = await waitForPuter();
     const model = cfg.model || (cfg.type === 'puter-gpt4o' ? 'gpt-4o' : 'qwen/qwen-plus');
@@ -164,10 +155,9 @@ export async function callLLM(backendId, { messages, agentConfig, tools }) {
     return { message: { role: 'assistant', content } };
   }
 
-  // ── OpenAI-compatible (Groq, Perplexity…) ────────────────────────────────
   if (cfg.type === 'openai-compatible') {
-    // Clé unique GROQ_API_KEY pour tous les backends Groq (dynamiques ou statiques)
-    const apiKey = cfg.envKey ? (lsGet(cfg.envKey) || '').trim() : '';
+    // Lecture via settings-store (cohérent avec la sauvegarde UI)
+    const apiKey = cfg.envKey ? getApiKey(cfg.envKey) : '';
     if (cfg.requiresApiKey && !apiKey)
       throw new Error('Clé API manquante pour "' + cfg.label + '". Configure-la dans Réglages.');
 
