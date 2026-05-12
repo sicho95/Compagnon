@@ -3,6 +3,7 @@
 // Symboles configurables : CAC40, BTC/EUR, EUR/USD, XAU/USD (or)
 
 import { lsGet, lsSet } from '../storage/agents-db.js';
+import { getBourseSettings } from '../core/settings-store.js';
 
 const LS_LAST_DATA = 'NESTOR_BOURSE_CACHE';
 const LS_CUSTOM    = 'NESTOR_BOURSE_CUSTOM';
@@ -70,7 +71,13 @@ function btn(text, variant, onClick) {
 export function renderBourseView(container, _state, _rerender) {
   container.innerHTML = '';
 
-  const apiKey = (lsGet('TWELVE_DATA_KEY') || '').trim();
+  // Lecture depuis settings-store (avec fallback sur ancienne clé localStorage)
+  const settings = getBourseSettings();
+  const apiKey = (
+    settings.twelveDataApiKey ||
+    lsGet('TWELVE_DATA_KEY') ||
+    ''
+  ).trim();
 
   const wrap = el('div', { display: 'flex', flexDirection: 'column', gap: '10px' });
 
@@ -86,7 +93,7 @@ export function renderBourseView(container, _state, _rerender) {
       <div style="font-size:12px;color:#888;line-height:1.5">
         Crée un compte gratuit sur
         <a href="https://twelvedata.com" target="_blank" style="color:#5af">twelvedata.com</a>
-        et saisis ta clé <b>TWELVE_DATA_KEY</b> dans les Réglages.
+        et saisis ta clé dans les <b>Réglages → onglet Bourse</b>.
       </div>`;
     wrap.appendChild(noKey);
     container.appendChild(wrap);

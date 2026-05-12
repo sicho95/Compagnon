@@ -154,7 +154,6 @@ function renderMusiqueSection(container, state, rerender) {
 }
 
 // ─── Companion ESP32 ──────────────────────────────────────────────────────────
-// Correction : l'export de companion.js est renderCompanionView (pas renderCompanionPanel)
 function renderCompanionSection(container, state, rerender) {
   const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
   backBtn.style.marginBottom = '10px';
@@ -400,11 +399,15 @@ function renderChatView(container, state, rerender) {
     state._thinking = true;
     rerender();
     try {
-      const reply = await orchestratorResolve(agent, state.chatHistory, state.agents);
-      state.chatHistory.push({ role:'assistant', content: reply });
+      // Correction : on passe le texte utilisateur en premier argument,
+      // puis les agents et l'agent orchestrateur — conformément à la signature
+      // resolve(userMsg, agents, orchestratorAgent) dans orchestrator-engine.js
+      const result = await orchestratorResolve(text, state.agents, agent);
+      const assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
+      state.chatHistory.push({ role:'assistant', content: assistantText });
       saveChatHistory(agent.id, state.chatHistory.filter(m => m.role !== 'system'));
       const ttsStatus = getTTSStatus();
-      if (ttsStatus.enabled && !isSilentMode()) speak(textForTTS(reply));
+      if (ttsStatus.enabled && !isSilentMode()) speak(textForTTS(assistantText));
     } catch (e) {
       state.chatHistory.push({ role:'assistant', content: '⚠️ Erreur : ' + e.message });
     } finally {
@@ -632,7 +635,6 @@ function renderFabriqueView(container, state, rerender) {
 // SETTINGS VIEW — Onglets par application
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderSettings(container, state, rerender) {
-  // ── Onglets ─────────────────────────────────────────────────────────────────
   const TABS = [
     { id: 'nestor',  label: '\uD83E\uDDE0 Nestor'  },
     { id: 'bourse',  label: '\uD83D\uDCC8 Bourse'  },
@@ -753,7 +755,6 @@ function renderTabBody(container, tabId, state, rerender) {
   }
 
   else if (tabId === 'systeme') {
-    // ── Sync BLE clés ────────────────────────────────────────────────────────
     const bleTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
     bleTitle.textContent = 'Synchronisation clés → ESP32';
     container.appendChild(bleTitle);
@@ -784,7 +785,6 @@ function renderTabBody(container, tabId, state, rerender) {
     const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'16px 0' });
     container.appendChild(sep);
 
-    // ── Danger zone ──────────────────────────────────────────────────────────
     const dangerTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
     dangerTitle.textContent = 'Danger';
     container.appendChild(dangerTitle);

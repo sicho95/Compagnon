@@ -3,6 +3,7 @@
 // Position : GPS BLE (state.gpsLat/Lon) → Paris par défaut
 
 import { lsGet, lsSet } from '../storage/agents-db.js';
+import { getMeteoSettings } from '../core/settings-store.js';
 
 const LS_CACHE = 'NESTOR_METEO_CACHE';
 const DEFAULT_LAT = 48.8566, DEFAULT_LON = 2.3522;  // Paris
@@ -101,7 +102,18 @@ function renderCard(fc, idx) {
 export function renderMeteoView(container, state, rerender) {
   container.innerHTML = '';
 
-  const token = lsGet('METEO_CONCEPT_KEY') || '';
+  // Lecture depuis settings-store (avec fallback sur ancienne clé localStorage)
+  const settings = getMeteoSettings();
+  const token = (
+    settings.meteoConcept ||
+    lsGet('METEO_CONCEPT_KEY') ||
+    ''
+  ).trim();
+
+  const configuredLat = Number(settings.defaultLat);
+  const configuredLon = Number(settings.defaultLon);
+  const defaultLat = Number.isFinite(configuredLat) && configuredLat !== 0 ? configuredLat : DEFAULT_LAT;
+  const defaultLon = Number.isFinite(configuredLon) && configuredLon !== 0 ? configuredLon : DEFAULT_LON;
 
   // En-tête localisation
   const locRow = el('div', { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' });
@@ -113,7 +125,7 @@ export function renderMeteoView(container, state, rerender) {
     lat = state.gpsLat; lon = state.gpsLon;
     locText = `GPS BLE: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
   } else {
-    lat = DEFAULT_LAT; lon = DEFAULT_LON;
+    lat = defaultLat; lon = defaultLon;
     locText = 'Paris (par défaut)';
   }
   locLabel.textContent = locText;
@@ -123,7 +135,7 @@ export function renderMeteoView(container, state, rerender) {
   if (!token) {
     const warn = el('div', { padding: '16px', background: '#1a1000', border: '1px solid #3a2800',
       borderRadius: '10px', fontSize: '12px', color: '#FFB74D', lineHeight: '1.6' });
-    warn.innerHTML = '⚠️ Clé API manquante.<br>Configure <b>METEO_CONCEPT_KEY</b> dans les Réglages.<br>'
+    warn.innerHTML = '⚠️ Clé API manquante.<br>Configure <b>METEO_CONCEPT_KEY</b> dans les Réglages → onglet Météo.<br>'
       + '<a href="https://api.meteo-concept.com" target="_blank" style="color:#5af">api.meteo-concept.com</a> (gratuit).';
     container.appendChild(warn);
     return;
