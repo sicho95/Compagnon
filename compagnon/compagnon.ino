@@ -26,6 +26,7 @@
 #include "src/ui/status_bar.h"
 #include "src/ui/launcher.h"
 #include <ArduinoJson.h>
+#include <WiFi.h>
 
 // ─── Mapping noms longs PWA → clés NVS courtes (≤ 15 chars) ──────────────────
 struct KeyMapping { const char *pwa_name; const char *nvs_name; };
