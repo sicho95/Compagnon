@@ -75,8 +75,8 @@ void hal_display_init() {
   lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_270);
 
   // ── Écran racine : fond noir + coins arrondis (LCD_CORNER_RADIUS) ──────────
-  // lv_obj_add_flag(LV_OBJ_FLAG_OVERFLOW_HIDDEN) + clip_corner assurent
-  // que tous les enfants (apps) sont masques dans le rayon defini.
+  // LV_OBJ_FLAG_CLIP_CORNER (LVGL 9.x) remplace LV_OBJ_FLAG_OVERFLOW_HIDDEN
+  // pour clipper les enfants (apps) dans le rayon defini.
   // Le fond noir derriere le radius correspond aux coins du boitier.
   lv_obj_t *scr = lv_screen_active();
   lv_obj_set_style_bg_color(scr,  lv_color_black(), LV_PART_MAIN);
@@ -84,7 +84,7 @@ void hal_display_init() {
   lv_obj_set_style_pad_all(scr,   0,                LV_PART_MAIN);
   lv_obj_set_style_border_width(scr, 0,             LV_PART_MAIN);
   lv_obj_set_style_radius(scr,    LCD_CORNER_RADIUS, LV_PART_MAIN);
-  lv_obj_add_flag(scr,            LV_OBJ_FLAG_OVERFLOW_HIDDEN);
+  lv_obj_add_flag(scr,            LV_OBJ_FLAG_CLIP_CORNER);
 
   Serial.printf("[HAL/DISP] LVGL OK - 480x480 radius=%d\n", LCD_CORNER_RADIUS);
 }
