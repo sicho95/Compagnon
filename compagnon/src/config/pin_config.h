@@ -8,15 +8,8 @@
 #define LCD_SDIO2    6
 #define LCD_SDIO3    7
 #define LCD_RESET    2
-#define LCD_WIDTH  480   // résolution physique CO5300
-#define LCD_HEIGHT 480   // résolution physique CO5300
-
-// Zone active LVGL (centrée dans LCD_WIDTH x LCD_HEIGHT, fond noir autour)
-// offset X = (480-460)/2 = 10, offset Y = (480-470)/2 = 5
-#define LV_SCREEN_W 460
-#define LV_SCREEN_H 470
-#define LV_SCREEN_X  10   // marge gauche/droite
-#define LV_SCREEN_Y   5   // marge haut/bas
+#define LCD_WIDTH  480
+#define LCD_HEIGHT 480
 
 // ── I2C partagé (Touch CST9220 + IMU QMI8658 + PMIC AXP2101) ──────────
 #define IIC_SDA     15
@@ -45,3 +38,7 @@
 #define PIN_ES7210_MCLK  16
 #define PIN_ES8311_DOUT   8
 #define PA               46   // amplificateur classe-D
+
+// ── Rayon des coins de l'ecran (boitier arrondi) ────────────────────────
+// Ajuster selon les arrondis réels du boitier (en pixels LVGL)
+#define LCD_CORNER_RADIUS  30
