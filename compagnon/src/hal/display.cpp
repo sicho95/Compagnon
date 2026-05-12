@@ -5,6 +5,7 @@ Arduino_DataBus *gfx_bus = nullptr;
 Arduino_CO5300  *gfx     = nullptr;
 
 static lv_display_t *s_disp = nullptr;
+static lv_obj_t     *s_cont = nullptr;  // conteneur actif 460x470
 
 #define BUF_LINES 40
 
@@ -60,7 +61,7 @@ void hal_display_init() {
 
   gfx->displayOn();
   gfx->setBrightness(200);
-  gfx->fillScreen(0x0000);
+  gfx->fillScreen(0x0000);  // fond noir dès l'init hardware
   Serial.println("[HAL/DISP] GFX OK");
 
   lv_init();
@@ -71,13 +72,35 @@ void hal_display_init() {
   buf2 = (lv_color_t *)ps_malloc(bytes);
   if (!buf1) { buf1 = (lv_color_t *)malloc(bytes); buf2 = nullptr; }
 
+  // Display LVGL = résolution physique complète
   s_disp = lv_display_create(LCD_WIDTH, LCD_HEIGHT);
   lv_display_set_buffers(s_disp, buf1, buf2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_flush_cb(s_disp, flush_cb);
   lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
-  // Rotation LVGL 270° (= 90° anti-horaire) — le CO5300 est en rotation 0 hardware
   lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_270);
-  Serial.println("[HAL/DISP] LVGL OK");
+
+  // ── Écran racine : fond noir, taille physique complète ────────────────────
+  // Après rotation 270°, les dimensions LVGL sont inversées :
+  // lv_screen_active() voit LCD_HEIGHT x LCD_WIDTH = 480x480 (carré, pas de diff)
+  lv_obj_t *scr = lv_screen_active();
+  lv_obj_set_style_bg_color(scr, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
+  lv_obj_set_style_border_width(scr, 0, LV_PART_MAIN);
+
+  // ── Conteneur actif 460x470 centré (bord noir de 10px gauche/droite, 5px haut/bas) ──
+  s_cont = lv_obj_create(scr);
+  lv_obj_set_size(s_cont, LV_SCREEN_W, LV_SCREEN_H);
+  lv_obj_set_pos(s_cont, LV_SCREEN_X, LV_SCREEN_Y);
+  lv_obj_set_style_bg_color(s_cont, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(s_cont, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_width(s_cont, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(s_cont, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(s_cont, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(s_cont, LV_OBJ_FLAG_SCROLLABLE);
+
+  Serial.println("[HAL/DISP] LVGL OK - zone active 460x470 centree");
 }
 
-lv_display_t *hal_display_get() { return s_disp; }
+lv_display_t *hal_display_get()      { return s_disp; }
+lv_obj_t     *hal_display_get_cont() { return s_cont; }
