@@ -405,7 +405,12 @@ function renderChatView(container, state, rerender) {
         const result = await orchestratorResolve(text, state.agents, agent);
         assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
       } else {
-        assistantText = await callLLM(agent.backendId || 'groq-llama', state.chatHistory);
+        // FIX: wrap messages array in the expected { messages } object
+        const r = await callLLM(agent.backendId || 'groq-llama', {
+          messages: state.chatHistory,
+          agentConfig: agent,
+        });
+        assistantText = r?.message?.content || '(pas de réponse)';
       }
       state.chatHistory.push({ role:'assistant', content: assistantText });
       saveChatHistory(agent.id, state.chatHistory.filter(m => m.role !== 'system'));
