@@ -14,8 +14,9 @@ import { renderBourseView, cleanupBourseView } from './bourse-view.js';
 import { renderMeteoView as renderMeteoContent } from './meteo-view.js';
 import { renderMusiqueView as renderMusiqueContent, cleanupMusiqueView } from './musique-view.js';
 import { getSettings, setSettings, getNestorSettings, getBourseSettings,
-         getMeteoSettings, getMusiqueSettings, setNestorSettings, setBourseSettings,
-         setMeteoSettings, setMusiqueSettings } from '../core/settings-store.js';
+         getMeteoSettings, getMusiqueSettings, getDomotiqueSettings,
+         setNestorSettings, setBourseSettings,
+         setMeteoSettings, setMusiqueSettings, setDomotiqueSettings } from '../core/settings-store.js';
 import { syncApiKeys, fetchDeviceKeyStatus } from '../sync/key-sync.js';
 import { bleConnected } from '../bt/ble.js';
 
@@ -401,11 +402,9 @@ function renderChatView(container, state, rerender) {
     try {
       let assistantText;
       if (agent.role === 'orchestrator') {
-        // Passe par l'orchestrateur complet (routing, outils, délégation)
         const result = await orchestratorResolve(text, state.agents, agent);
         assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
       } else {
-        // Appel direct au LLM de l'agent — pas d'orchestrateur, pas de délégation
         assistantText = await callLLM(agent.backendId || 'groq-llama', state.chatHistory);
       }
       state.chatHistory.push({ role:'assistant', content: assistantText });
@@ -640,11 +639,12 @@ function renderFabriqueView(container, state, rerender) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderSettings(container, state, rerender) {
   const TABS = [
-    { id: 'nestor',  label: '\uD83E\uDDE0 Nestor'  },
-    { id: 'bourse',  label: '\uD83D\uDCC8 Bourse'  },
-    { id: 'meteo',   label: '\uD83C\uDF24 Météo'   },
-    { id: 'musique', label: '\uD83C\uDFB5 Musique' },
-    { id: 'systeme', label: '⚙️ Système'  },
+    { id: 'nestor',    label: '\uD83E\uDDE0 Nestor'    },
+    { id: 'bourse',    label: '\uD83D\uDCC8 Bourse'    },
+    { id: 'meteo',     label: '\uD83C\uDF24 Météo'     },
+    { id: 'musique',   label: '\uD83C\uDFB5 Musique'   },
+    { id: 'domotique', label: '\uD83C\uDFE0 Domotique' },
+    { id: 'systeme',   label: '⚙️ Système'    },
   ];
 
   let activeTab = state._settingsTab || 'nestor';
@@ -697,28 +697,36 @@ function renderTabBody(container, tabId, state, rerender) {
     return wrap;
   };
 
+  const mkHint = (text) => {
+    const hint = el('div', { fontSize:'10px', color:'#444', marginBottom:'10px', lineHeight:'1.4', fontStyle:'italic' });
+    hint.textContent = text;
+    return hint;
+  };
+
+  const mkSectionTitle = (text) => {
+    const t = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase',
+      letterSpacing:'0.06em', marginBottom:'8px', marginTop:'4px' });
+    t.textContent = text;
+    return t;
+  };
+
+  const mkSeparator = () => {
+    const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'10px 0' });
+    return sep;
+  };
+
   if (tabId === 'nestor') {
     const s = getNestorSettings();
-    const sectionTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
-    sectionTitle.textContent = 'Clés API Nestor';
-    container.appendChild(sectionTitle);
-    container.appendChild(mkField('Groq API Key',        s.apiKey,          v => setNestorSettings({ apiKey: v })));
-    container.appendChild(mkField('Gemini API Key (TTS)', s.geminiApiKey,    v => setNestorSettings({ geminiApiKey: v })));
-    container.appendChild(mkField('Serper API Key',       s.serperApiKey,    v => setNestorSettings({ serperApiKey: v })));
+    container.appendChild(mkSectionTitle('Clés API Nestor'));
+    container.appendChild(mkField('Groq API Key',         s.apiKey,           v => setNestorSettings({ apiKey: v })));
+    container.appendChild(mkField('Gemini API Key (TTS)', s.geminiApiKey,     v => setNestorSettings({ geminiApiKey: v })));
+    container.appendChild(mkField('Serper API Key',       s.serperApiKey,     v => setNestorSettings({ serperApiKey: v })));
     container.appendChild(mkField('OpenRouter API Key',   s.openrouterApiKey, v => setNestorSettings({ openrouterApiKey: v })));
-
-    const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'10px 0' });
-    container.appendChild(sep);
-
-    const modelTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
-    modelTitle.textContent = 'LLM par défaut';
-    container.appendChild(modelTitle);
+    container.appendChild(mkSeparator());
+    container.appendChild(mkSectionTitle('LLM par défaut'));
     container.appendChild(mkField('Modèle Groq', s.model, v => setNestorSettings({ model: v }), 'text', 'llama3-70b-8192'));
-
     const ttsSection = el('div', { marginTop:'10px' });
-    const ttsTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
-    ttsTitle.textContent = 'Synthèse vocale';
-    ttsSection.appendChild(ttsTitle);
+    container.appendChild(mkSectionTitle('Synthèse vocale'));
     const silentToggle = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
     const silentLbl = el('span', { fontSize:'13px', color:'#bbb', flex:'1' });
     silentLbl.textContent = 'Mode silencieux';
@@ -732,124 +740,140 @@ function renderTabBody(container, tabId, state, rerender) {
 
   else if (tabId === 'bourse') {
     const s = getBourseSettings();
-    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
-    title.textContent = 'Clés API Bourse';
-    container.appendChild(title);
+    container.appendChild(mkSectionTitle('Clés API Bourse'));
     container.appendChild(mkField('TwelveData API Key', s.twelveDataApiKey, v => setBourseSettings({ twelveDataApiKey: v })));
   }
 
   else if (tabId === 'meteo') {
     const s = getMeteoSettings();
-    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
-    title.textContent = 'Clés API Météo';
-    container.appendChild(title);
+    container.appendChild(mkSectionTitle('Clés API Météo'));
     container.appendChild(mkField('Météo-Concept API Key', s.meteoConcept, v => setMeteoSettings({ meteoConcept: v })));
-    container.appendChild(mkField('Latitude par défaut', String(s.defaultLat), v => setMeteoSettings({ defaultLat: parseFloat(v) || 48.8566 }), 'text', '48.8566'));
-    container.appendChild(mkField('Longitude par défaut', String(s.defaultLon), v => setMeteoSettings({ defaultLon: parseFloat(v) || 2.3522 }), 'text', '2.3522'));
   }
 
   else if (tabId === 'musique') {
     const s = getMusiqueSettings();
-    const title = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'10px' });
-    title.textContent = 'Spotify Connect';
-    container.appendChild(title);
-    container.appendChild(mkField('Client ID Spotify',     s.spotifyClientId,     v => setMusiqueSettings({ spotifyClientId: v })));
-    container.appendChild(mkField('Client Secret Spotify', s.spotifyClientSecret, v => setMusiqueSettings({ spotifyClientSecret: v })));
-    container.appendChild(mkField('Redirect URI',          s.spotifyRedirectUri,  v => setMusiqueSettings({ spotifyRedirectUri: v }), 'text', 'https://…'));
+    container.appendChild(mkSectionTitle('Spotify'));
+    container.appendChild(mkField('Client ID',     s.spotifyClientId,     v => setMusiqueSettings({ spotifyClientId: v }),     'password', 'Spotify Client ID'));
+    container.appendChild(mkField('Client Secret', s.spotifyClientSecret, v => setMusiqueSettings({ spotifyClientSecret: v }), 'password', 'Spotify Client Secret'));
+    container.appendChild(mkField('Redirect URI',  s.spotifyRedirectUri,  v => setMusiqueSettings({ spotifyRedirectUri: v }),  'text',     'https://…'));
   }
 
-  else if (tabId === 'systeme') {
-    const bleTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
-    bleTitle.textContent = 'Synchronisation clés → ESP32';
-    container.appendChild(bleTitle);
+  // ─── DOMOTIQUE ──────────────────────────────────────────────────────────────
+  else if (tabId === 'domotique') {
+    const s = getDomotiqueSettings();
 
-    const statusEl = el('div', { fontSize:'11px', color:'#555', marginBottom:'8px', lineHeight:'1.6' });
-    statusEl.textContent = bleConnected() ? '\uD83D\uDD17 ESP32 connecté' : '⚠️ ESP32 non connecté — connexion BLE requise';
-    container.appendChild(statusEl);
+    // ── Tuya ──
+    container.appendChild(mkSectionTitle('🔌 Tuya Cloud'));
+    container.appendChild(mkHint('Créer un projet sur iot.tuya.com → Cloud → Projects. Copier Access ID et Access Secret depuis l\'onglet Overview.'));
+    container.appendChild(mkField('Access ID (Client ID)',     s.tuyaClientId,     v => setDomotiqueSettings({ tuyaClientId: v }),     'password', 'Client ID…'));
+    container.appendChild(mkField('Access Secret (Client Secret)', s.tuyaClientSecret, v => setDomotiqueSettings({ tuyaClientSecret: v }), 'password', 'Client Secret…'));
 
-    const syncBtn = btn('\uD83D\uDD04 Synchroniser les clés vers l\'ESP32', bleConnected() ? 'primary' : '', async () => {
-      if (!bleConnected()) { showToast('⚠️ Connecte d\'abord l\'ESP32 via Bluetooth', true); return; }
+    // Région Tuya — select
+    const regionWrap = el('div', { marginBottom:'12px' });
+    const regionLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
+    regionLbl.textContent = 'Région du datacenter';
+    const regionSelect = document.createElement('select');
+    Object.assign(regionSelect.style, { width:'100%', background:'#111', border:'1px solid #252525',
+      borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px' });
+    [['eu','Europe (eu)'],['us','Amérique (us)'],['cn','Chine (cn)'],['in','Inde (in)']].forEach(([val, label]) => {
+      const opt = document.createElement('option');
+      opt.value = val; opt.textContent = label;
+      if (val === (s.tuyaRegion || 'eu')) opt.selected = true;
+      regionSelect.appendChild(opt);
+    });
+    regionSelect.onchange = () => { setDomotiqueSettings({ tuyaRegion: regionSelect.value }); showToast('Région Tuya sauvegardée'); };
+    regionWrap.append(regionLbl, regionSelect);
+    container.appendChild(regionWrap);
+
+    container.appendChild(mkField('User ID (facultatif)', s.tuyaUserId, v => setDomotiqueSettings({ tuyaUserId: v }), 'text', 'UID Tuya lié…'));
+
+    container.appendChild(mkSeparator());
+
+    // ── Ecovacs ──
+    container.appendChild(mkSectionTitle('🤖 Ecovacs DEEBOT (X8 Pro Omni)'));
+    container.appendChild(mkHint('Identifiants du compte Ecovacs (app mobile). Le mot de passe sera hashé en MD5 côté agent avant envoi. Device ID auto-détecté à la première synchro.'));
+    container.appendChild(mkField('Email du compte',    s.ecovacsEmail,       v => setDomotiqueSettings({ ecovacsEmail: v }),       'text',     'email@…'));
+    container.appendChild(mkField('Mot de passe',       s.ecovacsPassword,    v => setDomotiqueSettings({ ecovacsPassword: v }),    'password', 'Mot de passe…'));
+    container.appendChild(mkField('Code pays',          s.ecovacsCountryCode, v => setDomotiqueSettings({ ecovacsCountryCode: v }), 'text',     'fr'));
+    container.appendChild(mkField('Device ID (auto)',   s.ecovacsDeviceId,    v => setDomotiqueSettings({ ecovacsDeviceId: v }),    'text',     'Auto-détecté…'));
+
+    container.appendChild(mkSeparator());
+
+    // ── Sync BLE ──
+    const syncRow = el('div', { display:'flex', gap:'8px', alignItems:'center', marginTop:'4px' });
+    const syncBtn = btn('📡 Sync vers ESP32', 'primary', async () => {
       syncBtn.textContent = '⏳ Sync…'; syncBtn.disabled = true;
       try {
         const report = await syncApiKeys();
-        const parts = [];
-        if (report.pushed.length) parts.push('✅ ' + report.pushed.length + ' poussée(s)');
-        if (report.ok.length)     parts.push('\uD83D\uDFE2 ' + report.ok.length + ' déjà OK');
-        if (report.missing.length) parts.push('⚠️ ' + report.missing.length + ' manquante(s) dans les deux');
-        showToast(parts.join(' · ') || 'Rien à faire');
-      } catch (e) {
-        showToast('❌ ' + e.message, true);
+        const pushed = report.pushed.filter(k => k.startsWith('TUYA_') || k.startsWith('ECOVACS_'));
+        showToast(pushed.length ? '✅ ' + pushed.length + ' clé(s) envoyée(s) à l\'ESP32' : '⚠️ Rien de nouveau à pousser');
+      } catch(e) {
+        showToast('❌ Sync échoué : ' + e.message, true);
       } finally {
-        syncBtn.textContent = '\uD83D\uDD04 Synchroniser les clés vers l\'ESP32';
-        syncBtn.disabled = false;
+        syncBtn.textContent = '📡 Sync vers ESP32'; syncBtn.disabled = false;
       }
     });
-    container.appendChild(syncBtn);
+    syncRow.appendChild(syncBtn);
+    const syncHint = el('span', { fontSize:'10px', color:'#444', flex:'1' });
+    syncHint.textContent = 'Pousse les clés domotique vers la NVS de l\'ESP32 via BLE.';
+    syncRow.appendChild(syncHint);
+    container.appendChild(syncRow);
+  }
 
-    const sep = el('div', { height:'1px', background:'#1a1a1a', margin:'16px 0' });
-    container.appendChild(sep);
-
-    const dangerTitle = el('div', { fontSize:'12px', color:'#555', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' });
-    dangerTitle.textContent = 'Danger';
-    container.appendChild(dangerTitle);
-
-    const resetBtn = btn('\uD83D\uDDD1 Réinitialiser tous les agents', '', async () => {
-      if (!confirm('Réinitialiser tous les agents ? Cette action est irréversible.')) return;
-      const { DEFAULT_AGENTS } = await import('../core/default-agents.js');
-      for (const a of DEFAULT_AGENTS) { await saveAgent(a); }
-      state.agents = [...DEFAULT_AGENTS];
-      showToast('Agents réinitialisés');
-      state.view = 'hub'; rerender();
+  else if (tabId === 'systeme') {
+    container.appendChild(mkSectionTitle('Système'));
+    const syncAllRow = el('div', { display:'flex', gap:'8px', alignItems:'center', marginBottom:'10px' });
+    const syncAllBtn = btn('📡 Sync toutes les clés → ESP32', 'primary', async () => {
+      syncAllBtn.textContent = '⏳ Sync…'; syncAllBtn.disabled = true;
+      try {
+        const report = await syncApiKeys();
+        showToast('✅ Poussé: ' + report.pushed.length + '  OK: ' + report.ok.length + '  Manquant: ' + report.missing.length);
+      } catch(e) {
+        showToast('❌ ' + e.message, true);
+      } finally {
+        syncAllBtn.textContent = '📡 Sync toutes les clés → ESP32'; syncAllBtn.disabled = false;
+      }
     });
-    resetBtn.style.cssText += ';color:#e65;border-color:#4a1a1a;';
-    container.appendChild(resetBtn);
-
-    const noteEl = el('div', { fontSize:'11px', color:'#444', marginTop:'12px', lineHeight:'1.5' });
-    noteEl.innerHTML = '\uD83D\uDD11 Les clés API sont stockées dans localStorage sur cet appareil uniquement.<br>Elles sont poussées automatiquement vers l\'ESP32 à chaque connexion BLE.';
-    container.appendChild(noteEl);
+    syncAllRow.appendChild(syncAllBtn);
+    container.appendChild(syncAllRow);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPERS UI
-// ═══════════════════════════════════════════════════════════════════════════════
-function el(tag, styles) {
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function el(tag, styles = {}) {
   const e = document.createElement(tag);
-  if (styles) Object.assign(e.style, styles);
+  Object.assign(e.style, styles);
   return e;
 }
 
 function btn(label, variant, onClick) {
   const b = document.createElement('button');
   b.textContent = label;
-  const base = 'border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer;font-weight:500;transition:background 0.15s;-webkit-tap-highlight-color:transparent;';
-  if (variant === 'primary') {
-    b.style.cssText = base + 'background:#1a4a2a;border:1px solid #2a6a3a;color:#5ef;';
-  } else {
-    b.style.cssText = base + 'background:#111;border:1px solid #252525;color:#888;';
-  }
-  if (onClick) b.onclick = onClick;
+  const isPrimary = variant === 'primary';
+  Object.assign(b.style, {
+    padding: '7px 12px', borderRadius: '7px', fontSize: '12px', fontWeight: '500',
+    cursor: 'pointer', border: '1px solid',
+    background: isPrimary ? '#1a4a2a' : '#111',
+    color: isPrimary ? '#5ef' : '#888',
+    borderColor: isPrimary ? '#2a6a3a' : '#252525',
+    transition: 'background 0.15s',
+    WebkitTapHighlightColor: 'transparent',
+  });
+  b.onclick = onClick;
   return b;
 }
 
-let toastTimer = null;
-function showToast(message, isError = false) {
-  let toast = document.getElementById('nestor-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'nestor-toast';
-    Object.assign(toast.style, {
-      position:'fixed', bottom:'80px', left:'50%', transform:'translateX(-50%)',
-      padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'500',
-      zIndex:'9999', transition:'opacity 0.3s', pointerEvents:'none', whiteSpace:'nowrap',
-    });
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.style.background = isError ? '#3a1a1a' : '#1a3a2a';
-  toast.style.color = isError ? '#f88' : '#8ef';
-  toast.style.border = '1px solid ' + (isError ? '#6a2a2a' : '#2a5a3a');
-  toast.style.opacity = '1';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+function showToast(msg, isError = false) {
+  const t = document.createElement('div');
+  Object.assign(t.style, {
+    position:'fixed', bottom:'20px', left:'50%', transform:'translateX(-50%)',
+    background: isError ? '#3a1a1a' : '#1a3a1a',
+    color: isError ? '#f88' : '#5ef',
+    padding:'8px 16px', borderRadius:'8px', fontSize:'12px',
+    zIndex:'9999', pointerEvents:'none',
+    border: '1px solid ' + (isError ? '#5a2a2a' : '#2a5a2a'),
+  });
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2800);
 }

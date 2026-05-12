@@ -8,9 +8,17 @@
  *  4. Clé absente des deux côtés → listée dans report.missing
  *  5. Push manuel possible via forceApiKeySync()
  *
+ * Clés gérées :
+ *   Nestor  : GROQ_API_KEY, GEMINI_API_KEY, SERPER_API_KEY, OPENROUTER_API_KEY
+ *   Bourse  : TWELVE_DATA_API_KEY
+ *   Météo   : METEO_CONCEPT_API_KEY
+ *   Musique : SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+ *   Tuya    : TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION, TUYA_USER_ID
+ *   Ecovacs : ECOVACS_EMAIL, ECOVACS_PASSWORD, ECOVACS_COUNTRY_CODE, ECOVACS_DEVICE_ID
+ *
  * NOTE: L'ESP32 (nvs_config.cpp) attend le champ "val" (et non "value")
  *       dans la commande set_api_key.
- *       {"cmd":"set_api_key","key":"METEO_CONCEPT_API_KEY","val":"..."}
+ *       {"cmd":"set_api_key","key":"TUYA_CLIENT_ID","val":"..."}
  */
 
 import { bleWrite, bleRead } from '../bt/ble.js';
