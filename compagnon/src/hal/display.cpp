@@ -75,16 +75,15 @@ void hal_display_init() {
   lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_270);
 
   // ── Écran racine : fond noir + coins arrondis (LCD_CORNER_RADIUS) ──────────
-  // LV_OBJ_FLAG_CLIP_CORNER (LVGL 9.x) remplace LV_OBJ_FLAG_OVERFLOW_HIDDEN
-  // pour clipper les enfants (apps) dans le rayon defini.
-  // Le fond noir derriere le radius correspond aux coins du boitier.
+  // LVGL 9.x : clip_corner est une propriété de style (lv_style_set_clip_corner),
+  // plus un flag d'objet. On l'applique via lv_obj_set_style_clip_corner().
   lv_obj_t *scr = lv_screen_active();
-  lv_obj_set_style_bg_color(scr,  lv_color_black(), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(scr,    LV_OPA_COVER,     LV_PART_MAIN);
-  lv_obj_set_style_pad_all(scr,   0,                LV_PART_MAIN);
-  lv_obj_set_style_border_width(scr, 0,             LV_PART_MAIN);
-  lv_obj_set_style_radius(scr,    LCD_CORNER_RADIUS, LV_PART_MAIN);
-  lv_obj_add_flag(scr,            LV_OBJ_FLAG_CLIP_CORNER);
+  lv_obj_set_style_bg_color(scr,     lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(scr,       LV_OPA_COVER,     LV_PART_MAIN);
+  lv_obj_set_style_pad_all(scr,      0,                LV_PART_MAIN);
+  lv_obj_set_style_border_width(scr, 0,                LV_PART_MAIN);
+  lv_obj_set_style_radius(scr,       LCD_CORNER_RADIUS, LV_PART_MAIN);
+  lv_obj_set_style_clip_corner(scr,  true,             LV_PART_MAIN);
 
   Serial.printf("[HAL/DISP] LVGL OK - 480x480 radius=%d\n", LCD_CORNER_RADIUS);
 }
