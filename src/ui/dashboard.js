@@ -399,11 +399,15 @@ function renderChatView(container, state, rerender) {
     state._thinking = true;
     rerender();
     try {
-      // Correction : on passe le texte utilisateur en premier argument,
-      // puis les agents et l'agent orchestrateur — conformément à la signature
-      // resolve(userMsg, agents, orchestratorAgent) dans orchestrator-engine.js
-      const result = await orchestratorResolve(text, state.agents, agent);
-      const assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
+      let assistantText;
+      if (agent.role === 'orchestrator') {
+        // Passe par l'orchestrateur complet (routing, outils, délégation)
+        const result = await orchestratorResolve(text, state.agents, agent);
+        assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
+      } else {
+        // Appel direct au LLM de l'agent — pas d'orchestrateur, pas de délégation
+        assistantText = await callLLM(agent.backendId || 'groq-llama', state.chatHistory);
+      }
       state.chatHistory.push({ role:'assistant', content: assistantText });
       saveChatHistory(agent.id, state.chatHistory.filter(m => m.role !== 'system'));
       const ttsStatus = getTTSStatus();
