@@ -18,11 +18,40 @@
 #define CHAR_DEVICE_STATUS "12345678-0006-5678-1234-56789abcdef0"
 #define CHAR_GPS           "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-#define DEVICE_NAME  "Nestor"
-#define MTU_MAX      512
-// 7 caract. × 3 handles (déclaration + valeur + CCCD) + 1 service = 22 minimum
-// On prend 30 pour avoir une marge confortable
+#define DEVICE_NAME      "Nestor"
+#define MTU_MAX          512
 #define BLE_HANDLE_COUNT 30
+
+// ─── Buffer anti-fragmentation AgentSync ─────────────────────────────────────
+// Les paquets BLE > MTU arrivent en plusieurs onWrite(). On accumule jusqu'à
+// recevoir un JSON complet (accolade finale '}') avant de dispatcher.
+#define AGENT_BUF_SIZE 2048
+static char   _agent_buf[AGENT_BUF_SIZE];
+static size_t _agent_buf_len = 0;
+
+static void agent_buf_reset() {
+    _agent_buf[0]  = '\0';
+    _agent_buf_len = 0;
+}
+
+// Retourne true si le buffer contient un JSON complet (autant de { que de }).
+static bool agent_buf_complete() {
+    if (_agent_buf_len == 0) return false;
+    int depth = 0;
+    bool in_str = false;
+    bool escaped = false;
+    for (size_t i = 0; i < _agent_buf_len; i++) {
+        char c = _agent_buf[i];
+        if (escaped)          { escaped = false; continue; }
+        if (c == '\\' && in_str) { escaped = true; continue; }
+        if (c == '"')         { in_str = !in_str; continue; }
+        if (in_str)           continue;
+        if (c == '{')         depth++;
+        else if (c == '}')    depth--;
+    }
+    return (depth == 0 && _agent_buf_len > 0 &&
+            _agent_buf[_agent_buf_len - 1] == '}');
+}
 
 // ─── Handles ──────────────────────────────────────────────────────────────────
 static BLEServer         *_server          = nullptr;
@@ -50,11 +79,13 @@ static wifi_prov_cb_t   _wifi_prov_cb  = nullptr;
 class ConnCB : public BLEServerCallbacks {
     void onConnect(BLEServer *) override {
         _connected = true;
+        agent_buf_reset();
         Serial.println("[BLE] Telephone connecte");
     }
     void onDisconnect(BLEServer *s) override {
         _connected = false;
         _has_gps   = false;
+        agent_buf_reset();
         Serial.println("[BLE] Deconnecte — re-advertising");
         s->startAdvertising();
     }
@@ -100,13 +131,30 @@ class WifiProvCB : public BLECharacteristicCallbacks {
     }
 };
 
-// ─── Agent sync : JSON envoyé par la PWA ──────────────────────────────────────
+// ─── Agent sync : JSON envoyé par la PWA — avec buffer anti-fragmentation ─────
 class AgentSyncCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
-        String val = c->getValue();
-        if (val.length() == 0 || !_agent_sync_cb) return;
-        Serial.printf("[BLE] AgentSync: %u bytes\n", val.length());
-        _agent_sync_cb(val.c_str());
+        String chunk = c->getValue();
+        size_t chunk_len = chunk.length();
+        if (chunk_len == 0 || !_agent_sync_cb) return;
+
+        Serial.printf("[BLE] AgentSync: %u bytes\n", chunk_len);
+
+        // Accumulation dans le buffer
+        if (_agent_buf_len + chunk_len >= AGENT_BUF_SIZE - 1) {
+            // Buffer plein : reset et recommencer avec ce chunk
+            Serial.println("[BLE] AgentSync: buffer plein, reset");
+            agent_buf_reset();
+        }
+        memcpy(_agent_buf + _agent_buf_len, chunk.c_str(), chunk_len);
+        _agent_buf_len += chunk_len;
+        _agent_buf[_agent_buf_len] = '\0';
+
+        // On dispatche seulement quand le JSON est complet
+        if (agent_buf_complete()) {
+            _agent_sync_cb(_agent_buf);
+            agent_buf_reset();
+        }
     }
 };
 
@@ -117,7 +165,7 @@ class TextInputCB : public BLECharacteristicCallbacks {
         if (val.length() == 0) return;
         Serial.printf("[BLE] TextInput: %s\n", val.c_str());
         if (_text_input_cb) _text_input_cb(val.c_str());
-        if (_music_cb)      _music_cb(val.c_str());  // compat music app
+        if (_music_cb)      _music_cb(val.c_str());
     }
 };
 
@@ -194,6 +242,7 @@ void ble_mgr_init() {
     BLEDevice::startAdvertising();
 
     _active = true;
+    agent_buf_reset();
     Serial.println("[BLE] Advertising : " DEVICE_NAME);
 }
 

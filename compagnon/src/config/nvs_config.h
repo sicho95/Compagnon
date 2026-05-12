@@ -34,11 +34,24 @@
 #define NVS_KEY_ECOVACS_U     "ecovacs_user"      // 12 chars
 #define NVS_KEY_ECOVACS_P     "ecovacs_pass"      // 12 chars
 
+/**
+ * PWA_KEY_NAMES[][2] — correspondance NVS_KEY → nom long PWA
+ * Utilisé par nvs_list_api_keys_json() pour que la réponse get_api_keys
+ * utilise les mêmes noms que getAllApiKeys() dans settings-store.js.
+ * ⚠ Ordre identique à KNOWN_KEYS[] dans nvs_config.cpp.
+ */
+extern const char * const PWA_KEY_NAMES[][2];
+
 void nvs_config_init();
 bool nvs_get_api_key(const char *key_name, char *out, size_t out_len);
 bool nvs_set_api_key(const char *key_name, const char *value);
 bool nvs_has_api_key(const char *key_name);
 void nvs_clear_api_key(const char *key_name);
 void nvs_list_api_keys_json(char *out_json, size_t len);
+
+// Helpers position GPS (utilisés par meteo_app)
+void   nvs_set_double(const char *key, double val);
+double nvs_get_double(const char *key, double def);
+String nvs_get_str(const char *key, const char *def);
 
 #endif // NVS_CONFIG_H
