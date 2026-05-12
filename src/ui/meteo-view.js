@@ -3,7 +3,7 @@
 // Position : GPS BLE (state.gpsLat/Lon) → Paris par défaut
 
 import { lsGet, lsSet } from '../storage/agents-db.js';
-import { getMeteoSettings } from '../core/settings-store.js';
+import { getMeteoSettings, getNestorSettings } from '../core/settings-store.js';
 
 const LS_CACHE = 'NESTOR_METEO_CACHE';
 const DEFAULT_LAT = 48.8566, DEFAULT_LON = 2.3522;  // Paris
@@ -23,33 +23,26 @@ function weatherIcon(code) {
   return '🌡';
 }
 
+// ─── Proxy via settings-store (cohérent avec le reste de l'app) ──────────────
 function proxyUrl(url) {
-  const proxy = (lsGet('SEARCH_PROXY_URL') || 'https://proxy.sicho95.workers.dev/').replace(/\/$/, '');
+  const proxy = (getNestorSettings().proxyUrl || 'https://proxy.sicho95.workers.dev').replace(/\/$/, '');
   return proxy + '?url=' + encodeURIComponent(url);
 }
 
-// ─── Fetch deux étapes : location → prévisions ───────────────────────────────
+// ─── Fetch direct : /forecast/daily?token=...&latlng=lat,lon ─────────────────
+// Même stratégie que meteo_app.cpp sur l'ESP32 — pas d'étape /location/near
 async function fetchMeteo(lat, lon, token) {
-  const locRes = await fetch(
-    proxyUrl(`https://api.meteo-concept.com/api/location/near?lat=${lat}&lon=${lon}&token=${token}`),
-    { signal: AbortSignal.timeout(10000) }
-  );
-  if (!locRes.ok) throw new Error('Location HTTP ' + locRes.status);
-  const locData = await locRes.json();
-  const city = locData?.city;
-  if (!city) throw new Error('Ville introuvable');
+  const url = `https://api.meteo-concept.com/api/forecast/daily?token=${token}&latlng=${lat},${lon}`;
+  const res = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
 
-  const fcRes = await fetch(
-    proxyUrl(`https://api.meteo-concept.com/api/forecast/daily?insee=${city.cp}&token=${token}`),
-    { signal: AbortSignal.timeout(10000) }
-  );
-  if (!fcRes.ok) throw new Error('Prévisions HTTP ' + fcRes.status);
-  const fcData = await fcRes.json();
+  const city = data?.city;
+  const cityName = city?.name || city?.nom || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+  const forecasts = (data?.forecast || []).slice(0, 5);
 
-  return {
-    cityName: city.name || city.nom || '',
-    forecasts: (fcData.forecast || []).slice(0, 5),
-  };
+  if (forecasts.length === 0) throw new Error('Aucune prévision reçue');
+  return { cityName, forecasts };
 }
 
 // ─── DOM helper ───────────────────────────────────────────────────────────────
@@ -87,7 +80,6 @@ function renderCard(fc, idx) {
   tmin.textContent = Math.round(fc.tmin) + '°';
   temps.append(tmax, tmin);
 
-  // Probabilité de pluie
   if (fc.probarain > 0) {
     const rain = el('div', { fontSize: '11px', color: '#64B5F6' });
     rain.textContent = '💧 ' + fc.probarain + '%';
@@ -102,7 +94,6 @@ function renderCard(fc, idx) {
 export function renderMeteoView(container, state, rerender) {
   container.innerHTML = '';
 
-  // Lecture depuis settings-store (avec fallback sur ancienne clé localStorage)
   const settings = getMeteoSettings();
   const token = (
     settings.meteoConcept ||
@@ -120,15 +111,14 @@ export function renderMeteoView(container, state, rerender) {
   const locIcon = el('span', { fontSize: '16px' }); locIcon.textContent = '📍';
   const locLabel = el('div', { fontSize: '13px', color: '#7AB', flex: '1' });
 
-  let lat, lon, locText;
+  let lat, lon;
   if (state.gpsLat && state.gpsLon) {
     lat = state.gpsLat; lon = state.gpsLon;
-    locText = `GPS BLE: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    locLabel.textContent = `GPS BLE: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
   } else {
     lat = defaultLat; lon = defaultLon;
-    locText = 'Paris (par défaut)';
+    locLabel.textContent = 'Paris (par défaut)';
   }
-  locLabel.textContent = locText;
   locRow.append(locIcon, locLabel);
   container.appendChild(locRow);
 
@@ -141,7 +131,6 @@ export function renderMeteoView(container, state, rerender) {
     return;
   }
 
-  // Zone d'affichage
   const cityEl = el('div', { fontSize: '18px', fontWeight: '700', color: '#CFE8FF', marginBottom: '4px', textAlign: 'center' });
   cityEl.textContent = '⏳ Chargement…';
   container.appendChild(cityEl);
@@ -153,7 +142,7 @@ export function renderMeteoView(container, state, rerender) {
   const cardsRow = el('div', { display: 'flex', gap: '8px', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '4px' });
   container.appendChild(cardsRow);
 
-  // Charge depuis le cache le temps de fetcher
+  // Cache immédiat le temps du fetch
   const cached = (() => { try { return JSON.parse(lsGet(LS_CACHE) || 'null'); } catch { return null; } })();
   if (cached) {
     cityEl.textContent = cached.cityName;
@@ -161,7 +150,6 @@ export function renderMeteoView(container, state, rerender) {
     cached.forecasts.forEach((fc, i) => cardsRow.appendChild(renderCard(fc, i)));
   }
 
-  // Fetch en arrière-plan
   fetchMeteo(lat, lon, token)
     .then(({ cityName, forecasts }) => {
       const timestamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
