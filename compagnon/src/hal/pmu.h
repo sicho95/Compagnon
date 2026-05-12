@@ -7,6 +7,7 @@ void hal_pmu_init();
 void hal_pmu_tick();
 
 int  hal_pmu_battery_pct();   // 0–100, -1 si PMIC indisponible
+bool hal_pmu_is_charging();   // true si charge en cours (AXP2101)
 
 void hal_pmu_screen_off();    // Éteint pixels (ESP reste actif)
 void hal_pmu_screen_on();     // Rallume pixels + restaure MADCTL

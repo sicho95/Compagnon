@@ -69,6 +69,11 @@ int hal_pmu_battery_pct() {
     return (int)pmu.getBatteryPercent();
 }
 
+bool hal_pmu_is_charging() {
+    if (!pmu_ok) return false;
+    return pmu.isCharging();
+}
+
 void hal_pmu_screen_off() {
     if (!scr_on) return;
     scr_on = false;
