@@ -100,13 +100,39 @@ class WifiProvCB : public BLECharacteristicCallbacks {
     }
 };
 
-// ─── Agent sync : JSON envoyé par la PWA ──────────────────────────────────────
+// ─── Agent sync : JSON envoyé par la PWA ─────────────────────────────────────
+// Les paquets BLE étant limités en taille (MTU), un JSON > MTU arrive en
+// plusieurs writes. On bufférise dans _buf et on n'appelle le callback
+// qu'une fois le JSON complet (accolades balancées et non dans une string).
 class AgentSyncCB : public BLECharacteristicCallbacks {
+    String _buf;
+
     void onWrite(BLECharacteristic *c) override {
         String val = c->getValue();
         if (val.length() == 0 || !_agent_sync_cb) return;
+        _buf += val;
         Serial.printf("[BLE] AgentSync: %u bytes\n", val.length());
-        _agent_sync_cb(val.c_str());
+
+        // Détection fin de JSON : on compte les accolades hors strings
+        int  depth  = 0;
+        bool inStr  = false;
+        bool escape = false;
+        bool complete = false;
+        for (size_t i = 0; i < _buf.length(); i++) {
+            char ch = _buf[i];
+            if (escape)          { escape = false; continue; }
+            if (ch == '\\')      { escape = true;  continue; }
+            if (ch == '"')       { inStr = !inStr;  continue; }
+            if (inStr)           continue;
+            if (ch == '{')       depth++;
+            else if (ch == '}') { depth--; if (depth == 0) { complete = true; break; } }
+        }
+
+        if (complete) {
+            _agent_sync_cb(_buf.c_str());
+            _buf = "";
+        }
+        // Si pas complet : on attend le prochain paquet
     }
 };
 

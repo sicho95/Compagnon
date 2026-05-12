@@ -93,6 +93,9 @@ static void ble_agent_sync_cb(const char *json) {
 
     const char *cmd = doc["cmd"] | "";
 
+    // Commande vide : ignorer silencieusement
+    if (!cmd || cmd[0] == '\0') return;
+
     if (strcmp(cmd, "set_api_key") == 0) {
         const char *pwa_key = doc["key"] | "";
         const char *val     = doc["val"] | doc["value"] | "";
@@ -130,6 +133,22 @@ static void ble_agent_sync_cb(const char *json) {
         char ack[160];
         snprintf(ack, sizeof(ack), "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", pwa_key);
         ble_mgr_notify_agent_sync(ack);
+        return;
+    }
+
+    // ─── battery_status / get_device_status ──────────────────────────────────
+    if (strcmp(cmd, "battery_status") == 0 || strcmp(cmd, "get_device_status") == 0) {
+        int  bat_pct  = hal_pmu_battery_pct();   // 0-100, -1 si PMIC indisponible
+        bool charging = (bat_pct >= 0) && WiFi.isConnected(); // pas d'API isCharging exposée
+        char resp[160];
+        snprintf(resp, sizeof(resp),
+            "{\"cmd\":\"device_status\",\"battery\":%d,\"charging\":%s,\"wifi\":%s}",
+            (bat_pct >= 0) ? bat_pct : 0,
+            charging       ? "true"  : "false",
+            WiFi.isConnected() ? "true" : "false"
+        );
+        ble_mgr_notify_agent_sync(resp);
+        Serial.printf("[BLE/AGENT] battery_status -> bat=%d%%\n", bat_pct);
         return;
     }
 
