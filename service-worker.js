@@ -1,4 +1,4 @@
-const CACHE = 'nestor-v6';
+const CACHE = 'nestor-v7';
 
 const PRECACHE = [
   './',
@@ -33,9 +33,24 @@ const PRECACHE = [
   './src/ui/radar-view.js',
 ];
 
+// Précache tolérant : un fichier manquant ne plante plus l'install
+async function safePrecache(cache, urls) {
+  const results = await Promise.allSettled(
+    urls.map(url =>
+      cache.add(url).catch(err => {
+        console.warn('[SW] Précache ignoré (404 ?) :', url, err.message);
+      })
+    )
+  );
+  const failed = results.filter(r => r.status === 'rejected');
+  if (failed.length) console.warn('[SW] Échecs précache :', failed);
+}
+
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then(c => safePrecache(c, PRECACHE))
+      .then(() => self.skipWaiting())
   );
 });
 
