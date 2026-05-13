@@ -4,11 +4,11 @@
 import { bleWrite, bleRead, bleSubscribe } from './ble.js';
 
 export async function bleRequestWifiScan() {
-  // Déclencher le scan en envoyant l'octet 0x01
+  // Déclencher le scan côté ESP32
   await bleWrite('WIFI_SCAN', new Uint8Array([0x01]));
   return new Promise((resolve, reject) => {
     let done = false;
-    const t = setTimeout(() => { done = true; resolve([]); }, 10000);
+    const t = setTimeout(() => { done = true; resolve([]); }, 12000);
     bleSubscribe('WIFI_SCAN', raw => {
       if (done) return;
       try {
@@ -16,8 +16,17 @@ export async function bleRequestWifiScan() {
         if (Array.isArray(d)) {
           done = true;
           clearTimeout(t);
-          // Normaliser le format compact {s, r} en {ssid, rssi} pour l'interface
-          resolve(d.map(n => ({ ssid: n.s, rssi: n.r })));
+          // Normaliser les deux formats possibles de l'ESP32 :
+          //   format court  : {s:"SSID", r:-65, sec:1, ch:6}
+          //   format complet: {ssid:"SSID", rssi:-65, secured:true, channel:6}
+          resolve(
+            d.map(n => ({
+              ssid:    n.ssid    ?? n.s   ?? '',
+              rssi:    Number(n.rssi    ?? n.r   ?? -999),
+              secured: n.secured != null ? Boolean(n.secured) : (n.sec != null ? Boolean(n.sec) : true),
+              channel: n.channel ?? n.ch  ?? 0,
+            })).filter(n => n.ssid)
+          );
         }
       } catch {}
     }).catch(e => { if (!done) { done = true; clearTimeout(t); reject(e); } });
