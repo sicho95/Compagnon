@@ -1,5 +1,5 @@
 #pragma once
-#include "pin_config.h"  // source unique : LCD_WIDTH, LCD_HEIGHT, LCD_CORNER_RADIUS
+#include "pin_config.h"
 
 // ─── Constantes de mise en page partagées ─────────────────────────────────────────────
 // Toutes les apps et le launcher doivent utiliser ces constantes pour que
@@ -13,7 +13,7 @@
 #define SCREEN_W  LCD_WIDTH    // 480 px
 #define SCREEN_H  LCD_HEIGHT   // 480 px
 
-// ─── Bordures safe area (boîtier arrondi, coins à ~60 px) ────────────────────────────
+// ─── Bordures safe area (boîtier arrondi) ────────────────────────────
 // BORDER_H : marges gauche ET droite (chacune)
 // BORDER_V : marges haut ET bas (chacune, en plus de la status bar côté haut)
 #define BORDER_H  20   // px — marge horizontale gauche/droite

@@ -35,52 +35,6 @@ static void rounder_cb(lv_event_t *e) {
 
 static uint32_t tick_cb() { return (uint32_t)millis(); }
 
-// ─── Corner overlay : 4 carrés noirs dans lv_layer_sys() qui masquent les coins ───
-// lv_screen_active() ne clipe pas ses enfants via clip_corner en LVGL 9.x.
-// La technique overlay place 4 objets opaques noirs dans les 4 coins, par-dessus
-// tout le contenu, pour simuler des coins arrondis sans modifier le rendu LVGL.
-static void _create_corner_overlays() {
-  const lv_coord_t R = LCD_CORNER_RADIUS;
-  const lv_coord_t W = LCD_WIDTH;
-  const lv_coord_t H = LCD_HEIGHT;
-
-  // On utilise lv_layer_sys() (couche système, au-dessus de tout) pour que
-  // les coins soient toujours visibles même sur les menus et popups.
-  lv_obj_t *layer = lv_layer_sys();
-
-  // Les 4 coins : chaque objet est un carré RxR avec un arc noir qui "recouvre"
-  // le coin de l'écran. Astuce : on utilise un lv_obj avec bg noir et un
-  // radius sur le coin opposé au coin de l'écran = cercle qui découpe proprement.
-  //
-  // Structure de chaque overlay :
-  //   - taille : R x R px
-  //   - bg : noir opaque
-  //   - radius : R (arrondi sur le coin intérieur = crée la découpe visuelle)
-  //   - no border, no shadow
-
-  struct { lv_coord_t x; lv_coord_t y; } corners[4] = {
-    { 0,     0     },  // haut-gauche
-    { W - R, 0     },  // haut-droit
-    { 0,     H - R },  // bas-gauche
-    { W - R, H - R },  // bas-droit
-  };
-
-  for (int i = 0; i < 4; i++) {
-    lv_obj_t *c = lv_obj_create(layer);
-    lv_obj_set_size(c, R, R);
-    lv_obj_set_pos(c, corners[i].x, corners[i].y);
-    lv_obj_set_style_bg_color(c,     lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(c,       LV_OPA_COVER,     LV_PART_MAIN);
-    lv_obj_set_style_radius(c,       R,                LV_PART_MAIN);
-    lv_obj_set_style_clip_corner(c,  true,             LV_PART_MAIN);
-    lv_obj_set_style_border_width(c, 0,                LV_PART_MAIN);
-    lv_obj_set_style_pad_all(c,      0,                LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(c, 0,                LV_PART_MAIN);
-    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
-  }
-}
-
 void hal_display_init() {
   Serial.println("[HAL/DISP] Init...");
 
