@@ -22,16 +22,99 @@ export function renderCompanionView(container, state, rerender) {
   container.innerHTML = '';
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;';
 
-  // iOS détecté en priorité — Web Bluetooth absent ou non fonctionnel
-  // On utilise isIOS() en premier pour éviter les faux positifs si Apple
-  // exposait partiellement navigator.bluetooth dans une future version de Safari.
   if (isIOS() || !bleAvailable()) {
     renderIOSBluetoothGuide(container);
     return;
   }
 
-  // Android / Desktop Chrome : flux Web Bluetooth normal
   renderWebBluetoothUI(container, state, rerender);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODAL MOT DE PASSE WIFI (remplace window.prompt() bloqué en PWA standalone)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Affiche une modal HTML pour saisir le mot de passe WiFi.
+ * Retourne une Promise<string|null> :
+ *   - string  → mot de passe saisi (peut être vide pour réseaux ouverts)
+ *   - null    → l'utilisateur a annulé
+ */
+function askWifiPassword(ssid) {
+  return new Promise((resolve) => {
+    // Overlay sombre
+    const overlay = el('div',
+      'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;padding:16px;');
+
+    const card = el('div',
+      'background:#141414;border:1px solid #2a2a2a;border-radius:14px;' +
+      'padding:20px 16px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:14px;');
+
+    // Titre
+    const title = el('div', 'font-size:14px;font-weight:700;color:#eee;');
+    title.textContent = '🔒 Mot de passe WiFi';
+
+    // SSID affiché
+    const ssidLbl = el('div', 'font-size:12px;color:#7af;');
+    ssidLbl.textContent = ssid;
+
+    // Input mot de passe
+    const inp = document.createElement('input');
+    inp.type = 'password';
+    inp.placeholder = 'Mot de passe…';
+    inp.autocomplete = 'current-password';
+    inp.style.cssText =
+      'width:100%;background:#1a1a1a;border:1px solid #333;border-radius:8px;' +
+      'color:#eee;padding:11px 12px;font-size:16px;box-sizing:border-box;outline:none;' +
+      '-webkit-appearance:none;';
+
+    // Toggle afficher/masquer
+    const toggleRow = el('div', 'display:flex;align-items:center;gap:8px;cursor:pointer;');
+    const toggleCb  = document.createElement('input');
+    toggleCb.type = 'checkbox';
+    toggleCb.style.cssText = 'width:16px;height:16px;cursor:pointer;accent-color:#7af;';
+    const toggleLbl = el('span', 'font-size:12px;color:#888;');
+    toggleLbl.textContent = 'Afficher le mot de passe';
+    toggleCb.onchange = () => { inp.type = toggleCb.checked ? 'text' : 'password'; };
+    toggleRow.append(toggleCb, toggleLbl);
+
+    // Boutons
+    const btnRow = el('div', 'display:flex;gap:8px;');
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Annuler';
+    cancelBtn.style.cssText =
+      'flex:1;padding:11px;border:1px solid #333;border-radius:8px;' +
+      'background:#1a1a1a;color:#888;font-size:13px;font-weight:600;cursor:pointer;';
+
+    const connectBtn = document.createElement('button');
+    connectBtn.textContent = '→ Connecter';
+    connectBtn.style.cssText =
+      'flex:2;padding:11px;border:1px solid #2a6a3a;border-radius:8px;' +
+      'background:#1a3a1a;color:#7ef;font-size:13px;font-weight:600;cursor:pointer;';
+
+    const close = (val) => { overlay.remove(); resolve(val); };
+
+    cancelBtn.onclick  = () => close(null);
+    connectBtn.onclick = () => close(inp.value);
+
+    // Confirmer avec Entrée
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); close(inp.value); }
+      if (e.key === 'Escape') close(null);
+    });
+
+    // Clic hors carte = annuler
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+
+    btnRow.append(cancelBtn, connectBtn);
+    card.append(title, ssidLbl, inp, toggleRow, btnRow);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    // Focus auto avec délai (évite le blocage iOS)
+    requestAnimationFrame(() => { setTimeout(() => inp.focus(), 80); });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +123,6 @@ export function renderCompanionView(container, state, rerender) {
 function renderIOSBluetoothGuide(container) {
   const wrap = el('div', 'padding:16px;display:flex;flex-direction:column;gap:12px;');
 
-  // Header
   const header = el('div', 'text-align:center;padding:12px 0 4px;');
   header.innerHTML = `
     <div style="font-size:40px;margin-bottom:8px;">📱</div>
@@ -49,7 +131,6 @@ function renderIOSBluetoothGuide(container) {
   `;
   wrap.appendChild(header);
 
-  // Info Web Bluetooth
   const infoBanner = el('div', 'background:#1a1208;border:1px solid #3a2a08;border-radius:10px;padding:12px 14px;');
   infoBanner.innerHTML = `
     <div style="font-size:12px;color:#fa8;font-weight:600;margin-bottom:6px;">⚠️ Web Bluetooth non disponible sur iOS Safari</div>
@@ -61,7 +142,6 @@ function renderIOSBluetoothGuide(container) {
   `;
   wrap.appendChild(infoBanner);
 
-  // Étapes
   const stepsTitle = el('div', 'font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-top:4px;');
   stepsTitle.textContent = 'Comment appairer le Compagnon';
   wrap.appendChild(stepsTitle);
@@ -84,19 +164,15 @@ function renderIOSBluetoothGuide(container) {
     wrap.appendChild(row);
   }
 
-  // Bouton deep link Réglages Bluetooth iOS
   const btBtn = document.createElement('button');
   btBtn.style.cssText = 'background:#1a2a3a;border:1px solid #2a4a6a;border-radius:10px;padding:13px 16px;color:#7af;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:4px;';
   btBtn.innerHTML = '<span style="font-size:18px;">⚙️</span> Ouvrir Réglages Bluetooth iOS';
   btBtn.onclick = () => {
-    // Deep link natif iOS vers les réglages Bluetooth
     window.location.href = 'App-Prefs:root=Bluetooth';
-    // Fallback universel Réglages (fonctionne dans Safari/PWA)
     setTimeout(() => { window.location.href = 'prefs:root=Bluetooth'; }, 400);
   };
   wrap.appendChild(btBtn);
 
-  // Note Android
   const noteAndroid = el('div', 'background:#0a1a0a;border:1px solid #1a2a1a;border-radius:8px;padding:10px 12px;margin-top:4px;');
   noteAndroid.innerHTML = `
     <div style="font-size:11px;color:#3a6a3a;font-weight:600;margin-bottom:3px;">✅ Sur Android</div>
@@ -107,7 +183,6 @@ function renderIOSBluetoothGuide(container) {
   `;
   wrap.appendChild(noteAndroid);
 
-  // Note sync WiFi iOS
   const noteSync = el('div', 'background:#0a0a1a;border:1px solid #1a1a2a;border-radius:8px;padding:10px 12px;');
   noteSync.innerHTML = `
     <div style="font-size:11px;color:#3a3a7a;font-weight:600;margin-bottom:3px;">💡 Sync agents & clés sur iOS</div>
@@ -125,7 +200,6 @@ function renderIOSBluetoothGuide(container) {
 // WEB BLUETOOTH UI (Android / Desktop Chrome)
 // ─────────────────────────────────────────────────────────────────────────────
 function renderWebBluetoothUI(container, state, rerender) {
-  // ── Bandeau connexion ────────────────────────────────────
   const connBar = el('div', 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0e1a0e;border-bottom:1px solid #1a2a1a;position:sticky;top:0;z-index:2;');
   const connInfo = el('div', 'display:flex;flex-direction:column;gap:2px;');
   const connectBtn = document.createElement('button');
@@ -213,11 +287,17 @@ function buildWifiSection() {
       row.style.cssText = 'background:#111;border:1px solid #222;border-radius:6px;padding:8px 12px;text-align:left;color:#aaa;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;width:100%;';
       row.innerHTML = `<span>📶 ${net.ssid}</span><span style="color:#555;font-size:11px;">→ Reconnecter</span>`;
       row.onclick = async () => {
-        const pwd = prompt(`Mot de passe pour "${net.ssid}" :`);
+        // Utilise la modal HTML — prompt() est bloqué en PWA standalone
+        const pwd = await askWifiPassword(net.ssid);
         if (pwd === null) return;
         row.textContent = '⏳ Connexion…';
-        try { await provisionWifi(net.ssid, pwd); status.textContent = `✅ Connecté : ${net.ssid}`; }
-        catch (e) { status.textContent = '❌ ' + e.message; row.innerHTML = `<span>📶 ${net.ssid}</span><span style="color:#555;font-size:11px;">→ Reconnecter</span>`; }
+        try {
+          await provisionWifi(net.ssid, pwd);
+          status.textContent = `✅ Connecté : ${net.ssid}`;
+        } catch (e) {
+          status.textContent = '❌ ' + e.message;
+          row.innerHTML = `<span>📶 ${net.ssid}</span><span style="color:#555;font-size:11px;">→ Reconnecter</span>`;
+        }
       };
       wrap.appendChild(row);
     }
@@ -236,7 +316,7 @@ function buildWifiSection() {
   return wrap;
 }
 
-function showNetworkPicker(networks, wrap, statusEl) {
+async function showNetworkPicker(networks, wrap, statusEl) {
   wrap.querySelector('.wifi-list')?.remove();
   if (!networks.length) { alert('Aucun réseau trouvé.'); return; }
   const list = el('div', 'display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;');
@@ -247,11 +327,18 @@ function showNetworkPicker(networks, wrap, statusEl) {
     b.style.cssText = 'background:#111;border:1px solid #222;border-radius:6px;padding:8px 12px;color:#ccc;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;width:100%;';
     b.innerHTML = `<span>${net.secured ? '🔒' : '🔓'} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars}</span>`;
     b.onclick = async () => {
-      const pwd = net.secured ? prompt(`Mot de passe pour "${net.ssid}" :`) : '';
+      // Utilise la modal HTML — prompt() est bloqué en PWA standalone
+      const pwd = net.secured ? await askWifiPassword(net.ssid) : '';
       if (pwd === null) return;
       b.textContent = '⏳ Connexion…';
-      try { await provisionWifi(net.ssid, pwd, true); statusEl.textContent = `✅ Connecté : ${net.ssid}`; list.remove(); }
-      catch (e) { statusEl.textContent = '❌ ' + e.message; b.innerHTML = `<span>${net.secured ? '🔒' : '🔓'} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars}</span>`; }
+      try {
+        await provisionWifi(net.ssid, pwd, true);
+        statusEl.textContent = `✅ Connecté : ${net.ssid}`;
+        list.remove();
+      } catch (e) {
+        statusEl.textContent = '❌ ' + e.message;
+        b.innerHTML = `<span>${net.secured ? '🔒' : '🔓'} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars}</span>`;
+      }
     };
     list.appendChild(b);
   }
