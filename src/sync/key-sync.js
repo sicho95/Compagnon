@@ -3,26 +3,42 @@
  *
  * Flux :
  *  1. À la connexion BLE → syncApiKeys() automatique si hub.ble.autoPushKeys
- *  2. ESP32 répond à cmd:'get_api_keys' avec { KEY_NAME: true/false }
+ *  2. ESP32 répond à cmd:'get_api_keys' via NOTIFICATION (pas readValue)
+ *     avec { KEY_NAME: true/false }
  *  3. Clé absente sur ESP32 + présente en PWA → push BLE cmd:'set_api_key'
  *  4. Clé absente des deux côtés → listée dans report.missing
  *  5. Push manuel possible via forceApiKeySync()
  *
- * Clés gérées :
- *   Nestor  : GROQ_API_KEY, GEMINI_API_KEY, SERPER_API_KEY, OPENROUTER_API_KEY
- *   Bourse  : TWELVE_DATA_API_KEY
- *   Météo   : METEO_CONCEPT_API_KEY
- *   Musique : SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
- *   Tuya    : TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION, TUYA_USER_ID
- *   Ecovacs : ECOVACS_EMAIL, ECOVACS_PASSWORD, ECOVACS_COUNTRY_CODE, ECOVACS_DEVICE_ID
- *
- * NOTE: L'ESP32 (nvs_config.cpp) attend le champ "val" (et non "value")
- *       dans la commande set_api_key.
- *       {"cmd":"set_api_key","key":"TUYA_CLIENT_ID","val":"..."}
+ * CORRECTIF BUG : bleRead() lit la valeur statique de la caractéristique
+ * AVANT que l'ESP32 ne l'ait mise à jour. L'ESP32 répond via NOTIFICATION.
+ * On utilise donc bleSubscribeOnce() — subscribe + Promise + timeout 5s.
  */
 
-import { bleWrite, bleRead } from '../bt/ble.js';
+import { bleWrite, bleSubscribe } from '../bt/ble.js';
 import { getAllApiKeys, getHubSettings } from '../core/settings-store.js';
+
+/**
+ * Attend une seule notification sur charKey et résout avec la valeur décodée.
+ * Timeout configurable (défaut 5 s).
+ */
+function bleSubscribeOnce(charKey, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; reject(new Error(`BLE timeout (${charKey})`)); }
+    }, timeoutMs);
+
+    // bleSubscribe enregistre un listener permanent — on wrappe pour n'écouter qu'une fois
+    bleSubscribe(charKey, (raw) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(raw);
+    }).catch(err => {
+      if (!settled) { settled = true; clearTimeout(timer); reject(err); }
+    });
+  });
+}
 
 export async function syncApiKeys() {
   const report = { pushed: [], missing: [], ok: [], error: '' };
@@ -30,9 +46,14 @@ export async function syncApiKeys() {
   if (!hubCfg.ble.autoPushKeys) { report.error = 'autoPushKeys désactivé'; return report; }
 
   try {
+    // Prépare l'écoute AVANT d'envoyer la commande (évite race condition)
+    const responsePromise = bleSubscribeOnce('AGENT_SYNC', 5000);
     await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'get_api_keys' }));
-    const raw = await bleRead('AGENT_SYNC');
-    const deviceKeys = JSON.parse(raw);
+    const raw = await responsePromise;
+
+    let deviceKeys = {};
+    try { deviceKeys = JSON.parse(raw); } catch { /* réponse non-JSON ignorée */ }
+
     const pwaKeys = getAllApiKeys();
 
     for (const [keyId, pwaValue] of Object.entries(pwaKeys)) {
@@ -65,7 +86,8 @@ export async function forceApiKeySync() {
 }
 
 export async function fetchDeviceKeyStatus() {
+  const responsePromise = bleSubscribeOnce('AGENT_SYNC', 5000);
   await bleWrite('AGENT_SYNC', JSON.stringify({ cmd: 'get_api_keys' }));
-  const raw = await bleRead('AGENT_SYNC');
+  const raw = await responsePromise;
   return JSON.parse(raw);
 }

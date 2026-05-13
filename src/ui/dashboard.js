@@ -63,7 +63,7 @@ export function renderDashboard(container, state, rerender) {
 
   const header = el('div', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' });
   const leftRow = el('div', { display:'flex', alignItems:'center', gap:'8px' });
-  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  const backBtn = btn('\u2190 Hub', '', () => { state.view = 'hub'; rerender(); });
   leftRow.appendChild(backBtn);
   header.appendChild(leftRow);
 
@@ -103,7 +103,7 @@ export function renderDashboard(container, state, rerender) {
 
 // ─── Radar ────────────────────────────────────────────────────────────────────
 function renderRadarSection(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => {
+  const backBtn = btn('\u2190 Hub', '', () => {
     cleanupRadarView();
     state.view = state._radarPrevView || 'hub';
     rerender();
@@ -117,7 +117,7 @@ function renderRadarSection(container, state, rerender) {
 
 // ─── Bourse ───────────────────────────────────────────────────────────────────
 function renderBourseSection(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => {
+  const backBtn = btn('\u2190 Hub', '', () => {
     cleanupBourseView(container.querySelector('[data-bourse]'));
     state.view = state._boursePrevView || 'hub';
     rerender();
@@ -132,7 +132,7 @@ function renderBourseSection(container, state, rerender) {
 
 // ─── Météo ────────────────────────────────────────────────────────────────────
 function renderMeteoSection(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => { state.view = state._meteoPrevView || 'hub'; rerender(); });
+  const backBtn = btn('\u2190 Hub', '', () => { state.view = state._meteoPrevView || 'hub'; rerender(); });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
   const body = el('div', {});
@@ -142,7 +142,7 @@ function renderMeteoSection(container, state, rerender) {
 
 // ─── Musique ──────────────────────────────────────────────────────────────────
 function renderMusiqueSection(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => {
+  const backBtn = btn('\u2190 Hub', '', () => {
     cleanupMusiqueView();
     state.view = state._musiquePrevView || 'hub';
     rerender();
@@ -156,7 +156,7 @@ function renderMusiqueSection(container, state, rerender) {
 
 // ─── Companion ESP32 ──────────────────────────────────────────────────────────
 function renderCompanionSection(container, state, rerender) {
-  const backBtn = btn('← Hub', '', () => { state.view = 'hub'; rerender(); });
+  const backBtn = btn('\u2190 Hub', '', () => { state.view = 'hub'; rerender(); });
   backBtn.style.marginBottom = '10px';
   container.appendChild(backBtn);
   const body = el('div', {});
@@ -164,7 +164,7 @@ function renderCompanionSection(container, state, rerender) {
   import('./companion.js').then(({ renderCompanionView }) => {
     renderCompanionView(body, state, rerender);
   }).catch(() => {
-    body.textContent = '⚠️ Module Companion ESP32 non disponible.';
+    body.textContent = '\u26a0\ufe0f Module Companion ESP32 non disponible.';
   });
 }
 
@@ -182,7 +182,7 @@ function renderHubView(container, state, rerender) {
   const bleStatus = el('div', { fontSize:'11px', padding:'2px 8px', borderRadius:'10px',
     background: deviceStatus.connected ? '#1a3a1a' : '#2a1a1a',
     color: deviceStatus.connected ? '#5ef' : '#e65', whiteSpace:'nowrap' });
-  bleStatus.textContent = deviceStatus.connected ? '● ESP32 connecté' : '○ ESP32 déconnecté';
+  bleStatus.textContent = deviceStatus.connected ? '\u25cf ESP32 connect\u00e9' : '\u25cb ESP32 d\u00e9connect\u00e9';
   titleRow.appendChild(bleStatus);
   container.appendChild(titleRow);
 
@@ -199,7 +199,7 @@ function renderHubView(container, state, rerender) {
         state.view = 'chat'; rerender();
       }},
     { icon:'\uD83D\uDEA8', label:'Radars', view:'radar', action: () => { state._radarPrevView = 'hub'; state.view = 'radar'; rerender(); }},
-    { icon:'\uD83C\uDF24', label:'Météo', view:'meteo', action: () => { state._meteoPrevView = 'hub'; state.view = 'meteo'; rerender(); }},
+    { icon:'\uD83C\uDF24', label:'M\u00e9t\u00e9o', view:'meteo', action: () => { state._meteoPrevView = 'hub'; state.view = 'meteo'; rerender(); }},
     { icon:'\uD83D\uDCC8', label:'Bourse', view:'bourse', action: () => { state._boursePrevView = 'hub'; state.view = 'bourse'; rerender(); }},
     { icon:'\uD83C\uDFB5', label:'Musique', view:'musique', action: () => { state._musiquePrevView = 'hub'; state.view = 'musique'; rerender(); }},
     { icon:'\uD83D\uDCF1', label:'ESP32', view:'companion', action: () => { state.view = 'companion'; rerender(); }},
@@ -235,7 +235,7 @@ function renderHubView(container, state, rerender) {
 
   if (activeAgents.length > 0) {
     const sectionLabel = el('div', { fontSize:'11px', color:'#555', textTransform:'uppercase', letterSpacing:'0.06em', marginTop:'8px', marginBottom:'4px' });
-    sectionLabel.textContent = 'Agents récents';
+    sectionLabel.textContent = 'Agents r\u00e9cents';
     container.appendChild(sectionLabel);
     const agentList = el('div', { display:'flex', flexDirection:'column', gap:'6px' });
     activeAgents.forEach(agent => {
@@ -248,7 +248,7 @@ function renderHubView(container, state, rerender) {
       const ic = el('span', { fontSize:'16px' }); ic.textContent = roleIcon(agent.role);
       const nm = el('span', { flex:'1', fontWeight:'500', color:'#ddd', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' });
       nm.textContent = agent.name;
-      const arr = el('span', { color:'#444', fontSize:'12px' }); arr.textContent = '›';
+      const arr = el('span', { color:'#444', fontSize:'12px' }); arr.textContent = '\u203a';
       row.appendChild(ic); row.appendChild(nm); row.appendChild(arr);
       row.onclick = () => {
         state.activeAgent = agent;
@@ -295,7 +295,7 @@ function renderChatView(container, state, rerender) {
   const chatMessages = state.chatHistory.filter(m => m.role !== 'system');
   if (chatMessages.length === 0) {
     const empty = el('div', { textAlign:'center', color:'#444', fontSize:'12px', padding:'20px 0' });
-    empty.textContent = 'Démarrez la conversation…';
+    empty.textContent = 'D\u00e9marrez la conversation\u2026';
     messages.appendChild(empty);
   } else {
     chatMessages.forEach(m => {
@@ -333,7 +333,7 @@ function renderChatView(container, state, rerender) {
       alignSelf:'flex-start', padding:'8px 12px', borderRadius:'10px',
       background:'#161616', color:'#555', fontSize:'12px',
     });
-    thinking.textContent = '…';
+    thinking.textContent = '\u2026';
     messages.appendChild(thinking);
   }
   wrap.appendChild(messages);
@@ -344,7 +344,7 @@ function renderChatView(container, state, rerender) {
   });
 
   const textarea = document.createElement('textarea');
-  textarea.placeholder = 'Message…';
+  textarea.placeholder = 'Message\u2026';
   textarea.rows = 1;
   Object.assign(textarea.style, {
     flex:'1', background:'#111', border:'1px solid #252525', borderRadius:'8px',
@@ -365,7 +365,7 @@ function renderChatView(container, state, rerender) {
     const sttBtn = document.createElement('button');
     sttBtn.style.cssText = 'background:#111;border:1px solid #252525;border-radius:8px;color:#888;padding:8px;cursor:pointer;font-size:16px;min-width:36px;';
     sttBtn.textContent = '\uD83C\uDF99';
-    sttBtn.setAttribute('aria-label', 'Dictée vocale');
+    sttBtn.setAttribute('aria-label', 'Dict\u00e9e vocale');
     sttBtn.onclick = () => {
       if (_currentSTT) { _currentSTT.stop(); _currentSTT = null; sttBtn.textContent = '\uD83C\uDF99'; return; }
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -381,13 +381,13 @@ function renderChatView(container, state, rerender) {
       rec.onerror = () => { _currentSTT = null; sttBtn.textContent = '\uD83C\uDF99'; };
       _currentSTT = rec;
       rec.start();
-      sttBtn.textContent = '⏹';
+      sttBtn.textContent = '\u23f9';
     };
     inputRow.appendChild(sttBtn);
   }
 
   const sendBtn = document.createElement('button');
-  sendBtn.textContent = '→';
+  sendBtn.textContent = '\u2192';
   sendBtn.style.cssText = 'background:#1a4a2a;border:none;border-radius:8px;color:#5ef;padding:8px 14px;cursor:pointer;font-size:15px;font-weight:700;min-width:40px;';
   sendBtn.setAttribute('aria-label', 'Envoyer');
 
@@ -405,19 +405,18 @@ function renderChatView(container, state, rerender) {
         const result = await orchestratorResolve(text, state.agents, agent);
         assistantText = (typeof result === 'string') ? result : (result?.reply || JSON.stringify(result));
       } else {
-        // FIX: wrap messages array in the expected { messages } object
         const r = await callLLM(agent.backendId || 'groq-llama', {
           messages: state.chatHistory,
           agentConfig: agent,
         });
-        assistantText = r?.message?.content || '(pas de réponse)';
+        assistantText = r?.message?.content || '(pas de r\u00e9ponse)';
       }
       state.chatHistory.push({ role:'assistant', content: assistantText });
       saveChatHistory(agent.id, state.chatHistory.filter(m => m.role !== 'system'));
       const ttsStatus = getTTSStatus();
       if (ttsStatus.enabled && !isSilentMode()) speak(textForTTS(assistantText));
     } catch (e) {
-      state.chatHistory.push({ role:'assistant', content: '⚠️ Erreur : ' + e.message });
+      state.chatHistory.push({ role:'assistant', content: '\u26a0\ufe0f Erreur : ' + e.message });
     } finally {
       state._thinking = false;
       rerender();
@@ -441,7 +440,7 @@ function formatMessage(text) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/^#{1,3}\s+(.+)$/gm, '<strong style="display:block;margin-top:6px;color:#ddd;">$1</strong>')
-    .replace(/^[-•]\s+(.+)$/gm, '<div style="padding-left:12px">• $1</div>')
+    .replace(/^[-\u2022]\s+(.+)$/gm, '<div style="padding-left:12px">\u2022 $1</div>')
     .replace(/\n/g, '<br>');
 }
 
@@ -452,7 +451,7 @@ function renderAgentsList(container, state, rerender) {
   const agents = state.agents || [];
   if (agents.length === 0) {
     const empty = el('div', { textAlign:'center', color:'#555', padding:'30px 0' });
-    empty.textContent = 'Aucun agent configuré.';
+    empty.textContent = 'Aucun agent configur\u00e9.';
     container.appendChild(empty);
     return;
   }
@@ -469,7 +468,7 @@ function renderAgentsList(container, state, rerender) {
     const desc = el('div', { fontSize:'11px', color:'#555', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' });
     desc.textContent = agent.description || agent.role;
     info.appendChild(name); info.appendChild(desc);
-    const editBtn = btn('✏️', '', (e) => {
+    const editBtn = btn('\u270f\ufe0f', '', (e) => {
       e.stopPropagation();
       state.editingAgent = { ...agent }; state.view = 'edit'; rerender();
     });
@@ -492,11 +491,11 @@ function renderAgentsList(container, state, rerender) {
   });
 
   const ioRow = el('div', { display:'flex', gap:'8px', marginTop:'12px' });
-  const exportBtn = btn('⬇ Export JSON', '', () => {
+  const exportBtn = btn('\u2b07 Export JSON', '', () => {
     downloadText(exportAgentsJson(state.agents), 'nestor-agents.json', 'application/json');
   });
   exportBtn.style.flex = '1';
-  const importBtn = btn('⬆ Import JSON', '', async () => {
+  const importBtn = btn('\u2b06 Import JSON', '', async () => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = '.json';
     input.onchange = async (e) => {
@@ -504,7 +503,7 @@ function renderAgentsList(container, state, rerender) {
       const text = await file.text();
       const result = await importAgentsJson(text, state.agents);
       state.agents = result;
-      showToast('Agents importés : ' + result.length);
+      showToast('Agents import\u00e9s : ' + result.length);
       rerender();
     };
     input.click();
@@ -526,7 +525,7 @@ function renderEditView(container, state, rerender) {
 
   const roleWrap = el('div', {});
   const roleLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
-  roleLbl.textContent = 'Rôle';
+  roleLbl.textContent = 'R\u00f4le';
   const roleSelect = document.createElement('select');
   Object.assign(roleSelect.style, { width:'100%', background:'#111', border:'1px solid #252525',
     borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px' });
@@ -546,7 +545,7 @@ function renderEditView(container, state, rerender) {
   if (backends.length > 0) {
     const bkWrap = el('div', {});
     const bkLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
-    bkLbl.textContent = 'Modèle LLM';
+    bkLbl.textContent = 'Mod\u00e8le LLM';
     const bkSelect = document.createElement('select');
     Object.assign(bkSelect.style, { width:'100%', background:'#111', border:'1px solid #252525',
       borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px' });
@@ -575,12 +574,12 @@ function renderEditView(container, state, rerender) {
   form.appendChild(spWrap);
 
   const actRow = el('div', { display:'flex', gap:'8px', marginTop:'8px' });
-  const saveBtn = btn(isNew ? '✚ Créer l\'agent' : '💾 Sauvegarder', 'primary', async () => {
+  const saveBtn = btn(isNew ? '\u271a Cr\u00e9er l\'agent' : '\uD83D\uDCBE Sauvegarder', 'primary', async () => {
     agent.updatedAt = new Date().toISOString();
     if (isNew) { agent.createdAt = agent.updatedAt; state.agents.push(agent); }
     else { const idx = state.agents.findIndex(a => a.id === agent.id); if (idx >= 0) state.agents[idx] = agent; }
     await saveAgent(agent);
-    showToast('Agent sauvegardé');
+    showToast('Agent sauvegard\u00e9');
     state.editingAgent = null; state.view = 'agents'; rerender();
   });
   saveBtn.style.flex = '1';
@@ -610,30 +609,30 @@ function renderFabriqueView(container, state, rerender) {
   title.textContent = '\uD83C\uDFED Fabrique d\'agents';
   container.appendChild(title);
   const desc = el('div', { fontSize:'12px', color:'#666', marginBottom:'16px', lineHeight:'1.5' });
-  desc.textContent = 'Décrivez l\'agent que vous souhaitez créer en langage naturel. Le Gardien construira sa configuration automatiquement.';
+  desc.textContent = 'D\u00e9crivez l\'agent que vous souhaitez cr\u00e9er en langage naturel. Le Gardien construira sa configuration automatiquement.';
   container.appendChild(desc);
   const textarea = document.createElement('textarea');
-  textarea.placeholder = 'Ex : "Un agent qui analyse mes relevés bancaires et détecte les dépenses inhabituelles"';
+  textarea.placeholder = 'Ex : "Un agent qui analyse mes relev\u00e9s bancaires et d\u00e9tecte les d\u00e9penses inhabituelles"';
   textarea.rows = 4;
   Object.assign(textarea.style, { width:'100%', background:'#111', border:'1px solid #252525',
     borderRadius:'8px', color:'#eee', padding:'10px', fontSize:'13px', resize:'none',
     fontFamily:'inherit', lineHeight:'1.4', boxSizing:'border-box', marginBottom:'10px' });
   container.appendChild(textarea);
-  const generateBtn = btn('⚡ Générer l\'agent', 'primary', async () => {
+  const generateBtn = btn('\u26a1 G\u00e9n\u00e9rer l\'agent', 'primary', async () => {
     const d = textarea.value.trim(); if (!d) return;
-    generateBtn.textContent = '⏳ Génération…'; generateBtn.disabled = true;
+    generateBtn.textContent = '\u23f3 G\u00e9n\u00e9ration\u2026'; generateBtn.disabled = true;
     try {
       const gardener = state.agents.find(a => a.role === 'gardener');
-      if (!gardener) { showToast('❌ Agent Gardien introuvable', true); return; }
+      if (!gardener) { showToast('\u274c Agent Gardien introuvable', true); return; }
       const newAgent = await gardenerMerge(gardener, d, state.agents);
       state.agents.push(newAgent);
       await saveAgent(newAgent);
-      showToast('✅ Agent "' + newAgent.name + '" créé');
+      showToast('\u2705 Agent "' + newAgent.name + '" cr\u00e9\u00e9');
       state.editingAgent = newAgent; state.view = 'edit'; rerender();
     } catch (e) {
-      showToast('❌ Erreur : ' + e.message, true);
+      showToast('\u274c Erreur : ' + e.message, true);
     } finally {
-      generateBtn.textContent = '⚡ Générer l\'agent'; generateBtn.disabled = false;
+      generateBtn.textContent = '\u26a1 G\u00e9n\u00e9rer l\'agent'; generateBtn.disabled = false;
     }
   });
   container.appendChild(generateBtn);
@@ -646,15 +645,26 @@ function renderSettings(container, state, rerender) {
   const TABS = [
     { id: 'nestor',    label: '\uD83E\uDDE0 Nestor'    },
     { id: 'bourse',    label: '\uD83D\uDCC8 Bourse'    },
-    { id: 'meteo',     label: '\uD83C\uDF24 Météo'     },
+    { id: 'meteo',     label: '\uD83C\uDF24 M\u00e9t\u00e9o'     },
     { id: 'musique',   label: '\uD83C\uDFB5 Musique'   },
     { id: 'domotique', label: '\uD83C\uDFE0 Domotique' },
-    { id: 'systeme',   label: '⚙️ Système'    },
+    { id: 'systeme',   label: '\u2699\ufe0f Syst\u00e8me'    },
   ];
 
   let activeTab = state._settingsTab || 'nestor';
 
-  const tabBar = el('div', { display:'flex', gap:'4px', marginBottom:'14px', borderBottom:'1px solid #1a1a1a', paddingBottom:'8px', flexWrap:'wrap' });
+  // Barre d'onglets scrollable horizontalement — friendly smartphone
+  const tabBar = el('div', {
+    display: 'flex',
+    gap: '4px',
+    marginBottom: '14px',
+    borderBottom: '1px solid #1a1a1a',
+    paddingBottom: '8px',
+    overflowX: 'auto',
+    WebkitOverflowScrolling: 'touch',
+    scrollbarWidth: 'none',
+  });
+  tabBar.style.msOverflowStyle = 'none';
 
   const renderTab = (tabId) => {
     activeTab = tabId;
@@ -671,7 +681,7 @@ function renderSettings(container, state, rerender) {
   TABS.forEach(tab => {
     const b = btn(tab.label, '', () => renderTab(tab.id));
     b.dataset.tab = tab.id;
-    b.style.cssText += ';font-size:11px;padding:5px 10px;';
+    b.style.cssText += ';font-size:11px;padding:5px 10px;white-space:nowrap;flex-shrink:0;';
     if (tab.id === activeTab) {
       b.style.background = '#1a3a2a'; b.style.color = '#5ef'; b.style.borderColor = '#2a5a3a';
     }
@@ -686,19 +696,44 @@ function renderSettings(container, state, rerender) {
 }
 
 function renderTabBody(container, tabId, state, rerender) {
-  const mkField = (label, value, onSave, type = 'password', placeholder = 'Clé API…') => {
-    const wrap = el('div', { marginBottom:'12px' });
-    const lbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
+  /**
+   * mkField — champ de saisie sans bouton Sauver.
+   * Sauvegarde automatiquement à la perte de focus (onblur).
+   * L'indicateur visuel discret (bordure verte temporaire) confirme la sauvegarde.
+   */
+  const mkField = (label, value, onSave, type = 'password', placeholder = 'Cl\u00e9 API\u2026') => {
+    const wrap = el('div', { marginBottom: '12px' });
+    const lbl = el('label', { fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' });
     lbl.textContent = label;
-    const row = el('div', { display:'flex', gap:'6px', alignItems:'center' });
     const inp = document.createElement('input');
-    inp.type = type; inp.value = value; inp.placeholder = placeholder;
-    Object.assign(inp.style, { flex:'1', background:'#111', border:'1px solid #252525',
-      borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px', boxSizing:'border-box' });
-    const saveBtn = btn('Sauver', 'primary', () => { onSave(inp.value.trim()); showToast(label + ' sauvegardé'); });
-    saveBtn.style.cssText += ';padding:6px 10px;font-size:12px;white-space:nowrap;';
-    row.append(inp, saveBtn);
-    wrap.append(lbl, row);
+    inp.type = type;
+    inp.value = value;
+    inp.placeholder = placeholder;
+    Object.assign(inp.style, {
+      width: '100%',
+      background: '#111',
+      border: '1px solid #252525',
+      borderRadius: '6px',
+      color: '#ccc',
+      padding: '9px 10px',
+      fontSize: '14px',
+      boxSizing: 'border-box',
+      // Empêche iOS de zoomer sur le champ (font-size >= 16px côté rendu)
+      WebkitAppearance: 'none',
+    });
+    // Sauvegarde au blur (sortie du champ)
+    inp.addEventListener('blur', () => {
+      const v = inp.value.trim();
+      onSave(v);
+      // Feedback visuel discret : bordure verte 1s
+      inp.style.borderColor = '#2a6a3a';
+      setTimeout(() => { inp.style.borderColor = '#252525'; }, 1000);
+    });
+    // Sauvegarde aussi sur Enter
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    });
+    wrap.append(lbl, inp);
     return wrap;
   };
 
@@ -722,20 +757,20 @@ function renderTabBody(container, tabId, state, rerender) {
 
   if (tabId === 'nestor') {
     const s = getNestorSettings();
-    container.appendChild(mkSectionTitle('Clés API Nestor'));
+    container.appendChild(mkSectionTitle('Cl\u00e9s API Nestor'));
     container.appendChild(mkField('Groq API Key',         s.apiKey,           v => setNestorSettings({ apiKey: v })));
     container.appendChild(mkField('Gemini API Key (TTS)', s.geminiApiKey,     v => setNestorSettings({ geminiApiKey: v })));
     container.appendChild(mkField('Serper API Key',       s.serperApiKey,     v => setNestorSettings({ serperApiKey: v })));
     container.appendChild(mkField('OpenRouter API Key',   s.openrouterApiKey, v => setNestorSettings({ openrouterApiKey: v })));
     container.appendChild(mkSeparator());
-    container.appendChild(mkSectionTitle('LLM par défaut'));
-    container.appendChild(mkField('Modèle Groq', s.model, v => setNestorSettings({ model: v }), 'text', 'llama3-70b-8192'));
+    container.appendChild(mkSectionTitle('LLM par d\u00e9faut'));
+    container.appendChild(mkField('Mod\u00e8le Groq', s.model, v => setNestorSettings({ model: v }), 'text', 'llama3-70b-8192'));
     const ttsSection = el('div', { marginTop:'10px' });
-    container.appendChild(mkSectionTitle('Synthèse vocale'));
+    container.appendChild(mkSectionTitle('Synth\u00e8se vocale'));
     const silentToggle = el('div', { display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' });
     const silentLbl = el('span', { fontSize:'13px', color:'#bbb', flex:'1' });
     silentLbl.textContent = 'Mode silencieux';
-    const silentBtn = btn(isSilentMode() ? '\uD83D\uDD07 Activé' : '\uD83D\uDD0A Désactivé', '', () => {
+    const silentBtn = btn(isSilentMode() ? '\uD83D\uDD07 Activ\u00e9' : '\uD83D\uDD0A D\u00e9sactiv\u00e9', '', () => {
       setSilentMode(!isSilentMode()); rerender();
     });
     silentToggle.append(silentLbl, silentBtn);
@@ -745,14 +780,14 @@ function renderTabBody(container, tabId, state, rerender) {
 
   else if (tabId === 'bourse') {
     const s = getBourseSettings();
-    container.appendChild(mkSectionTitle('Clés API Bourse'));
+    container.appendChild(mkSectionTitle('Cl\u00e9s API Bourse'));
     container.appendChild(mkField('TwelveData API Key', s.twelveDataApiKey, v => setBourseSettings({ twelveDataApiKey: v })));
   }
 
   else if (tabId === 'meteo') {
     const s = getMeteoSettings();
-    container.appendChild(mkSectionTitle('Clés API Météo'));
-    container.appendChild(mkField('Météo-Concept API Key', s.meteoConcept, v => setMeteoSettings({ meteoConcept: v })));
+    container.appendChild(mkSectionTitle('Cl\u00e9s API M\u00e9t\u00e9o'));
+    container.appendChild(mkField('M\u00e9t\u00e9o-Concept API Key', s.meteoConcept, v => setMeteoSettings({ meteoConcept: v })));
   }
 
   else if (tabId === 'musique') {
@@ -760,83 +795,66 @@ function renderTabBody(container, tabId, state, rerender) {
     container.appendChild(mkSectionTitle('Spotify'));
     container.appendChild(mkField('Client ID',     s.spotifyClientId,     v => setMusiqueSettings({ spotifyClientId: v }),     'password', 'Spotify Client ID'));
     container.appendChild(mkField('Client Secret', s.spotifyClientSecret, v => setMusiqueSettings({ spotifyClientSecret: v }), 'password', 'Spotify Client Secret'));
-    container.appendChild(mkField('Redirect URI',  s.spotifyRedirectUri,  v => setMusiqueSettings({ spotifyRedirectUri: v }),  'text',     'https://…'));
+    container.appendChild(mkField('Redirect URI',  s.spotifyRedirectUri,  v => setMusiqueSettings({ spotifyRedirectUri: v }),  'text',     'https://\u2026'));
   }
 
-  // ─── DOMOTIQUE ──────────────────────────────────────────────────────────────
+  // ─── DOMOTIQUE (sans bouton Sync BLE — présent uniquement dans Système) ───
   else if (tabId === 'domotique') {
     const s = getDomotiqueSettings();
 
     // ── Tuya ──
-    container.appendChild(mkSectionTitle('🔌 Tuya Cloud'));
-    container.appendChild(mkHint('Créer un projet sur iot.tuya.com → Cloud → Projects. Copier Access ID et Access Secret depuis l\'onglet Overview.'));
-    container.appendChild(mkField('Access ID (Client ID)',     s.tuyaClientId,     v => setDomotiqueSettings({ tuyaClientId: v }),     'password', 'Client ID…'));
-    container.appendChild(mkField('Access Secret (Client Secret)', s.tuyaClientSecret, v => setDomotiqueSettings({ tuyaClientSecret: v }), 'password', 'Client Secret…'));
+    container.appendChild(mkSectionTitle('\uD83D\uDD0C Tuya Cloud'));
+    container.appendChild(mkHint('Cr\u00e9er un projet sur iot.tuya.com \u2192 Cloud \u2192 Projects. Copier Access ID et Access Secret depuis l\'onglet Overview.'));
+    container.appendChild(mkField('Access ID (Client ID)',           s.tuyaClientId,     v => setDomotiqueSettings({ tuyaClientId: v }),     'password', 'Client ID\u2026'));
+    container.appendChild(mkField('Access Secret (Client Secret)',   s.tuyaClientSecret, v => setDomotiqueSettings({ tuyaClientSecret: v }), 'password', 'Client Secret\u2026'));
 
-    // Région Tuya — select
+    // Région Tuya — select (onchange = sauvegarde immédiate, pas de blur)
     const regionWrap = el('div', { marginBottom:'12px' });
     const regionLbl = el('label', { fontSize:'11px', color:'#666', display:'block', marginBottom:'3px' });
-    regionLbl.textContent = 'Région du datacenter';
+    regionLbl.textContent = 'R\u00e9gion du datacenter';
     const regionSelect = document.createElement('select');
     Object.assign(regionSelect.style, { width:'100%', background:'#111', border:'1px solid #252525',
       borderRadius:'6px', color:'#ccc', padding:'7px 8px', fontSize:'13px' });
-    [['eu','Europe (eu)'],['us','Amérique (us)'],['cn','Chine (cn)'],['in','Inde (in)']].forEach(([val, label]) => {
+    [['eu','Europe (eu)'],['us','Am\u00e9rique (us)'],['cn','Chine (cn)'],['in','Inde (in)']].forEach(([val, label]) => {
       const opt = document.createElement('option');
       opt.value = val; opt.textContent = label;
       if (val === (s.tuyaRegion || 'eu')) opt.selected = true;
       regionSelect.appendChild(opt);
     });
-    regionSelect.onchange = () => { setDomotiqueSettings({ tuyaRegion: regionSelect.value }); showToast('Région Tuya sauvegardée'); };
+    regionSelect.onchange = () => { setDomotiqueSettings({ tuyaRegion: regionSelect.value }); showToast('R\u00e9gion Tuya sauvegard\u00e9e'); };
     regionWrap.append(regionLbl, regionSelect);
     container.appendChild(regionWrap);
 
-    container.appendChild(mkField('User ID (facultatif)', s.tuyaUserId, v => setDomotiqueSettings({ tuyaUserId: v }), 'text', 'UID Tuya lié…'));
+    container.appendChild(mkField('User ID (facultatif)', s.tuyaUserId, v => setDomotiqueSettings({ tuyaUserId: v }), 'text', 'UID Tuya li\u00e9\u2026'));
 
     container.appendChild(mkSeparator());
 
     // ── Ecovacs ──
-    container.appendChild(mkSectionTitle('🤖 Ecovacs DEEBOT (X8 Pro Omni)'));
-    container.appendChild(mkHint('Identifiants du compte Ecovacs (app mobile). Le mot de passe sera hashé en MD5 côté agent avant envoi. Device ID auto-détecté à la première synchro.'));
-    container.appendChild(mkField('Email du compte',    s.ecovacsEmail,       v => setDomotiqueSettings({ ecovacsEmail: v }),       'text',     'email@…'));
-    container.appendChild(mkField('Mot de passe',       s.ecovacsPassword,    v => setDomotiqueSettings({ ecovacsPassword: v }),    'password', 'Mot de passe…'));
+    container.appendChild(mkSectionTitle('\uD83E\uDD16 Ecovacs DEEBOT (X8 Pro Omni)'));
+    container.appendChild(mkHint('Identifiants du compte Ecovacs (app mobile). Le mot de passe sera hash\u00e9 en MD5 c\u00f4t\u00e9 agent avant envoi. Device ID auto-d\u00e9tect\u00e9 \u00e0 la premi\u00e8re synchro.'));
+    container.appendChild(mkField('Email du compte',    s.ecovacsEmail,       v => setDomotiqueSettings({ ecovacsEmail: v }),       'text',     'email@\u2026'));
+    container.appendChild(mkField('Mot de passe',       s.ecovacsPassword,    v => setDomotiqueSettings({ ecovacsPassword: v }),    'password', 'Mot de passe\u2026'));
     container.appendChild(mkField('Code pays',          s.ecovacsCountryCode, v => setDomotiqueSettings({ ecovacsCountryCode: v }), 'text',     'fr'));
-    container.appendChild(mkField('Device ID (auto)',   s.ecovacsDeviceId,    v => setDomotiqueSettings({ ecovacsDeviceId: v }),    'text',     'Auto-détecté…'));
-
-    container.appendChild(mkSeparator());
-
-    // ── Sync BLE ──
-    const syncRow = el('div', { display:'flex', gap:'8px', alignItems:'center', marginTop:'4px' });
-    const syncBtn = btn('📡 Sync vers ESP32', 'primary', async () => {
-      syncBtn.textContent = '⏳ Sync…'; syncBtn.disabled = true;
-      try {
-        const report = await syncApiKeys();
-        const pushed = report.pushed.filter(k => k.startsWith('TUYA_') || k.startsWith('ECOVACS_'));
-        showToast(pushed.length ? '✅ ' + pushed.length + ' clé(s) envoyée(s) à l\'ESP32' : '⚠️ Rien de nouveau à pousser');
-      } catch(e) {
-        showToast('❌ Sync échoué : ' + e.message, true);
-      } finally {
-        syncBtn.textContent = '📡 Sync vers ESP32'; syncBtn.disabled = false;
-      }
-    });
-    syncRow.appendChild(syncBtn);
-    const syncHint = el('span', { fontSize:'10px', color:'#444', flex:'1' });
-    syncHint.textContent = 'Pousse les clés domotique vers la NVS de l\'ESP32 via BLE.';
-    syncRow.appendChild(syncHint);
-    container.appendChild(syncRow);
+    container.appendChild(mkField('Device ID (auto)',   s.ecovacsDeviceId,    v => setDomotiqueSettings({ ecovacsDeviceId: v }),    'text',     'Auto-d\u00e9tect\u00e9\u2026'));
   }
 
+  // ─── SYSTÈME : seul endroit pour la synchro BLE ──────────────────────────
   else if (tabId === 'systeme') {
-    container.appendChild(mkSectionTitle('Système'));
+    container.appendChild(mkSectionTitle('Syst\u00e8me'));
     const syncAllRow = el('div', { display:'flex', gap:'8px', alignItems:'center', marginBottom:'10px' });
-    const syncAllBtn = btn('📡 Sync toutes les clés → ESP32', 'primary', async () => {
-      syncAllBtn.textContent = '⏳ Sync…'; syncAllBtn.disabled = true;
+    const syncAllBtn = btn('\uD83D\uDCE1 Sync toutes les cl\u00e9s \u2192 ESP32', 'primary', async () => {
+      syncAllBtn.textContent = '\u23f3 Sync\u2026'; syncAllBtn.disabled = true;
       try {
         const report = await syncApiKeys();
-        showToast('✅ Poussé: ' + report.pushed.length + '  OK: ' + report.ok.length + '  Manquant: ' + report.missing.length);
+        if (report.error) {
+          showToast('\u274c ' + report.error, true);
+        } else {
+          showToast('\u2705 Pouss\u00e9: ' + report.pushed.length + '  OK: ' + report.ok.length + '  Manquant: ' + report.missing.length);
+        }
       } catch(e) {
-        showToast('❌ ' + e.message, true);
+        showToast('\u274c ' + e.message, true);
       } finally {
-        syncAllBtn.textContent = '📡 Sync toutes les clés → ESP32'; syncAllBtn.disabled = false;
+        syncAllBtn.textContent = '\uD83D\uDCE1 Sync toutes les cl\u00e9s \u2192 ESP32'; syncAllBtn.disabled = false;
       }
     });
     syncAllRow.appendChild(syncAllBtn);
@@ -863,6 +881,8 @@ function btn(label, variant, onClick) {
     borderColor: isPrimary ? '#2a6a3a' : '#252525',
     transition: 'background 0.15s',
     WebkitTapHighlightColor: 'transparent',
+    // Touch targets >= 44px de hauteur (responsive mobile)
+    minHeight: '44px',
   });
   b.onclick = onClick;
   return b;
@@ -874,9 +894,12 @@ function showToast(msg, isError = false) {
     position:'fixed', bottom:'20px', left:'50%', transform:'translateX(-50%)',
     background: isError ? '#3a1a1a' : '#1a3a1a',
     color: isError ? '#f88' : '#5ef',
-    padding:'8px 16px', borderRadius:'8px', fontSize:'12px',
+    padding:'10px 18px', borderRadius:'10px', fontSize:'13px',
     zIndex:'9999', pointerEvents:'none',
     border: '1px solid ' + (isError ? '#5a2a2a' : '#2a5a2a'),
+    maxWidth: 'calc(100vw - 32px)',
+    textAlign: 'center',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
   });
   t.textContent = msg;
   document.body.appendChild(t);
