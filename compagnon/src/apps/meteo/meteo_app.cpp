@@ -245,3 +245,6 @@ void meteo_app_start() {
 void meteo_app_stop() {
     do_close();
 }
+
+void meteo_app_tick() {
+}

@@ -191,3 +191,7 @@ void bourse_app_start() {
 void bourse_app_stop() {
     do_close();
 }
+
+void bourse_app_tick() {
+
+}
