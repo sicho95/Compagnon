@@ -9,7 +9,6 @@
 #include "../../config/nvs_config.h"
 #include "../../config/ui_config.h"
 #include <Arduino.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
 
@@ -64,9 +63,8 @@ static void fetch_prices() {
         char url[256];
         snprintf(url, sizeof(url), API_BASE, TICKERS[i], _api_key);
 
-        // Utilise https_get() : client SSL sur le heap → évite SSL -32512
-        String body;
-        int code = https_get(url, body);
+        int code = 0;
+        String body = https_get(url, &code);
         if (code == 200) {
             StaticJsonDocument<128> doc;
             if (!deserializeJson(doc, body) && doc.containsKey("price")) {
@@ -172,7 +170,6 @@ void bourse_app_start() {
     if (_open) return;
     orchestrator_set_app(APP_BOURSE);
 
-    // FIX: clé NVS corrigée 'bourse_key' → 'twelvedata_key'
     String key = nvs_get_str("twelvedata_key", "");
     if (key.length() == 0) {
         Serial.println("[APP/BOURSE] Clé API manquante (NVS 'twelvedata_key')");

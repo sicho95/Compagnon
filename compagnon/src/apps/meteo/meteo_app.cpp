@@ -10,7 +10,6 @@
 #include "../../config/ui_config.h"
 #include "../../ui/launcher.h"
 #include <Arduino.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
 #include <time.h>
@@ -100,9 +99,8 @@ static void fetch_meteo() {
     char url[512];
     snprintf(url, sizeof(url), API_URL, _api_key, lat_s, lon_s);
 
-    // Utilise https_get() : NetworkClientSecure sur le heap → évite SSL -32512
-    String body;
-    int code = https_get(url, body);
+    int code = 0;
+    String body = https_get(url, &code);
     if (code != 200) {
         char err[32];
         snprintf(err, sizeof(err), "Erreur HTTP %d", code);
