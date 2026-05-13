@@ -98,6 +98,11 @@ const _settingsCache = {};
 let   _dbReady = false;
 
 /**
+ * Indique si le cache IDB est prêt. Utile pour les diagnostics.
+ */
+export function isDbReady() { return _dbReady; }
+
+/**
  * À appeler une seule fois au boot (dans main()) avant toute lecture de settings.
  * Pré-charge tous les namespaces dans _settingsCache.
  */
@@ -116,8 +121,18 @@ export async function initSettingsStore() {
 }
 
 export function lsGet(key) {
+  // ── Cas 1 : IDB prêt → source de vérité unique
   if (_dbReady) return _settingsCache[key] ?? '';
-  // Fallback synchrone si initSettingsStore() pas encore terminé
+
+  // ── Cas 2 : IDB pas encore prêt (appel synchrone avant await initSettingsStore())
+  // Priorité 1 : cache mémoire déjà partiellement peuplé (ex : lsSet appelé avant init)
+  if (key in _settingsCache) return _settingsCache[key] ?? '';
+
+  // Priorité 2 : fallback localStorage — ne contient les clés que si elles ont été
+  // écrites AVANT la migration vers IDB. Pour les nouveaux utilisateurs ce retour
+  // sera '' mais c'est acceptable : le 401 Groq ne se produit que si l'utilisateur
+  // appelle callLLM avant la fin de initSettingsStore(), ce qui est évité par
+  // l'ordre d'appel dans app.js (initSettingsStore → initBackends → render).
   try { return localStorage.getItem(key) || ''; } catch { return ''; }
 }
 
