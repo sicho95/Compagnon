@@ -119,7 +119,7 @@ static void build_ui() {
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
     lv_obj_center(lbl_back);
 
-    // 4 cartes 2×2 — origine Y décalée sous status bar + en-tête
+    // 4 cartes 2x2 — origine Y décalée sous status bar + en-tête
     int card_w = 180, card_h = 100;
     int pad_x = 20;
     int pad_y = APP_Y + 44;  // 44 px de marge après la status bar pour le titre
@@ -170,7 +170,6 @@ static void do_close() {
     }
     _status_lbl = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
-    ui_launcher_return();
 }
 
 // ─── API publique ─────────────────────────────────────────────────────────────
