@@ -1,17 +1,18 @@
 /**
  * net_utils.h — Helpers HTTPS GET/POST avec NetworkClientSecure alloué sur le heap
  *
+ * IMPORTANT: Ces fonctions font des appels TLS/mbedTLS qui nécessitent environ
+ * 16-20KB de stack disponible. NE PAS appeler depuis le thread LVGL ou loop().
+ * Toujours appeler depuis une FreeRTOS task avec stack >= 24576 bytes sur Core 0.
+ *
  * Utilise setInsecure() pour éviter la gestion des certificats root CA.
  * NetworkClientSecure est alloué/libéré à chaque appel pour ne pas bloquer
  * la mémoire entre les requêtes.
  *
  * Usage basique :
+ *   // Dans une xTaskCreatePinnedToCore(task, ..., 24576, ..., 0) :
  *   String body = https_get("https://api.example.com/data");
  *   String resp = https_post("https://api.example.com/cmd", "{\"key\":\"val\"}");
- *
- * Usage avec headers custom :
- *   int rc;
- *   String body = https_get_ex(url, "Authorization: Bearer TOKEN", &rc);
  */
 #pragma once
 #include <Arduino.h>
@@ -21,20 +22,15 @@
 
 /**
  * https_get_ex — GET HTTPS avec headers custom optionnels.
- * @param url          URL complète (https://...)
- * @param extra_headers Headers supplémentaires au format "Key: Value\nKey2: Val2" (nullptr ok)
- * @param out_code     Si non nullptr, reçoit le code HTTP retourné
- * @return             Body de la réponse, ou String vide en cas d'erreur
  */
 inline String https_get_ex(const char *url, const char *extra_headers, int *out_code) {
     NetworkClientSecure *client = new NetworkClientSecure;
     if (!client) { if (out_code) *out_code = -1; return ""; }
     client->setInsecure();
     HTTPClient http;
-    http.setTimeout(8000);
+    http.setTimeout(15000);  // 15s (était 8s — trop court pour les APIs lentes)
     http.begin(*client, url);
     if (extra_headers && extra_headers[0]) {
-        // Parsing ligne par ligne "Key: Value\n..."
         String hdrs = extra_headers;
         int pos = 0;
         while (pos < (int)hdrs.length()) {
@@ -65,7 +61,7 @@ inline String https_post_ex(const char *url, const char *body, const char *extra
     if (!client) { if (out_code) *out_code = -1; return ""; }
     client->setInsecure();
     HTTPClient http;
-    http.setTimeout(8000);
+    http.setTimeout(15000);  // 15s
     http.begin(*client, url);
     http.addHeader("Content-Type", "application/json");
     if (extra_headers && extra_headers[0]) {

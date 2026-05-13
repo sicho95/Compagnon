@@ -1,6 +1,10 @@
 /**
  * Afficher prévisions météo J+3 via api.meteo-concept.com.
  * Position GPS : BLE téléphone → dernière position NVS → Paris (fallback final).
+ *
+ * FIX: fetch_meteo() tourne maintenant dans une FreeRTOS task dédiée (24KB, Core 0)
+ *      pour éviter le crash mbedTLS "SSL - Memory allocation failed" quand appelé
+ *      depuis le thread LVGL (stack insuffisante pour TLS ~16KB).
  */
 #include "meteo_app.h"
 #include "../../net/ble_mgr.h"
@@ -36,11 +40,22 @@ static lv_obj_t   *_status_lbl = nullptr;
 static lv_timer_t *_timer      = nullptr;
 static unsigned long _last_fetch = 0;
 static bool _open = false;
+static volatile bool _fetch_running = false;
 static char _api_key[128] = "";
 static double _lat = PARIS_LAT;
 static double _lon = PARIS_LON;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Résultat fetch (partagé task→LVGL via lv_async_call) ────────────────────
+struct MeteoDay { int tmin, tmax, rain, pluie; };
+struct MeteoFetchResult {
+    bool ok;
+    char err[48];
+    MeteoDay days[4];
+    int count;
+};
+static MeteoFetchResult _fres;
+
+// ─── Helpers UI (appelés depuis LVGL thread uniquement) ──────────────────────
 static void set_status(const char *msg) {
     if (_status_lbl) lv_label_set_text(_status_lbl, msg);
 }
@@ -48,13 +63,10 @@ static void set_status(const char *msg) {
 static void update_card(int idx, int tmin, int tmax, int rain, int pluie) {
     if (idx < 0 || idx >= FORECAST_DAYS) return;
     char buf[16];
-
     snprintf(buf, sizeof(buf), "%d°", tmin);
     if (_tmin_lbl[idx]) lv_label_set_text(_tmin_lbl[idx], buf);
-
     snprintf(buf, sizeof(buf), "%d°", tmax);
     if (_tmax_lbl[idx]) lv_label_set_text(_tmax_lbl[idx], buf);
-
     snprintf(buf, sizeof(buf), "%d%%", pluie);
     if (_rain_lbl[idx]) lv_label_set_text(_rain_lbl[idx], buf);
 }
@@ -62,77 +74,108 @@ static void update_card(int idx, int tmin, int tmax, int rain, int pluie) {
 // ─── Résolution position ──────────────────────────────────────────────────────
 static void resolve_position() {
     double lat, lon;
-    // 1. BLE GPS (téléphone)
     if (ble_mgr_get_gps(&lat, &lon)) {
         _lat = lat; _lon = lon;
         nvs_set_double("last_lat", lat);
         nvs_set_double("last_lon", lon);
-        Serial.printf("[APP/METEO] GPS BLE: %.5f, %.5f\n", lat, lon);
         return;
     }
-    // 2. Dernière position NVS
     lat = nvs_get_double("last_lat", 999.0);
     lon = nvs_get_double("last_lon", 999.0);
     if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0) {
         _lat = lat; _lon = lon;
-        Serial.printf("[APP/METEO] GPS NVS: %.5f, %.5f\n", lat, lon);
         return;
     }
-    // 3. Paris
     _lat = PARIS_LAT; _lon = PARIS_LON;
-    Serial.println("[APP/METEO] GPS fallback Paris");
 }
 
-// ─── Fetch HTTPS ──────────────────────────────────────────────────────────────
-static void fetch_meteo() {
-    if (strlen(_api_key) == 0) {
-        set_status("Clé API manquante");
+// ─── Callback LVGL (résultat de la task) ─────────────────────────────────────
+static void on_fetch_done(void *) {
+    _fetch_running = false;
+    if (!_screen) return;
+    if (!_fres.ok) {
+        set_status(_fres.err);
         return;
     }
+    for (int i = 0; i < _fres.count; i++)
+        update_card(i, _fres.days[i].tmin, _fres.days[i].tmax,
+                    _fres.days[i].rain, _fres.days[i].pluie);
+    set_status("OK");
+    _last_fetch = millis();
+}
+
+// ─── FreeRTOS task réseau (Core 0, 24KB stack) ───────────────────────────────
+// 24KB nécessaire : mbedTLS context (~16KB) + HTTPClient + JSON parsing
+static void fetch_task(void *) {
+    _fres = {};
+
+    if (!WiFi.isConnected()) {
+        strlcpy(_fres.err, "WiFi non connecte", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr);
+        vTaskDelete(NULL); return;
+    }
+    if (strlen(_api_key) == 0) {
+        strlcpy(_fres.err, "Cle API manquante", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr);
+        vTaskDelete(NULL); return;
+    }
+
     resolve_position();
-    set_status("Chargement...");
 
     char lat_s[16], lon_s[16];
     snprintf(lat_s, sizeof(lat_s), "%.5f", _lat);
     snprintf(lon_s, sizeof(lon_s), "%.5f", _lon);
-
     char url[512];
     snprintf(url, sizeof(url), API_URL, _api_key, lat_s, lon_s);
 
     int code = 0;
     String body = https_get(url, &code);
+
+    // Log stack watermark pour diagnostiquer les crashes futurs
+    Serial.printf("[APP/METEO] fetch_task stack min: %d bytes\n",
+                  uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+
     if (code != 200) {
-        char err[32];
-        snprintf(err, sizeof(err), "Erreur HTTP %d", code);
-        set_status(err);
-        return;
+        snprintf(_fres.err, sizeof(_fres.err), "Erreur HTTP %d", code);
+        lv_async_call(on_fetch_done, nullptr);
+        vTaskDelete(NULL); return;
     }
 
     DynamicJsonDocument doc(8192);
     if (deserializeJson(doc, body)) {
-        set_status("JSON invalide");
-        return;
+        strlcpy(_fres.err, "JSON invalide", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr);
+        vTaskDelete(NULL); return;
     }
 
     JsonArray forecast = doc["forecast"];
-    int count = 0;
+    _fres.count = 0;
     for (JsonObject day : forecast) {
-        if (count >= FORECAST_DAYS) break;
-        int tmin  = day["tmin"]  | 0;
-        int tmax  = day["tmax"]  | 0;
-        int rain  = day["rr10"]  | 0;
-        int pluie = day["probarain"] | 0;
-        update_card(count, tmin, tmax, rain, pluie);
-        count++;
+        if (_fres.count >= FORECAST_DAYS) break;
+        _fres.days[_fres.count] = {
+            day["tmin"]      | 0,
+            day["tmax"]      | 0,
+            day["rr10"]      | 0,
+            day["probarain"] | 0
+        };
+        _fres.count++;
     }
-    set_status("OK");
-    _last_fetch = millis();
+    _fres.ok = true;
+    lv_async_call(on_fetch_done, nullptr);
+    vTaskDelete(NULL);
+}
+
+static void start_fetch() {
+    if (_fetch_running) return;
+    _fetch_running = true;
+    // Stack 24576 bytes (24KB) sur Core 0 — LVGL tourne sur Core 1
+    xTaskCreatePinnedToCore(fetch_task, "meteo_fetch", 24576, nullptr, 1, nullptr, 0);
 }
 
 // ─── Timer ────────────────────────────────────────────────────────────────────
 static void on_timer(lv_timer_t *) {
     if (!_open) return;
-    if (millis() - _last_fetch >= REFRESH_MS) fetch_meteo();
+    if (millis() - _last_fetch >= REFRESH_MS) start_fetch();
 }
 
 // ─── Bouton retour ────────────────────────────────────────────────────────────
@@ -214,7 +257,8 @@ static void build_ui() {
 
 // ─── do_close ─────────────────────────────────────────────────────────────────
 static void do_close() {
-    _open = false;
+    _open          = false;
+    _fetch_running = false;
     if (_timer) { lv_timer_del(_timer); _timer = nullptr; }
     if (_screen) { lv_obj_del(_screen); _screen = nullptr; }
     for (int i = 0; i < FORECAST_DAYS; i++) {
@@ -237,11 +281,11 @@ void meteo_app_start() {
 
     build_ui();
     lv_scr_load(_screen);
-    _open = true;
-    _last_fetch = 0;
+    _open        = true;
+    _last_fetch  = 0;
 
     _timer = lv_timer_create(on_timer, 5000, NULL);
-    fetch_meteo();
+    start_fetch();  // FIX: via task, plus directement
     Serial.println("[APP/METEO] Ouverte");
 }
 
@@ -249,5 +293,4 @@ void meteo_app_stop() {
     do_close();
 }
 
-void meteo_app_tick() {
-}
+void meteo_app_tick() {}

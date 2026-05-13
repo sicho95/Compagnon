@@ -1,11 +1,9 @@
 /**
  * ecovacs_app.cpp — Ecovacs DEEBOT X8 Pro Omni via API cloud
  *
- * API REST Ecovacs (non-officielle, bien documentée) :
- *   Auth  : POST https://gl-eu-openapi.ecovacs.com/v1/private/eu/user/login
- *   XMPP  : commandes via API REST JSON
- *
- * Référence : https://github.com/DeebotUniverse/Deebot-4-Home-Assistant
+ * FIX: stack des tasks réseau 8192 → 24576 bytes.
+ *      mbedTLS seul utilise ~16KB de stack, 8KB causait
+ *      "SSL - Memory allocation failed" (-32512).
  */
 #include "ecovacs_app.h"
 #include "../../config/nvs_config.h"
@@ -98,7 +96,7 @@ void ecovacs_set_credentials(const char *user, const char *pass) {
     _state.authenticated = false;
 }
 
-// ─── Auth Ecovacs via net_utils (NetworkClientSecure heap) ────────────────────
+// ─── Auth Ecovacs ─────────────────────────────────────────────────────────────
 static bool ecovacs_auth() {
     char pass_md5[33];
     md5_hex(_eco_pass, pass_md5);
@@ -248,6 +246,7 @@ static void on_fetch_done(void *) {
     update_ui();
 }
 
+// FIX: stack 8192 → 24576 bytes (mbedTLS nécessite ~16KB de stack)
 static void fetch_task(void *) {
     _fres = {};
     if (!WiFi.isConnected()) {
@@ -269,6 +268,8 @@ static void fetch_task(void *) {
     ecovacs_get_battery();
     ecovacs_get_clean_info();
     _fres.ok = true;
+    Serial.printf("[ECOVACS] fetch_task stack min: %d bytes\n",
+                  uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
     lv_async_call(on_fetch_done, nullptr);
     vTaskDelete(NULL);
 }
@@ -276,10 +277,14 @@ static void fetch_task(void *) {
 static void start_fetch() {
     if (_fetch_running) return;
     _fetch_running = true;
-    xTaskCreatePinnedToCore(fetch_task, "eco_fetch", 8192, nullptr, 1, nullptr, 0);
+    // FIX: 8192 → 24576 bytes
+    xTaskCreatePinnedToCore(fetch_task, "eco_fetch", 24576, nullptr, 1, nullptr, 0);
 }
 
 // ─── Callbacks boutons commande ───────────────────────────────────────────────
+struct CmdArg { char cmd[24]; };
+static CmdArg _cmd_arg;
+
 static void cmd_task(void *arg) {
     const char *cmd = (const char *)arg;
     ecovacs_send_cmd(cmd);
@@ -289,7 +294,9 @@ static void cmd_task(void *arg) {
 }
 
 static void send_cmd(const char *cmd) {
-    xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 4096, (void *)cmd, 1, nullptr, 0);
+    strlcpy(_cmd_arg.cmd, cmd, sizeof(_cmd_arg.cmd));
+    // FIX: stack 4096 → 24576 bytes (ecovacs_send_cmd fait aussi du HTTPS)
+    xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 24576, (void *)_cmd_arg.cmd, 1, nullptr, 0);
 }
 
 static void on_clean (lv_event_t *) { send_cmd("clean");  }
