@@ -83,8 +83,7 @@ void hal_display_init() {
   // Note : radius + clip_corner sur lv_screen_active() n'a aucun effet en
 
 
-  Serial.printf("[HAL/DISP] LVGL OK \n",
-                LCD_WIDTH, LCD_HEIGHT,);
+  Serial.printf("[HAL/DISP] LVGL OK \n",LCD_WIDTH, LCD_HEIGHT);
 }
 
 lv_display_t *hal_display_get() { return s_disp; }
