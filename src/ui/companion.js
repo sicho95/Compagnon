@@ -1,7 +1,6 @@
 /**
  * companion.js — Vue gestion du Compagnon ESP32 dans Nestor PWA
- * Connexion BLE (Android/Desktop via Web Bluetooth)
- * iOS : guide d'appairage natif Bluetooth + deep link réglages
+ * Connexion BLE via Web Bluetooth (Android/Desktop/Bluefy iOS)
  */
 import { bleAvailable, bleConnect, bleDisconnect, bleConnected, bleDeviceName } from '../bt/ble.js';
 import { deviceStatus, subscribeBleStatus, setBleConnected, setBleDisconnected } from '../bt/ble_status.js';
@@ -12,36 +11,37 @@ import { setupLlmRelay } from '../bt/ble_protocol.js';
 import { createKeyboardOverlay } from '../input/bt_keyboard.js';
 import { callLLM, listBackends } from '../api/backends.js';
 
-// Détecte iOS/iPadOS (Web Bluetooth non supporté par Apple)
+// Détecte iOS/iPadOS
 function isIOS() {
   return /iP(hone|ad|od)/i.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+// Détecte si on est dans Bluefy (navigateur iOS avec Web Bluetooth)
+function isBluefyOrBleAvailable() {
+  return bleAvailable();
 }
 
 export function renderCompanionView(container, state, rerender) {
   container.innerHTML = '';
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;';
 
-  if (isIOS() || !bleAvailable()) {
-    renderIOSBluetoothGuide(container);
+  // Sur iOS sans Web Bluetooth (Safari natif) : afficher le guide Bluefy d'abord,
+  // mais toujours proposer le bouton Connecter si Web Bluetooth est quand même dispo (Bluefy)
+  if (isIOS() && !isBluefyOrBleAvailable()) {
+    renderIOSBluefyGuide(container, state, rerender);
     return;
   }
 
+  // Web Bluetooth disponible (Android, Desktop, ou Bluefy iOS)
   renderWebBluetoothUI(container, state, rerender);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODAL MOT DE PASSE WIFI (remplace window.prompt() bloqué en PWA standalone)
+// MODAL MOT DE PASSE WIFI
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Affiche une modal HTML pour saisir le mot de passe WiFi.
- * Retourne une Promise<string|null> :
- *   - string  → mot de passe saisi (peut être vide pour réseaux ouverts)
- *   - null    → l'utilisateur a annulé
- */
 function askWifiPassword(ssid) {
   return new Promise((resolve) => {
-    // Overlay sombre
     const overlay = el('div',
       'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;' +
       'display:flex;align-items:center;justify-content:center;padding:16px;');
@@ -50,15 +50,12 @@ function askWifiPassword(ssid) {
       'background:#141414;border:1px solid #2a2a2a;border-radius:14px;' +
       'padding:20px 16px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:14px;');
 
-    // Titre
     const title = el('div', 'font-size:14px;font-weight:700;color:#eee;');
     title.textContent = '🔒 Mot de passe WiFi';
 
-    // SSID affiché
     const ssidLbl = el('div', 'font-size:12px;color:#7af;');
     ssidLbl.textContent = ssid;
 
-    // Input mot de passe
     const inp = document.createElement('input');
     inp.type = 'password';
     inp.placeholder = 'Mot de passe…';
@@ -68,7 +65,6 @@ function askWifiPassword(ssid) {
       'color:#eee;padding:11px 12px;font-size:16px;box-sizing:border-box;outline:none;' +
       '-webkit-appearance:none;';
 
-    // Toggle afficher/masquer
     const toggleRow = el('div', 'display:flex;align-items:center;gap:8px;cursor:pointer;');
     const toggleCb  = document.createElement('input');
     toggleCb.type = 'checkbox';
@@ -78,7 +74,6 @@ function askWifiPassword(ssid) {
     toggleCb.onchange = () => { inp.type = toggleCb.checked ? 'text' : 'password'; };
     toggleRow.append(toggleCb, toggleLbl);
 
-    // Boutons
     const btnRow = el('div', 'display:flex;gap:8px;');
 
     const cancelBtn = document.createElement('button');
@@ -98,13 +93,11 @@ function askWifiPassword(ssid) {
     cancelBtn.onclick  = () => close(null);
     connectBtn.onclick = () => close(inp.value);
 
-    // Confirmer avec Entrée
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); close(inp.value); }
       if (e.key === 'Escape') close(null);
     });
 
-    // Clic hors carte = annuler
     overlay.onclick = (e) => { if (e.target === overlay) close(null); };
 
     btnRow.append(cancelBtn, connectBtn);
@@ -112,51 +105,48 @@ function askWifiPassword(ssid) {
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
-    // Focus auto avec délai (évite le blocage iOS)
     requestAnimationFrame(() => { setTimeout(() => inp.focus(), 80); });
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GUIDE iOS : appairage Bluetooth natif
+// GUIDE iOS : installer Bluefy pour avoir Web Bluetooth
+// Affiché uniquement sur Safari natif (pas de Web Bluetooth)
 // ─────────────────────────────────────────────────────────────────────────────
-function renderIOSBluetoothGuide(container) {
+function renderIOSBluefyGuide(container, state, rerender) {
   const wrap = el('div', 'padding:16px;display:flex;flex-direction:column;gap:12px;');
 
   const header = el('div', 'text-align:center;padding:12px 0 4px;');
   header.innerHTML = `
     <div style="font-size:40px;margin-bottom:8px;">📱</div>
     <div style="font-size:15px;font-weight:700;color:#eee;">Compagnon ESP32</div>
-    <div style="font-size:12px;color:#555;margin-top:4px;">iOS — Bluetooth natif requis</div>
+    <div style="font-size:12px;color:#555;margin-top:4px;">iOS — Web Bluetooth via Bluefy</div>
   `;
   wrap.appendChild(header);
 
-  const infoBanner = el('div', 'background:#1a1208;border:1px solid #3a2a08;border-radius:10px;padding:12px 14px;');
+  const infoBanner = el('div', 'background:#0a1a2a;border:1px solid #1a3a5a;border-radius:10px;padding:12px 14px;');
   infoBanner.innerHTML = `
-    <div style="font-size:12px;color:#fa8;font-weight:600;margin-bottom:6px;">⚠️ Web Bluetooth non disponible sur iOS Safari</div>
-    <div style="font-size:11px;color:#766040;line-height:1.6;">
-      Apple ne supporte pas Web Bluetooth sur iOS/iPadOS.<br>
-      L'appairage se fait via les <strong style="color:#fa8;">Réglages Bluetooth</strong> natifs,
-      puis la PWA communique via les fonctionnalités disponibles (WiFi, sync, etc.).
+    <div style="font-size:12px;color:#7af;font-weight:600;margin-bottom:6px;">ℹ️ Safari ne supporte pas Web Bluetooth</div>
+    <div style="font-size:11px;color:#3a5a7a;line-height:1.6;">
+      Pour te connecter à l'ESP32 depuis ton iPhone, installe <strong style="color:#7af;">Bluefy</strong> — un navigateur iOS avec Web Bluetooth intégré.<br>
+      Une fois installé, ouvre cette PWA dans Bluefy et le bouton Connecter apparaîtra normalement.
     </div>
   `;
   wrap.appendChild(infoBanner);
 
   const stepsTitle = el('div', 'font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-top:4px;');
-  stepsTitle.textContent = 'Comment appairer le Compagnon';
+  stepsTitle.textContent = 'Comment procéder';
   wrap.appendChild(stepsTitle);
 
   const steps = [
-    { n:'1', icon:'📲', title:'Allume le Compagnon ESP32', desc:'Appuie sur le bouton power. L\'écran affiche « Prêt à appairer » et le nom BLE : <strong style="color:#7ef;">Nestor</strong>.' },
-    { n:'2', icon:'⚙️', title:'Ouvre les Réglages Bluetooth', desc:'Va dans <strong style="color:#7ef;">Réglages → Bluetooth</strong> sur ton iPhone et assure-toi que le Bluetooth est activé.' },
-    { n:'3', icon:'🔍', title:'Cherche « Nestor » dans la liste', desc:'L\'ESP32 apparaît dans la section <em>Autres appareils</em>. Appuie dessus pour appairer.' },
-    { n:'4', icon:'✅', title:'Confirme le code d\'appairage', desc:'Si un code PIN s\'affiche sur l\'écran du Compagnon, saisis-le sur l\'iPhone. Accepte la demande d\'appairage.' },
-    { n:'5', icon:'🌐', title:'Reviens dans la PWA', desc:'Une fois appairé, le Compagnon se connecte automatiquement en WiFi si configuré. La sync d\'agents et les clés API se font via WiFi.' },
+    { n:'1', icon:'📲', title:'Installe Bluefy depuis l\'App Store', desc:'Bluefy est un navigateur iOS gratuit avec support natif de <strong style="color:#7af;">Web Bluetooth</strong>. Cherche « Bluefy » sur l\'App Store.' },
+    { n:'2', icon:'🌐', title:'Ouvre cette PWA dans Bluefy', desc:'Dans Bluefy, navigue vers cette URL et ajoute-la à l\'écran d\'accueil. Le bouton <strong style="color:#7ef;">Connecter</strong> sera disponible.' },
+    { n:'3', icon:'🔗', title:'Connecte l\'ESP32', desc:'Appuie sur Connecter, sélectionne <strong style="color:#7ef;">Nestor</strong> dans la liste BLE — exactement comme sur Android.' },
   ];
 
   for (const s of steps) {
     const row = el('div', 'display:flex;gap:12px;align-items:flex-start;background:#0e0e0e;border:1px solid #1a1a1a;border-radius:10px;padding:12px;');
-    const num = el('div', 'min-width:28px;height:28px;border-radius:50%;background:#1a3a1a;border:1px solid #2a5a2a;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#7ef;flex-shrink:0;');
+    const num = el('div', 'min-width:28px;height:28px;border-radius:50%;background:#0a1a3a;border:1px solid #1a3a6a;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#7af;flex-shrink:0;');
     num.textContent = s.n;
     const txt = el('div', 'flex:1;');
     txt.innerHTML = `<div style="font-size:13px;font-weight:600;color:#ddd;margin-bottom:3px;">${s.icon} ${s.title}</div><div style="font-size:11px;color:#666;line-height:1.6;">${s.desc}</div>`;
@@ -164,42 +154,46 @@ function renderIOSBluetoothGuide(container) {
     wrap.appendChild(row);
   }
 
-  const btBtn = document.createElement('button');
-  btBtn.style.cssText = 'background:#1a2a3a;border:1px solid #2a4a6a;border-radius:10px;padding:13px 16px;color:#7af;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:4px;';
-  btBtn.innerHTML = '<span style="font-size:18px;">⚙️</span> Ouvrir Réglages Bluetooth iOS';
-  btBtn.onclick = () => {
-    window.location.href = 'App-Prefs:root=Bluetooth';
-    setTimeout(() => { window.location.href = 'prefs:root=Bluetooth'; }, 400);
+  const appStoreBtn = document.createElement('button');
+  appStoreBtn.style.cssText = 'background:#0a1a3a;border:1px solid #1a4a8a;border-radius:10px;padding:13px 16px;color:#7af;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:4px;';
+  appStoreBtn.innerHTML = '<span style="font-size:18px;">📲</span> Télécharger Bluefy sur l\'App Store';
+  appStoreBtn.onclick = () => window.open('https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055', '_blank');
+  wrap.appendChild(appStoreBtn);
+
+  // Bouton "J'ai déjà Bluefy" → tente quand même la connexion BLE
+  const tryBtn = document.createElement('button');
+  tryBtn.style.cssText = 'background:#0a1a0a;border:1px solid #1a3a1a;border-radius:10px;padding:11px 16px;color:#5a8a5a;font-size:12px;font-weight:600;cursor:pointer;width:100%;';
+  tryBtn.innerHTML = '🔗 J\'utilise Bluefy — Essayer de connecter quand même';
+  tryBtn.onclick = () => {
+    // Remplacer la vue par la WebBluetooth UI même si isIOS()
+    container.innerHTML = '';
+    renderWebBluetoothUI(container, state, rerender);
   };
-  wrap.appendChild(btBtn);
-
-  const noteAndroid = el('div', 'background:#0a1a0a;border:1px solid #1a2a1a;border-radius:8px;padding:10px 12px;margin-top:4px;');
-  noteAndroid.innerHTML = `
-    <div style="font-size:11px;color:#3a6a3a;font-weight:600;margin-bottom:3px;">✅ Sur Android</div>
-    <div style="font-size:11px;color:#2a4a2a;line-height:1.5;">
-      Web Bluetooth est supporté nativement sur Chrome Android.<br>
-      Utilise l'onglet <strong>Connecter</strong> ci-dessous depuis un appareil Android pour le flux complet.
-    </div>
-  `;
-  wrap.appendChild(noteAndroid);
-
-  const noteSync = el('div', 'background:#0a0a1a;border:1px solid #1a1a2a;border-radius:8px;padding:10px 12px;');
-  noteSync.innerHTML = `
-    <div style="font-size:11px;color:#3a3a7a;font-weight:600;margin-bottom:3px;">💡 Sync agents & clés sur iOS</div>
-    <div style="font-size:11px;color:#2a2a4a;line-height:1.5;">
-      Une fois le Compagnon connecté au WiFi (via un Android ou depuis l'ESP32 directement),
-      la synchronisation des agents et des clés API se fait <strong>via WiFi</strong> — pas besoin de BLE.
-    </div>
-  `;
-  wrap.appendChild(noteSync);
+  wrap.appendChild(tryBtn);
 
   container.appendChild(wrap);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WEB BLUETOOTH UI (Android / Desktop Chrome)
+// WEB BLUETOOTH UI (Android / Desktop Chrome / Bluefy iOS)
 // ─────────────────────────────────────────────────────────────────────────────
 function renderWebBluetoothUI(container, state, rerender) {
+  // Bannière info Bluefy si on est sur iOS (rappel discret en haut)
+  if (isIOS()) {
+    const iosBanner = el('div',
+      'background:#0a1219;border-bottom:1px solid #1a2a3a;padding:8px 16px;' +
+      'display:flex;align-items:center;gap:8px;');
+    iosBanner.innerHTML = `
+      <span style="font-size:11px;color:#4a7aaa;">📱 iOS détecté — connexion via <strong>Bluefy</strong></span>
+      <a href="https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055"
+         target="_blank" rel="noopener"
+         style="margin-left:auto;font-size:10px;color:#7af;text-decoration:none;white-space:nowrap;">
+        Installer Bluefy ↗
+      </a>
+    `;
+    container.appendChild(iosBanner);
+  }
+
   const connBar = el('div', 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0e1a0e;border-bottom:1px solid #1a2a1a;position:sticky;top:0;z-index:2;');
   const connInfo = el('div', 'display:flex;flex-direction:column;gap:2px;');
   const connectBtn = document.createElement('button');
@@ -210,9 +204,12 @@ function renderWebBluetoothUI(container, state, rerender) {
     const mode = deviceStatus.mode;
     const modeLabel = mode === 'wifi' ? '📶 ' + (deviceStatus.wifiSSID || 'WiFi')
       : mode === 'ble_relay' ? '📱 Relais LLM' : '⚡ BLE seulement';
+    const subLabel = isIOS()
+      ? (ok ? modeLabel : 'Bluefy requis sur iOS')
+      : (ok ? modeLabel : 'Chrome Android ou Desktop');
     connInfo.innerHTML = ok
       ? `<span style="color:#7ef;font-size:13px;font-weight:600;">🔗 ${bleDeviceName() || 'Nestor'}</span><span style="color:#5a7a5a;font-size:11px;">${modeLabel}</span>`
-      : `<span style="color:#888;font-size:13px;">Compagnon non connecté</span><span style="color:#444;font-size:11px;">Chrome Android ou Chrome Desktop requis</span>`;
+      : `<span style="color:#888;font-size:13px;">Compagnon non connecté</span><span style="color:#444;font-size:11px;">${subLabel}</span>`;
     connectBtn.textContent = ok ? 'Déconnecter' : 'Connecter';
     connectBtn.style.background = ok ? '#2a1a1a' : '#1a3a1a';
     connectBtn.style.color = ok ? '#e87' : '#7ef';
@@ -255,7 +252,7 @@ function renderWebBluetoothUI(container, state, rerender) {
       const hint = el('div', 'padding:40px 16px;text-align:center;color:#444;font-size:13px;line-height:1.7;');
       hint.innerHTML = `<div style="font-size:40px;margin-bottom:12px;">📡</div>
         <div style="color:#555;">Connecte-toi au Compagnon ESP32<br>pour gérer WiFi, agents, clavier et config.</div>
-        <div style="color:#333;font-size:11px;margin-top:8px;">Chrome Android ou Chrome Desktop requis</div>`;
+        <div style="color:#333;font-size:11px;margin-top:8px;">${isIOS() ? 'Utilise Bluefy sur iPhone/iPad' : 'Chrome Android ou Chrome Desktop requis'}</div>`;
       sectionsWrap.appendChild(hint);
       return;
     }
@@ -287,7 +284,6 @@ function buildWifiSection() {
       row.style.cssText = 'background:#111;border:1px solid #222;border-radius:6px;padding:8px 12px;text-align:left;color:#aaa;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;width:100%;';
       row.innerHTML = `<span>📶 ${net.ssid}</span><span style="color:#555;font-size:11px;">→ Reconnecter</span>`;
       row.onclick = async () => {
-        // Utilise la modal HTML — prompt() est bloqué en PWA standalone
         const pwd = await askWifiPassword(net.ssid);
         if (pwd === null) return;
         row.textContent = '⏳ Connexion…';
@@ -319,7 +315,6 @@ function buildWifiSection() {
 async function showNetworkPicker(networks, wrap, statusEl) {
   wrap.querySelector('.wifi-list')?.remove();
 
-  // Normaliser les deux formats ESP32 : compact {s,r,sec,ch} et complet {ssid,rssi,secured,channel}
   const items = (networks || [])
     .map(net => ({
       ssid:    net?.ssid    ?? net?.s ?? '',
@@ -334,7 +329,6 @@ async function showNetworkPicker(networks, wrap, statusEl) {
     return;
   }
 
-  // Label explicite : ces réseaux sont ceux vus par la radio de l'ESP32, pas du téléphone
   statusEl.textContent = `📡 ${items.length} réseau(x) vus par l'ESP32`;
 
   const list = el('div', 'display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;');
@@ -350,9 +344,8 @@ async function showNetworkPicker(networks, wrap, statusEl) {
     b.innerHTML = `<span>${lock} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars} ${net.rssi}dBm${chLabel}</span>`;
 
     b.onclick = async () => {
-      // Demander le mot de passe uniquement si le réseau est sécurisé
       const pwd = net.secured ? await askWifiPassword(net.ssid) : '';
-      if (pwd === null) return;  // annulé par l'utilisateur
+      if (pwd === null) return;
       b.textContent = '⏳ Connexion…';
       try {
         await provisionWifi(net.ssid, pwd, true);
