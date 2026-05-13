@@ -307,9 +307,9 @@ function buildWifiSection() {
   scanBtn.textContent = '🔍 Scanner les réseaux WiFi';
   scanBtn.style.cssText = btnStyle('#1a2a3a', '#7af');
   scanBtn.onclick = async () => {
-    scanBtn.textContent = '⏳ Scan…'; scanBtn.disabled = true;
+    scanBtn.textContent = '⏳ Scan en cours sur l\'ESP32…'; scanBtn.disabled = true;
     try { const nets = await scanWifiNetworks(); showNetworkPicker(nets, wrap, status); }
-    catch (e) { alert('Scan échoué: ' + e.message); }
+    catch (e) { status.textContent = '❌ Scan échoué: ' + e.message; }
     finally { scanBtn.textContent = '🔍 Scanner les réseaux WiFi'; scanBtn.disabled = false; }
   };
   wrap.appendChild(scanBtn);
@@ -318,18 +318,41 @@ function buildWifiSection() {
 
 async function showNetworkPicker(networks, wrap, statusEl) {
   wrap.querySelector('.wifi-list')?.remove();
-  if (!networks.length) { alert('Aucun réseau trouvé.'); return; }
+
+  // Normaliser les deux formats ESP32 : compact {s,r,sec,ch} et complet {ssid,rssi,secured,channel}
+  const items = (networks || [])
+    .map(net => ({
+      ssid:    net?.ssid    ?? net?.s ?? '',
+      rssi:    Number(net?.rssi    ?? net?.r   ?? -999),
+      secured: net?.secured != null ? Boolean(net.secured) : (net?.sec != null ? Boolean(net.sec) : true),
+      channel: net?.channel ?? net?.ch ?? 0,
+    }))
+    .filter(net => net.ssid);
+
+  if (!items.length) {
+    statusEl.textContent = '⚠️ Aucun réseau trouvé (vue de l\'ESP32)';
+    return;
+  }
+
+  // Label explicite : ces réseaux sont ceux vus par la radio de l'ESP32, pas du téléphone
+  statusEl.textContent = `📡 ${items.length} réseau(x) vus par l'ESP32`;
+
   const list = el('div', 'display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;');
   list.className = 'wifi-list';
-  for (const net of networks) {
-    const bars = net.rssi > -60 ? '▂▄▆█' : net.rssi > -75 ? '▂▄▆_' : '▂▄__';
+
+  for (const net of items) {
+    const bars    = net.rssi > -60 ? '▂▄▆█' : net.rssi > -75 ? '▂▄▆_' : net.rssi > -85 ? '▂▄__' : '▂___';
+    const lock    = net.secured ? '🔒' : '🔓';
+    const chLabel = net.channel ? ` ch${net.channel}` : '';
+
     const b = document.createElement('button');
     b.style.cssText = 'background:#111;border:1px solid #222;border-radius:6px;padding:8px 12px;color:#ccc;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;width:100%;';
-    b.innerHTML = `<span>${net.secured ? '🔒' : '🔓'} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars}</span>`;
+    b.innerHTML = `<span>${lock} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars} ${net.rssi}dBm${chLabel}</span>`;
+
     b.onclick = async () => {
-      // Utilise la modal HTML — prompt() est bloqué en PWA standalone
+      // Demander le mot de passe uniquement si le réseau est sécurisé
       const pwd = net.secured ? await askWifiPassword(net.ssid) : '';
-      if (pwd === null) return;
+      if (pwd === null) return;  // annulé par l'utilisateur
       b.textContent = '⏳ Connexion…';
       try {
         await provisionWifi(net.ssid, pwd, true);
@@ -337,7 +360,7 @@ async function showNetworkPicker(networks, wrap, statusEl) {
         list.remove();
       } catch (e) {
         statusEl.textContent = '❌ ' + e.message;
-        b.innerHTML = `<span>${net.secured ? '🔒' : '🔓'} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars}</span>`;
+        b.innerHTML = `<span>${lock} ${net.ssid}</span><span style="color:#555;font-size:10px;">${bars} ${net.rssi}dBm${chLabel}</span>`;
       }
     };
     list.appendChild(b);

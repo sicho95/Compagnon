@@ -179,15 +179,27 @@ void wifi_mgr_tick() {
         int n = WiFi.scanComplete();
         if (n >= 0) {
             _ext_scanning = false;
+
+            // Construire le JSON avec les informations complètes :
+            // {ssid, rssi, secured, channel}
+            // secured = false uniquement pour WIFI_AUTH_OPEN, true dans tous les autres cas
             String json = "[";
             for (int i = 0; i < n; i++) {
                 if (i > 0) json += ",";
                 String s = WiFi.SSID(i);
-                s.replace("\\", "\\\\"); s.replace("\"", "\\\"");
-                json += "{\"s\":\"" + s + "\",\"r\":" + String(WiFi.RSSI(i)) + "}";
+                // Échapper les guillemets et backslashes dans le SSID
+                s.replace("\\", "\\\\");
+                s.replace("\"", "\\\"");
+                bool secured = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+                int  ch      = WiFi.channel(i);
+                json += "{\"ssid\":\"" + s + "\","
+                      + "\"rssi\":"    + String(WiFi.RSSI(i)) + ","
+                      + "\"secured\":" + (secured ? "true" : "false") + ","
+                      + "\"channel\":" + String(ch) + "}";
             }
             json += "]";
             WiFi.scanDelete();
+            Serial.printf("[WIFI] Scan BLE terminé: %d réseau(x)\n", n);
             _scan_cb(json.c_str());
             _scan_cb = nullptr;
         }
@@ -264,5 +276,5 @@ bool wifi_mgr_connected() {
 void wifi_mgr_scan(void (*on_result)(const char* json)) {
     _scan_cb      = on_result;
     _ext_scanning = true;
-    WiFi.scanNetworks(true);
+    WiFi.scanNetworks(true);  // asynchrone
 }
