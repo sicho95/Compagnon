@@ -72,20 +72,46 @@ static const char *resolve_nvs_key(const char *pwa_key) {
     return nullptr;
 }
 
-// ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
+// ─── Pont BLE → WiFi provisioning ─────────────────────────────────────────────
+// La PWA envoie : {"ssid":"...","password":"..."}
+// Clés alternatives acceptées : "s"/"ssid" pour le SSID, "p"/"pwd"/"password" pour le mot de passe
 static void ble_wifi_prov_cb(const char *json) {
     if (!json) return;
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) { Serial.print("[BLE/WIFI] JSON invalide: "); Serial.println(err.c_str()); return; }
-    const char *ssid = doc["s"] | doc["ssid"] | "";
-    const char *pwd  = doc["p"] | doc["pwd"]  | "";
-    if (!ssid || !ssid[0]) { Serial.println("[BLE/WIFI] SSID vide — ignore"); return; }
-    Serial.printf("[BLE/WIFI] Provision %s\n", ssid);
+    if (err) {
+        Serial.print("[BLE/WIFI] JSON invalide: ");
+        Serial.println(err.c_str());
+        return;
+    }
+    // Accepter les deux formes de clés (compacte et complète)
+    const char *ssid = nullptr;
+    if (doc["ssid"].is<const char*>())     ssid = doc["ssid"];
+    else if (doc["s"].is<const char*>())   ssid = doc["s"];
+
+    const char *pwd = "";
+    if (doc["password"].is<const char*>())  pwd = doc["password"];
+    else if (doc["pwd"].is<const char*>())  pwd = doc["pwd"];
+    else if (doc["p"].is<const char*>())    pwd = doc["p"];
+
+    if (!ssid || ssid[0] == '\0') {
+        Serial.println("[BLE/WIFI] SSID vide — ignoré");
+        return;
+    }
+    Serial.printf("[BLE/WIFI] Provision SSID='%s' (pwd_len=%d)\n",
+                  ssid, (int)strlen(pwd));
     wifi_mgr_provision(ssid, pwd);
+
+    // Notifier la PWA que le réseau a été ajouté
+    String nets = wifi_mgr_list_networks();
+    char ack[256];
+    snprintf(ack, sizeof(ack),
+        "{\"cmd\":\"wifi_prov_ack\",\"ok\":true,\"networks\":%s}",
+        nets.c_str());
+    ble_mgr_notify_agent_sync(ack);
 }
 
-// ─── Pont BLE → Agent Sync ──────────────────────────────────────────────────
+// ─── Pont BLE → Agent Sync ────────────────────────────────────────────────────
 static void ble_agent_sync_cb(const char *json) {
     if (!json) return;
     JsonDocument doc;
@@ -93,8 +119,6 @@ static void ble_agent_sync_cb(const char *json) {
     if (err) { Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str()); return; }
 
     const char *cmd = doc["cmd"] | "";
-
-    // Commande vide : ignorer silencieusement
     if (!cmd || cmd[0] == '\0') return;
 
     if (strcmp(cmd, "set_api_key") == 0) {
@@ -137,16 +161,42 @@ static void ble_agent_sync_cb(const char *json) {
         return;
     }
 
-    // ─── battery_status / get_device_status ──────────────────────────────────
+    // ── Gestion WiFi via agent_sync ────────────────────────────────────────────
+    if (strcmp(cmd, "wifi_list") == 0) {
+        String nets = wifi_mgr_list_networks();
+        char resp[512];
+        snprintf(resp, sizeof(resp), "{\"cmd\":\"wifi_list_ack\",\"networks\":%s}",
+                 nets.c_str());
+        ble_mgr_notify_agent_sync(resp);
+        return;
+    }
+
+    if (strcmp(cmd, "wifi_remove") == 0) {
+        const char *ssid = doc["ssid"] | doc["s"] | "";
+        if (ssid[0]) {
+            wifi_mgr_remove_network(ssid);
+            String nets = wifi_mgr_list_networks();
+            char resp[512];
+            snprintf(resp, sizeof(resp),
+                     "{\"cmd\":\"wifi_remove_ack\",\"ok\":true,\"networks\":%s}",
+                     nets.c_str());
+            ble_mgr_notify_agent_sync(resp);
+        }
+        return;
+    }
+
+    // ─── battery_status / get_device_status ───────────────────────────────────
     if (strcmp(cmd, "battery_status") == 0 || strcmp(cmd, "get_device_status") == 0) {
         int  bat_pct  = hal_pmu_battery_pct();
         bool charging = hal_pmu_is_charging();
-        char resp[160];
+        String nets   = wifi_mgr_list_networks();
+        char resp[300];
         snprintf(resp, sizeof(resp),
-            "{\"cmd\":\"device_status\",\"battery\":%d,\"charging\":%s,\"wifi\":%s}",
+            "{\"cmd\":\"device_status\",\"battery\":%d,\"charging\":%s,\"wifi\":%s,\"wifi_networks\":%s}",
             (bat_pct >= 0) ? bat_pct : 0,
-            charging               ? "true"  : "false",
-            WiFi.isConnected()     ? "true"  : "false"
+            charging           ? "true"  : "false",
+            WiFi.isConnected() ? "true"  : "false",
+            nets.c_str()
         );
         ble_mgr_notify_agent_sync(resp);
         Serial.printf("[BLE/AGENT] battery_status -> bat=%d%% charging=%s\n",
