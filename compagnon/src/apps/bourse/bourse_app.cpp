@@ -4,6 +4,7 @@
  */
 #include "bourse_app.h"
 #include "../../net/ble_mgr.h"
+#include "../../net/net_utils.h"
 #include "../../system/orchestrator.h"
 #include "../../config/nvs_config.h"
 #include "../../config/ui_config.h"
@@ -51,7 +52,7 @@ static void update_card(int idx, float price, bool ok) {
     if (_val_lbl[idx]) lv_label_set_text(_val_lbl[idx], buf);
 }
 
-// ─── Fetch HTTP ───────────────────────────────────────────────────────────────
+// ─── Fetch HTTPS ──────────────────────────────────────────────────────────────
 static void fetch_prices() {
     if (strlen(_api_key) == 0) {
         set_status("Clé API manquante");
@@ -59,14 +60,14 @@ static void fetch_prices() {
     }
     set_status("Mise à jour...");
 
-    HTTPClient http;
     for (int i = 0; i < TICKER_COUNT; i++) {
         char url[256];
         snprintf(url, sizeof(url), API_BASE, TICKERS[i], _api_key);
-        http.begin(url);
-        int code = http.GET();
+
+        // Utilise https_get() : client SSL sur le heap → évite SSL -32512
+        String body;
+        int code = https_get(url, body);
         if (code == 200) {
-            String body = http.getString();
             StaticJsonDocument<128> doc;
             if (!deserializeJson(doc, body) && doc.containsKey("price")) {
                 float p = doc["price"].as<float>();
@@ -77,7 +78,6 @@ static void fetch_prices() {
         } else {
             update_card(i, 0, false);
         }
-        http.end();
     }
     set_status("Mis à jour");
     _last_fetch = millis();
@@ -92,7 +92,6 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     bourse_app_stop();
-    // orchestrator_set_app() est déjà appelé dans bourse_app_stop() via do_close()
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -101,7 +100,6 @@ static void build_ui() {
     lv_obj_set_style_bg_color(_screen, lv_color_hex(0x0a0a0a), 0);
     lv_obj_set_style_bg_opa(_screen, LV_OPA_COVER, 0);
 
-    // Titre positionné sous la status bar
     lv_obj_t *title = lv_label_create(_screen);
     lv_label_set_text(title, "Bourse");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
@@ -110,7 +108,6 @@ static void build_ui() {
     lv_obj_set_width(title, SCREEN_W);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
-    // Bouton retour
     lv_obj_t *btn_back = lv_btn_create(_screen);
     lv_obj_set_size(btn_back, 60, 36);
     lv_obj_set_pos(btn_back, 8, APP_Y);
@@ -119,10 +116,9 @@ static void build_ui() {
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
     lv_obj_center(lbl_back);
 
-    // 4 cartes 2x2 — origine Y décalée sous status bar + en-tête
     int card_w = 180, card_h = 100;
     int pad_x = 20;
-    int pad_y = APP_Y + 44;  // 44 px de marge après la status bar pour le titre
+    int pad_y = APP_Y + 44;
     for (int i = 0; i < TICKER_COUNT; i++) {
         int col = i % 2, row = i / 2;
         int x = pad_x + col * (card_w + 10);
@@ -150,7 +146,6 @@ static void build_ui() {
         lv_obj_align(_val_lbl[i], LV_ALIGN_BOTTOM_LEFT, 10, -10);
     }
 
-    // Status bar
     _status_lbl = lv_label_create(_screen);
     lv_label_set_text(_status_lbl, "");
     lv_obj_set_style_text_color(_status_lbl, lv_color_hex(0x666666), 0);
@@ -175,19 +170,19 @@ static void do_close() {
 // ─── API publique ─────────────────────────────────────────────────────────────
 void bourse_app_start() {
     if (_open) return;
-    orchestrator_set_app(APP_BOURSE);  // FIX: enregistrer l'app active avant tout
+    orchestrator_set_app(APP_BOURSE);
 
-    // Charger la clé API depuis NVS
-    String key = nvs_get_str("bourse_key", "");
+    // FIX: clé NVS corrigée 'bourse_key' → 'twelvedata_key'
+    String key = nvs_get_str("twelvedata_key", "");
     if (key.length() == 0) {
-        Serial.println("[APP/BOURSE] Clé API manquante (NVS 'bourse_key')");
+        Serial.println("[APP/BOURSE] Clé API manquante (NVS 'twelvedata_key')");
     }
     strlcpy(_api_key, key.c_str(), sizeof(_api_key));
 
     build_ui();
     lv_scr_load(_screen);
     _open = true;
-    _last_fetch = 0;  // forcer fetch immédiat
+    _last_fetch = 0;
 
     _timer = lv_timer_create(on_timer, 5000, NULL);
     fetch_prices();

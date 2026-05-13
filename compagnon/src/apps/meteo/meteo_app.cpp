@@ -4,6 +4,7 @@
  */
 #include "meteo_app.h"
 #include "../../net/ble_mgr.h"
+#include "../../net/net_utils.h"
 #include "../../system/orchestrator.h"
 #include "../../config/nvs_config.h"
 #include "../../config/ui_config.h"
@@ -83,7 +84,7 @@ static void resolve_position() {
     Serial.println("[APP/METEO] GPS fallback Paris");
 }
 
-// ─── Fetch HTTP ───────────────────────────────────────────────────────────────
+// ─── Fetch HTTPS ──────────────────────────────────────────────────────────────
 static void fetch_meteo() {
     if (strlen(_api_key) == 0) {
         set_status("Clé API manquante");
@@ -99,19 +100,15 @@ static void fetch_meteo() {
     char url[512];
     snprintf(url, sizeof(url), API_URL, _api_key, lat_s, lon_s);
 
-    HTTPClient http;
-    http.begin(url);
-    int code = http.GET();
+    // Utilise https_get() : NetworkClientSecure sur le heap → évite SSL -32512
+    String body;
+    int code = https_get(url, body);
     if (code != 200) {
         char err[32];
         snprintf(err, sizeof(err), "Erreur HTTP %d", code);
         set_status(err);
-        http.end();
         return;
     }
-
-    String body = http.getString();
-    http.end();
 
     DynamicJsonDocument doc(8192);
     if (deserializeJson(doc, body)) {
@@ -143,7 +140,6 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     meteo_app_stop();
-    // orchestrator_set_app() et ui_launcher_return() appelés dans do_close()
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -152,7 +148,6 @@ static void build_ui() {
     lv_obj_set_style_bg_color(_screen, lv_color_hex(0x0a0a1a), 0);
     lv_obj_set_style_bg_opa(_screen, LV_OPA_COVER, 0);
 
-    // Titre positionné sous la status bar
     lv_obj_t *title = lv_label_create(_screen);
     lv_label_set_text(title, LV_SYMBOL_UP " Météo");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
@@ -171,7 +166,7 @@ static void build_ui() {
 
     int card_w = 90, card_h = 200;
     int start_x = 15;
-    int start_y = APP_Y + 48;  // sous la status bar + marge titre
+    int start_y = APP_Y + 48;
     int gap = 8;
 
     for (int i = 0; i < FORECAST_DAYS; i++) {
@@ -235,7 +230,7 @@ static void do_close() {
 // ─── API publique ─────────────────────────────────────────────────────────────
 void meteo_app_start() {
     if (_open) return;
-    orchestrator_set_app(APP_METEO);  // FIX: enregistrer l'app active avant tout
+    orchestrator_set_app(APP_METEO);
 
     String key = nvs_get_str("meteo_key", "");
     if (key.length() == 0)
