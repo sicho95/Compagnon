@@ -37,7 +37,7 @@ void ui_status_bar_init() {
 
     // ── Gauche : date + heure ─────────────────────────────────────────
     lbl_dt = lv_label_create(bar);
-    lv_label_set_text(lbl_dt, "--/-- --:--");
+    lv_label_set_text(lbl_dt, "-- --- ---- - --:--");
     lv_obj_set_style_text_color(lbl_dt, lv_color_white(), 0);
     lv_obj_set_style_text_font(lbl_dt, &lv_font_montserrat_14, 0);
     lv_obj_align(lbl_dt, LV_ALIGN_LEFT_MID, 8, 0);
@@ -107,9 +107,10 @@ void ui_status_bar_tick() {
         struct tm t;
         if (getLocalTime(&t)) {
             char buf[22];
-            snprintf(buf, sizeof(buf), "%02d %s · %02d:%02d",
+            snprintf(buf, sizeof(buf), "%02d %s %04d - %02d:%02d",
                 t.tm_mday,
                 (t.tm_mon >= 0 && t.tm_mon < 12) ? MOIS[t.tm_mon + 1] : "???",
+                t.tm_myear,            
                 t.tm_hour, t.tm_min);
             lv_label_set_text(lbl_dt, buf);
         }
