@@ -35,6 +35,52 @@ static void rounder_cb(lv_event_t *e) {
 
 static uint32_t tick_cb() { return (uint32_t)millis(); }
 
+// ─── Corner overlay : 4 carrés noirs dans lv_layer_sys() qui masquent les coins ───
+// lv_screen_active() ne clipe pas ses enfants via clip_corner en LVGL 9.x.
+// La technique overlay place 4 objets opaques noirs dans les 4 coins, par-dessus
+// tout le contenu, pour simuler des coins arrondis sans modifier le rendu LVGL.
+static void _create_corner_overlays() {
+  const lv_coord_t R = LCD_CORNER_RADIUS;
+  const lv_coord_t W = LCD_WIDTH;
+  const lv_coord_t H = LCD_HEIGHT;
+
+  // On utilise lv_layer_sys() (couche système, au-dessus de tout) pour que
+  // les coins soient toujours visibles même sur les menus et popups.
+  lv_obj_t *layer = lv_layer_sys();
+
+  // Les 4 coins : chaque objet est un carré RxR avec un arc noir qui "recouvre"
+  // le coin de l'écran. Astuce : on utilise un lv_obj avec bg noir et un
+  // radius sur le coin opposé au coin de l'écran = cercle qui découpe proprement.
+  //
+  // Structure de chaque overlay :
+  //   - taille : R x R px
+  //   - bg : noir opaque
+  //   - radius : R (arrondi sur le coin intérieur = crée la découpe visuelle)
+  //   - no border, no shadow
+
+  struct { lv_coord_t x; lv_coord_t y; } corners[4] = {
+    { 0,     0     },  // haut-gauche
+    { W - R, 0     },  // haut-droit
+    { 0,     H - R },  // bas-gauche
+    { W - R, H - R },  // bas-droit
+  };
+
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *c = lv_obj_create(layer);
+    lv_obj_set_size(c, R, R);
+    lv_obj_set_pos(c, corners[i].x, corners[i].y);
+    lv_obj_set_style_bg_color(c,     lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(c,       LV_OPA_COVER,     LV_PART_MAIN);
+    lv_obj_set_style_radius(c,       R,                LV_PART_MAIN);
+    lv_obj_set_style_clip_corner(c,  true,             LV_PART_MAIN);
+    lv_obj_set_style_border_width(c, 0,                LV_PART_MAIN);
+    lv_obj_set_style_pad_all(c,      0,                LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(c, 0,                LV_PART_MAIN);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+  }
+}
+
 void hal_display_init() {
   Serial.println("[HAL/DISP] Init...");
 
@@ -74,18 +120,20 @@ void hal_display_init() {
   lv_display_add_event_cb(s_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
   lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_270);
 
-  // ── Écran racine : fond noir + coins arrondis (LCD_CORNER_RADIUS) ──────────
-  // LVGL 9.x : clip_corner est une propriété de style (lv_style_set_clip_corner),
-  // plus un flag d'objet. On l'applique via lv_obj_set_style_clip_corner().
+  // ── Écran racine : fond noir pur ─────────────────────────────────────────
   lv_obj_t *scr = lv_screen_active();
   lv_obj_set_style_bg_color(scr,     lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(scr,       LV_OPA_COVER,     LV_PART_MAIN);
   lv_obj_set_style_pad_all(scr,      0,                LV_PART_MAIN);
   lv_obj_set_style_border_width(scr, 0,                LV_PART_MAIN);
-  lv_obj_set_style_radius(scr,       LCD_CORNER_RADIUS, LV_PART_MAIN);
-  lv_obj_set_style_clip_corner(scr,  true,             LV_PART_MAIN);
+  // Note : radius + clip_corner sur lv_screen_active() n'a aucun effet en
+  // LVGL 9.x. Les coins arrondis sont gérés par _create_corner_overlays().
 
-  Serial.printf("[HAL/DISP] LVGL OK - 480x480 radius=%d\n", LCD_CORNER_RADIUS);
+  // ── Coin-overlays : masquage LVGL des 4 coins (LCD_CORNER_RADIUS = LCD_CORNER_RADIUS px) ──
+  _create_corner_overlays();
+
+  Serial.printf("[HAL/DISP] LVGL OK - %dx%d corner_radius=%dpx (overlay)\n",
+                LCD_WIDTH, LCD_HEIGHT, LCD_CORNER_RADIUS);
 }
 
 lv_display_t *hal_display_get() { return s_disp; }
