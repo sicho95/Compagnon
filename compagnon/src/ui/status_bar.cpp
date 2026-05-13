@@ -1,6 +1,7 @@
 #include "status_bar.h"
 #include "../hal/pmu.h"
 #include "../config/pin_config.h"
+#include "../config/ui_config.h"
 #include <time.h>
 #include <WiFi.h>
 
@@ -23,8 +24,10 @@ static const char *MOIS[] = {
 
 void ui_status_bar_init() {
     bar = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(bar, LCD_WIDTH, STATUS_H);
-    lv_obj_set_pos(bar, 0, 0);
+    // La status bar est positionnée dans la safe area horizontale (UI_X, UI_W)
+    // et décalée de BORDER_V depuis le haut de l'écran physique.
+    lv_obj_set_size(bar, UI_W, STATUS_H);
+    lv_obj_set_pos(bar, UI_X, UI_Y);
     lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(bar, 0, 0);

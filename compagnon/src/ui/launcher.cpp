@@ -12,11 +12,6 @@
 
 #define APP_COUNT 5
 #define LONG_MS   800
-// Bordure noire : 5 px en haut/bas, 10 px à gauche/droite
-#define BORDER_TOP_PX    5
-#define BORDER_BOTTOM_PX 5
-#define BORDER_LEFT_PX   10
-#define BORDER_RIGHT_PX  10
 
 struct AppEntry {
     const char *label;
@@ -168,39 +163,9 @@ void ui_launcher_btn_tick() {
     poll_btn(btnLeft,  btn_next_s, btn_next_l);  // pin 18 = droite = Suiv
 }
 
-// ── Ramener la bordure au premier plan après tout nouvel overlay ───────────────
+// ── ui_frame_to_front() conservée pour compatibilité avec les overlays ────────
 void ui_frame_to_front() {
-    // La bordure est dans lv_layer_sys() qui est toujours au-dessus de tout —
-    // cette fonction est conservée pour compatibilité avec les overlays qui l'appellent.
-    // lv_layer_sys() n'a pas besoin d'être explicitement remis au premier plan.
-}
-
-// ── Bordure noire (5 px haut/bas, 10 px gauche/droite) via lv_layer_sys() ─────
-// Une seule implémentation — appelée une fois depuis ui_launcher_init()
-static void add_screen_border() {
-    lv_obj_t *sys = lv_layer_sys();
-
-    struct { int16_t x, y, w, h; } bands[4] = {
-        { 0,                          0,                           LCD_WIDTH,           BORDER_TOP_PX    },  // haut
-        { 0,                          LCD_HEIGHT - BORDER_BOTTOM_PX, LCD_WIDTH,        BORDER_BOTTOM_PX },  // bas
-        { 0,                          0,                           BORDER_LEFT_PX,      LCD_HEIGHT       },  // gauche
-        { LCD_WIDTH - BORDER_RIGHT_PX, 0,                          BORDER_RIGHT_PX,     LCD_HEIGHT       },  // droite
-    };
-
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *r = lv_obj_create(sys);
-        lv_obj_set_pos(r,  bands[i].x, bands[i].y);
-        lv_obj_set_size(r, bands[i].w, bands[i].h);
-        lv_obj_set_style_bg_color(r, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(r,   LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(r, 0, 0);
-        lv_obj_set_style_radius(r,    0, 0);
-        lv_obj_set_style_pad_all(r,   0, 0);
-        // LVGL9: lv_obj_remove_flag() remplace lv_obj_clear_flag()
-        // Le OR bitwise de deux lv_obj_flag_t produit un int — appels séparés
-        lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(r, LV_OBJ_FLAG_CLICKABLE);
-    }
+    // lv_layer_sys() est toujours au-dessus — rien à faire.
 }
 
 // ── Construction d'une tuile ──────────────────────────────────────────────────
@@ -257,12 +222,12 @@ void ui_launcher_init() {
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
     lv_obj_remove_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ── FIX: tileview positionné SOUS la status bar ──────────────────────────
-    // La status bar occupe les STATUS_BAR_H premiers pixels (lv_layer_top).
-    // On décale le tileview vers le bas et on réduit sa hauteur en conséquence.
+    // ── Tileview positionné dans la safe area (sous la status bar) ────────────
+    // UI_X / APP_Y / UI_W / APP_H sont définis dans ui_config.h et tiennent
+    // compte des bordures du boîtier arrondi (BORDER_H=20, BORDER_V=10).
     tileview = lv_tileview_create(scr_launcher);
-    lv_obj_set_size(tileview, LCD_WIDTH, LCD_HEIGHT - STATUS_BAR_H);
-    lv_obj_set_pos(tileview, 0, STATUS_BAR_H);
+    lv_obj_set_size(tileview, UI_W, APP_H);
+    lv_obj_set_pos(tileview, UI_X, APP_Y);
     lv_obj_set_style_bg_color(tileview, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tileview, LV_OPA_COVER, 0);
     lv_obj_remove_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
@@ -283,7 +248,8 @@ void ui_launcher_init() {
     ble_mgr_set_music_cb(musique_ble_cmd);
 
     lv_scr_load(scr_launcher);
-    add_screen_border();  // bordure noire via lv_layer_sys() — toujours au-dessus
+    // Note : add_screen_border() supprimée — la safe area gère le recadrage.
+    // lv_layer_sys() reste disponible pour les overlays futurs.
 
     Serial.println("[UI/LAUNCH] Launcher OK");
 }
