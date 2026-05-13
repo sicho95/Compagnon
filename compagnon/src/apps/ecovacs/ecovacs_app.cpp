@@ -9,6 +9,7 @@
  */
 #include "ecovacs_app.h"
 #include "../../config/nvs_config.h"
+#include "../../config/ui_config.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
 #include <WiFi.h>
@@ -140,9 +141,8 @@ static bool ecovacs_get_device_list() {
     snprintf(url, sizeof(url), "%s/users/user.do", ECOVACS_API_URL);
     char body[256];
     snprintf(body, sizeof(body),
-        "{\"todo\":\"GetDeviceList\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\","
-        "\"userid\":\"%s\",\"appid\":\"ecovacs\",\"appkey\":\"%s\"}}",
-        _state.user_id, _state.access_token, _state.user_id, APP_KEY);
+        "{\"todo\":\"GetDeviceList\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"}}",
+        _state.user_id, _state.access_token);
 
     HTTPClient http;
     http.setTimeout(8000);
@@ -156,292 +156,350 @@ static bool ecovacs_get_device_list() {
 
     JsonDocument doc;
     if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
-    JsonArray devices = doc["devices"].as<JsonArray>();
-    if (!devices || devices.size() == 0) return false;
 
-    JsonObject dev = devices[0];
-    strlcpy(_state.robot_id, dev["did"] | "", sizeof(_state.robot_id));
-    _state.online = dev["online"] | false;
-    Serial.printf("[ECOVACS] Robot: %s online=%d\n", _state.robot_id, _state.online);
-    return true;
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    if (!devices) return false;
+    for (JsonObject d : devices) {
+        strlcpy(_state.robot_id, d["did"] | "", sizeof(_state.robot_id));
+        _state.online = d["online"] | false;
+        break;  // premier robot seulement
+    }
+    return (_state.robot_id[0] != '\0');
 }
 
-// ─── Requête commande/état via API ────────────────────────────────────────────
-static bool ecovacs_cmd(const char *todo, const char *cmd_json, char *out, size_t out_len) {
+static bool ecovacs_get_clean_info() {
     char url[256];
     snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
-
     char body[512];
-    if (cmd_json && cmd_json[0])
-        snprintf(body, sizeof(body),
-            "{\"todo\":\"%s\",\"did\":\"%s\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
-            "\"cmd\":%s}",
-            todo, _state.robot_id, _state.user_id, _state.access_token, cmd_json);
-    else
-        snprintf(body, sizeof(body),
-            "{\"todo\":\"%s\",\"did\":\"%s\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"}}",
-            todo, _state.robot_id, _state.user_id, _state.access_token);
+    snprintf(body, sizeof(body),
+        "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
+        "\"cmdName\":\"getCleanInfo\"}",
+        _state.robot_id, _state.user_id, _state.access_token);
 
     HTTPClient http;
     http.setTimeout(8000);
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     int rc = http.POST(body);
-    if (rc == 200 && out) {
-        String s = http.getString();
-        strncpy(out, s.c_str(), out_len - 1);
-        out[out_len - 1] = '\0';
-    }
+    if (rc != 200) { http.end(); return false; }
+
+    String resp = http.getString();
     http.end();
-    return rc == 200;
-}
 
-// ─── Parse état robot ─────────────────────────────────────────────────────────
-static void ecovacs_parse_state(const char *json) {
     JsonDocument doc;
-    if (deserializeJson(doc, json) != DeserializationError::Ok) return;
-    int bat = doc["ret"]["battery"]["power"] | doc["battery"] | -1;
-    if (bat >= 0) _state.battery = bat;
-    const char *st = doc["ret"]["clean"]["status"] | doc["status"] | nullptr;
-    if (st) strlcpy(_state.status, st, sizeof(_state.status));
-    const char *charging = doc["ret"]["chargeState"]["status"] | nullptr;
-    if (charging) strlcpy(_state.status, strcmp(charging, "idle") == 0 ? "charging" : charging, sizeof(_state.status));
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
+
+    const char *st = doc["resp"]["body"]["data"]["state"] | "idle";
+    strlcpy(_state.status, st, sizeof(_state.status));
+    strlcpy(_state.mode,   doc["resp"]["body"]["data"]["cleanState"]["motionState"] | "-", sizeof(_state.mode));
+    return true;
 }
 
-// ─── Mise à jour UI ───────────────────────────────────────────────────────────
-static void refresh_ui() {
+static bool ecovacs_get_battery() {
+    char url[256];
+    snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
+    char body[512];
+    snprintf(body, sizeof(body),
+        "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
+        "\"cmdName\":\"getBattery\"}",
+        _state.robot_id, _state.user_id, _state.access_token);
+
+    HTTPClient http;
+    http.setTimeout(8000);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int rc = http.POST(body);
+    if (rc != 200) { http.end(); return false; }
+
+    String resp = http.getString();
+    http.end();
+
+    JsonDocument doc;
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
+    _state.battery = doc["resp"]["body"]["data"]["value"] | 0;
+    return true;
+}
+
+// ─── Envoie une commande ──────────────────────────────────────────────────────
+static bool ecovacs_send_cmd(const char *cmdName) {
+    char url[256];
+    snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
+    char body[512];
+    snprintf(body, sizeof(body),
+        "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
+        "\"cmdName\":\"%s\"}",
+        _state.robot_id, _state.user_id, _state.access_token, cmdName);
+
+    HTTPClient http;
+    http.setTimeout(8000);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int rc = http.POST(body);
+    http.end();
+    return (rc == 200);
+}
+
+// ─── Mise à jour UI (thread LVGL) ────────────────────────────────────────────
+static void update_ui() {
     if (!_scr) return;
-    if (_bar_battery) lv_bar_set_value(_bar_battery, _state.battery, LV_ANIM_ON);
+
     if (_lbl_battery) {
-        char buf[16]; snprintf(buf, sizeof(buf), "%d%%", _state.battery);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d%%", _state.battery);
         lv_label_set_text(_lbl_battery, buf);
-        uint32_t col = _state.battery > 50 ? C_GREEN : (_state.battery > 20 ? C_ORANGE : C_ERR);
-        lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(col), 0);
     }
-    if (_lbl_state) {
-        const char *st_icons[] = {
-            "idle",     LV_SYMBOL_PAUSE " En attente",
-            "cleaning", LV_SYMBOL_REFRESH " Nettoyage",
-            "returning",LV_SYMBOL_HOME " Retour base",
-            "charging", LV_SYMBOL_CHARGE " En charge",
-            "error",    LV_SYMBOL_WARNING " Erreur",
-            nullptr, nullptr
-        };
-        const char *disp = _state.status;
-        for (int i = 0; st_icons[i]; i += 2)
-            if (strcmp(_state.status, st_icons[i]) == 0) { disp = st_icons[i+1]; break; }
-        lv_label_set_text(_lbl_state, disp);
+    if (_bar_battery) {
+        lv_bar_set_value(_bar_battery, _state.battery, LV_ANIM_ON);
+        lv_color_t col = (_state.battery > 50) ? lv_color_hex(C_GREEN)
+                       : (_state.battery > 20) ? lv_color_hex(C_ORANGE)
+                       : lv_color_hex(C_ERR);
+        lv_obj_set_style_bg_color(_bar_battery, col, LV_PART_INDICATOR);
     }
-    if (_lbl_mode && _state.mode[0]) lv_label_set_text(_lbl_mode, _state.mode);
+    if (_lbl_state) lv_label_set_text(_lbl_state, _state.status);
+    if (_lbl_mode)  lv_label_set_text(_lbl_mode,  _state.mode);
+    if (_lbl_status) {
+        lv_label_set_text(_lbl_status, _state.online ? "" : "Hors ligne");
+        lv_obj_set_style_text_color(_lbl_status,
+            lv_color_hex(_state.online ? C_GREEN : C_ERR), 0);
+    }
 }
 
-// ─── FreeRTOS fetch ───────────────────────────────────────────────────────────
-struct EcoFetch { bool ok; char err[48]; };
-static EcoFetch _efres;
+// ─── Résultat fetch ───────────────────────────────────────────────────────────
+struct EcoFetchResult { bool ok; char err[48]; };
+static EcoFetchResult _fres;
 
-static void on_eco_done(void *) {
+static void on_fetch_done(void *) {
     _fetch_running = false;
     if (!_scr) return;
-    if (!_efres.ok) {
-        if (_lbl_status) lv_label_set_text(_lbl_status, _efres.err);
+    if (!_fres.ok) {
+        if (_lbl_status) {
+            lv_label_set_text(_lbl_status, _fres.err);
+            lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_ERR), 0);
+        }
         return;
     }
-    if (_lbl_status) lv_label_set_text(_lbl_status, _state.online ? "" : "Robot hors ligne");
-    refresh_ui();
+    update_ui();
 }
 
-static void eco_fetch_task(void *) {
-    _efres = {};
+static void fetch_task(void *) {
+    _fres = {};
     if (!WiFi.isConnected()) {
-        strlcpy(_efres.err, "WiFi non connecte", sizeof(_efres.err));
-        lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
+        strlcpy(_fres.err, "WiFi non connecte", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
     if (!_creds_ready) {
-        strlcpy(_efres.err, "Creds Ecovacs manquants (PWA)", sizeof(_efres.err));
-        lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
+        strlcpy(_fres.err, "Identifiants manquants", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
-    if (!_state.authenticated) {
-        if (!ecovacs_auth()) {
-            strlcpy(_efres.err, "Erreur auth Ecovacs", sizeof(_efres.err));
-            lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
-        }
+    if (!_state.authenticated && !ecovacs_auth()) {
+        strlcpy(_fres.err, "Auth Ecovacs echouee", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
-    if (_state.robot_id[0] == '\0') {
-        if (!ecovacs_get_device_list()) {
-            strlcpy(_efres.err, "Aucun robot trouve", sizeof(_efres.err));
-            lv_async_call(on_eco_done, nullptr); vTaskDelete(NULL); return;
-        }
+    if (_state.robot_id[0] == '\0' && !ecovacs_get_device_list()) {
+        strlcpy(_fres.err, "Robot introuvable", sizeof(_fres.err));
+        lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
-    char resp[512];
-    if (ecovacs_cmd("GetBatteryInfo", nullptr, resp, sizeof(resp))) {
-        ecovacs_parse_state(resp);
-    }
-    if (ecovacs_cmd("GetCleanState", nullptr, resp, sizeof(resp))) {
-        ecovacs_parse_state(resp);
-    }
-    _efres.ok = true;
-    lv_async_call(on_eco_done, nullptr);
+    ecovacs_get_battery();
+    ecovacs_get_clean_info();
+    _fres.ok = true;
+    lv_async_call(on_fetch_done, nullptr);
     vTaskDelete(NULL);
 }
 
 static void start_fetch() {
     if (_fetch_running) return;
     _fetch_running = true;
-    if (_lbl_status) lv_label_set_text(_lbl_status, "Chargement...");
-    xTaskCreatePinnedToCore(eco_fetch_task, "eco_fetch", 8192, nullptr, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(fetch_task, "eco_fetch", 8192, nullptr, 1, nullptr, 0);
 }
 
-// ─── Commandes boutons ────────────────────────────────────────────────────────
-static void cmd_task(void *param) {
-    const char *cmd = (const char *)param;
-    if (strcmp(cmd, "clean") == 0)
-        ecovacs_cmd("Clean", "{\"act\":\"start\",\"type\":\"auto\"}", nullptr, 0);
-    else if (strcmp(cmd, "stop") == 0)
-        ecovacs_cmd("Clean", "{\"act\":\"stop\"}", nullptr, 0);
-    else if (strcmp(cmd, "charge") == 0)
-        ecovacs_cmd("Charge", "{\"act\":\"go\"}", nullptr, 0);
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    eco_fetch_task(nullptr);
+// ─── Callbacks boutons commande ───────────────────────────────────────────────
+static void cmd_task(void *arg) {
+    const char *cmd = (const char *)arg;
+    ecovacs_send_cmd(cmd);
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    start_fetch();
     vTaskDelete(NULL);
 }
 
-static void btn_clean_cb(lv_event_t *)  { xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 6144, (void*)"clean",  1, nullptr, 0); }
-static void btn_stop_cb(lv_event_t *)   { xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 6144, (void*)"stop",   1, nullptr, 0); }
-static void btn_charge_cb(lv_event_t *) { xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 6144, (void*)"charge", 1, nullptr, 0); }
+static void send_cmd(const char *cmd) {
+    xTaskCreatePinnedToCore(cmd_task, "eco_cmd", 4096, (void *)cmd, 1, nullptr, 0);
+}
 
-// ─── Close ────────────────────────────────────────────────────────────────────
+static void on_clean (lv_event_t *) { send_cmd("clean");  }
+static void on_stop  (lv_event_t *) { send_cmd("stop");   }
+static void on_charge(lv_event_t *) { send_cmd("charge"); }
+
+// ─── do_close ─────────────────────────────────────────────────────────────────
 static void do_close() {
     if (!_app_active) return;
     _app_active    = false;
     _fetch_running = false;
+    if (_scr) { lv_obj_delete_delayed(_scr, 350); _scr = nullptr; }
+    _lbl_status = _lbl_battery = _lbl_mode = _lbl_state = nullptr;
+    _bar_battery = _btn_clean = _btn_stop = _btn_charge = nullptr;
     orchestrator_set_app(APP_LAUNCHER);
-
-    lv_obj_t *scr_old = _scr;
-    _scr           = nullptr;
-    _lbl_status    = nullptr; _lbl_battery = nullptr; _lbl_mode = nullptr;
-    _lbl_state     = nullptr; _bar_battery = nullptr;
-    _btn_clean     = nullptr; _btn_stop = nullptr; _btn_charge = nullptr;
-
-    // Retour vers le launcher puis supprime l'écran après l'animation
     ui_launcher_return();
-    if (scr_old) lv_obj_delete_delayed(scr_old, 400);
-
     Serial.println("[APP/ECOVACS] Fermee");
 }
 
 static void back_cb(lv_event_t *) { do_close(); }
 
-// ─── Start ────────────────────────────────────────────────────────────────────
-void ecovacs_app_start() {
-    load_creds();
-    orchestrator_set_app(APP_ECOVACS);
-    _app_active = true;
-    _last_fetch = 0;
-
-    _scr = lv_obj_create(NULL);
+// ─── Build UI ─────────────────────────────────────────────────────────────────
+static void build_ui() {
+    _scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(_scr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *btn = lv_btn_create(_scr);
-    lv_obj_set_size(btn, 52, 36);
-    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(C_CARD), 0);
-    lv_obj_set_style_radius(btn, 10, 0);
-    lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_back = lv_label_create(btn);
+    // ── Header (safe area : UI_X / APP_Y / UI_W) ──────────────────────────────
+    lv_obj_t *hdr = lv_obj_create(_scr);
+    lv_obj_set_size(hdr, UI_W, 48);
+    lv_obj_set_pos(hdr, UI_X, APP_Y);
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(hdr, 0, 0);
+    lv_obj_set_style_pad_all(hdr, 0, 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Bouton retour
+    lv_obj_t *btn_back = lv_btn_create(hdr);
+    lv_obj_set_size(btn_back, 44, 44);
+    lv_obj_align(btn_back, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_style_bg_color(btn_back, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_radius(btn_back, 22, 0);
+    lv_obj_add_event_cb(btn_back, back_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_back = lv_label_create(btn_back);
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(lbl_back, lv_color_hex(C_TXT), 0);
     lv_obj_center(lbl_back);
 
-    lv_obj_t *title = lv_label_create(_scr);
-    lv_label_set_text(title, LV_SYMBOL_REFRESH " DEEBOT X8 Pro");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(C_TXT), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
+    // Titre
+    lv_obj_t *lbl_title = lv_label_create(hdr);
+    lv_label_set_text(lbl_title, LV_SYMBOL_REFRESH " Ecovacs");
+    lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl_title, lv_color_hex(C_TXT), 0);
+    lv_obj_align(lbl_title, LV_ALIGN_CENTER, 0, 0);
 
-    _lbl_status = lv_label_create(_scr);
-    lv_label_set_text(_lbl_status, _creds_ready ? "" : "Configurer compte Ecovacs dans la PWA");
-    lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(_lbl_status, lv_color_hex(_creds_ready ? C_MUTED : C_ERR), 0);
-    lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 82);
+    // Bouton refresh
+    lv_obj_t *btn_ref = lv_btn_create(hdr);
+    lv_obj_set_size(btn_ref, 44, 44);
+    lv_obj_align(btn_ref, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_set_style_bg_color(btn_ref, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_radius(btn_ref, 22, 0);
+    lv_obj_add_event_cb(btn_ref, [](lv_event_t *) { start_fetch(); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_ref = lv_label_create(btn_ref);
+    lv_label_set_text(lbl_ref, LV_SYMBOL_REFRESH);
+    lv_obj_center(lbl_ref);
 
+    // ── Carte état robot ──────────────────────────────────────────────────────
+    // Centrée horizontalement dans la safe area
+    int card_w = UI_W - 32;  // marge interne 16px de chaque côté
     lv_obj_t *card = lv_obj_create(_scr);
-    lv_obj_set_size(card, 420, 140);
-    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 110);
+    lv_obj_set_size(card, card_w, 160);
+    lv_obj_set_pos(card, UI_X + 16, APP_Y + 56);
     lv_obj_set_style_bg_color(card, lv_color_hex(C_CARD), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_radius(card, 14, 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0x30363d), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *icon = lv_label_create(card);
-    lv_label_set_text(icon, LV_SYMBOL_REFRESH);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(icon, lv_color_hex(C_ACCENT), 0);
-    lv_obj_align(icon, LV_ALIGN_LEFT_MID, 16, 0);
-
-    _lbl_state = lv_label_create(card);
-    lv_label_set_text(_lbl_state, "---");
-    lv_obj_set_style_text_font(_lbl_state, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(_lbl_state, lv_color_hex(C_TXT), 0);
-    lv_obj_align(_lbl_state, LV_ALIGN_TOP_MID, 20, 16);
-
+    // Batterie : barre + label
     _bar_battery = lv_bar_create(card);
-    lv_obj_set_size(_bar_battery, 180, 12);
-    lv_obj_align(_bar_battery, LV_ALIGN_BOTTOM_MID, 20, -24);
+    lv_obj_set_size(_bar_battery, card_w - 80, 12);
+    lv_obj_align(_bar_battery, LV_ALIGN_TOP_LEFT, 8, 16);
     lv_bar_set_range(_bar_battery, 0, 100);
     lv_bar_set_value(_bar_battery, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(_bar_battery, lv_color_hex(0x30363d), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_bar_battery, lv_color_hex(0x30363d), 0);
     lv_obj_set_style_bg_color(_bar_battery, lv_color_hex(C_GREEN), LV_PART_INDICATOR);
 
     _lbl_battery = lv_label_create(card);
-    lv_label_set_text(_lbl_battery, "--%");
-    lv_obj_set_style_text_font(_lbl_battery, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(C_GREEN), 0);
-    lv_obj_align(_lbl_battery, LV_ALIGN_BOTTOM_MID, 20, -6);
+    lv_label_set_text(_lbl_battery, "--%%");
+    lv_obj_set_style_text_font(_lbl_battery, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(C_TXT), 0);
+    lv_obj_align(_lbl_battery, LV_ALIGN_TOP_RIGHT, -8, 8);
 
+    // État
+    _lbl_state = lv_label_create(card);
+    lv_label_set_text(_lbl_state, "--");
+    lv_obj_set_style_text_font(_lbl_state, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(_lbl_state, lv_color_hex(C_ACCENT), 0);
+    lv_obj_align(_lbl_state, LV_ALIGN_CENTER, 0, -10);
+
+    // Mode
     _lbl_mode = lv_label_create(card);
-    lv_label_set_text(_lbl_mode, "");
+    lv_label_set_text(_lbl_mode, "--");
     lv_obj_set_style_text_font(_lbl_mode, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_mode, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(_lbl_mode, LV_ALIGN_TOP_MID, 20, 42);
+    lv_obj_align(_lbl_mode, LV_ALIGN_CENTER, 0, 18);
 
-    const struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ref; } btns[] = {
-        { LV_SYMBOL_REFRESH " Nettoyer", C_GREEN,  btn_clean_cb,  &_btn_clean  },
-        { LV_SYMBOL_PAUSE   " Arreter",  C_ORANGE, btn_stop_cb,   &_btn_stop   },
-        { LV_SYMBOL_CHARGE  " Base",     C_ACCENT, btn_charge_cb, &_btn_charge },
-    };
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *b = lv_btn_create(_scr);
-        lv_obj_set_size(b, 136, 52);
-        lv_obj_align(b, LV_ALIGN_BOTTOM_MID, (i - 1) * 148, -16);
-        lv_obj_set_style_bg_color(b, lv_color_hex(C_CARD), 0);
-        lv_obj_set_style_border_color(b, lv_color_hex(btns[i].col), 0);
-        lv_obj_set_style_border_width(b, 2, 0);
-        lv_obj_set_style_radius(b, 12, 0);
-        lv_obj_add_event_cb(b, btns[i].cb, LV_EVENT_CLICKED, NULL);
-        *btns[i].ref = b;
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, btns[i].lbl);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(btns[i].col), 0);
-        lv_obj_center(l);
-        if (!_creds_ready) lv_obj_add_state(b, LV_STATE_DISABLED);
-    }
+    // Status (online/offline)
+    _lbl_status = lv_label_create(card);
+    lv_label_set_text(_lbl_status, "Chargement...");
+    lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(_lbl_status, LV_ALIGN_BOTTOM_MID, 0, -8);
 
-    lv_scr_load_anim(_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
-    Serial.println("[APP/ECOVACS] Ouverte");
-    if (_creds_ready) start_fetch();
+    // ── Boutons de commande ───────────────────────────────────────────────────
+    // Répartis horizontalement dans la safe area
+    int btn_y   = APP_Y + 56 + 168 + 12;  // sous la carte état
+    int btn_w   = (UI_W - 32 - 16) / 3;   // 3 boutons, gap=8 entre eux
+    int btn_x0  = UI_X + 16;
+
+    // Nettoyer
+    _btn_clean = lv_btn_create(_scr);
+    lv_obj_set_size(_btn_clean, btn_w, 48);
+    lv_obj_set_pos(_btn_clean, btn_x0, btn_y);
+    lv_obj_set_style_bg_color(_btn_clean, lv_color_hex(C_ACCENT), 0);
+    lv_obj_set_style_radius(_btn_clean, 10, 0);
+    lv_obj_add_event_cb(_btn_clean, on_clean, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lc = lv_label_create(_btn_clean);
+    lv_label_set_text(lc, LV_SYMBOL_PLAY " Nettoyer");
+    lv_obj_set_style_text_font(lc, &lv_font_montserrat_12, 0);
+    lv_obj_center(lc);
+
+    // Stop
+    _btn_stop = lv_btn_create(_scr);
+    lv_obj_set_size(_btn_stop, btn_w, 48);
+    lv_obj_set_pos(_btn_stop, btn_x0 + btn_w + 8, btn_y);
+    lv_obj_set_style_bg_color(_btn_stop, lv_color_hex(C_ERR), 0);
+    lv_obj_set_style_radius(_btn_stop, 10, 0);
+    lv_obj_add_event_cb(_btn_stop, on_stop, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *ls = lv_label_create(_btn_stop);
+    lv_label_set_text(ls, LV_SYMBOL_STOP " Stop");
+    lv_obj_set_style_text_font(ls, &lv_font_montserrat_12, 0);
+    lv_obj_center(ls);
+
+    // Charge
+    _btn_charge = lv_btn_create(_scr);
+    lv_obj_set_size(_btn_charge, btn_w, 48);
+    lv_obj_set_pos(_btn_charge, btn_x0 + (btn_w + 8) * 2, btn_y);
+    lv_obj_set_style_bg_color(_btn_charge, lv_color_hex(C_ORANGE), 0);
+    lv_obj_set_style_radius(_btn_charge, 10, 0);
+    lv_obj_add_event_cb(_btn_charge, on_charge, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lb = lv_label_create(_btn_charge);
+    lv_label_set_text(lb, LV_SYMBOL_CHARGE " Base");
+    lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+    lv_obj_center(lb);
 }
 
-// ─── Tick ─────────────────────────────────────────────────────────────────────
+// ─── API publique ─────────────────────────────────────────────────────────────
+void ecovacs_app_start() {
+    if (_app_active) return;
+    load_creds();
+    orchestrator_set_app(APP_ECOVACS);
+    _app_active    = true;
+    _fetch_running = false;
+
+    build_ui();
+    lv_scr_load_anim(_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+    start_fetch();
+    Serial.println("[APP/ECOVACS] Ouverte");
+}
+
 void ecovacs_app_tick() {
-    if (!_app_active || !_scr) return;
-    if (!_creds_ready) return;
+    if (!_app_active) return;
     uint32_t now = millis();
-    if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= 30000UL)) {
+    if (now - _last_fetch > 30000) {
         _last_fetch = now;
         start_fetch();
     }

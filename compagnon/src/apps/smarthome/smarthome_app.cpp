@@ -9,6 +9,7 @@
  */
 #include "smarthome_app.h"
 #include "../../config/nvs_config.h"
+#include "../../config/ui_config.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
 #include "../../net/tuya_api.h"
@@ -151,10 +152,11 @@ static void on_fetch_done(void *) {
     if (_lbl_status) lv_label_set_text(_lbl_status, "");
     // Reconstruire les cartes si nécessaire
     if (_list_cont && lv_obj_get_child_count(_list_cont) == 0) {
-        // Recréer cartes (premier fetch)
+        // Largeur carte : (UI_W - padding_lateral*2 - gap) / 2
+        int card_w = (UI_W - 24) / 2;  // 24 = 2*8px pad + 8px gap
         for (int i = 0; i < _dev_count && i < MAX_DEVICES; i++) {
             lv_obj_t *card = lv_obj_create(_list_cont);
-            lv_obj_set_size(card, 210, 72);
+            lv_obj_set_size(card, card_w, 72);
             lv_obj_set_style_bg_color(card, lv_color_hex(C_CARD), 0);
             lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
             lv_obj_set_style_radius(card, 12, 0);
@@ -169,15 +171,15 @@ static void on_fetch_done(void *) {
             lv_obj_set_style_text_font(lbl_name, &lv_font_montserrat_14, 0);
             lv_obj_set_style_text_color(lbl_name, lv_color_hex(C_TXT), 0);
             lv_label_set_long_mode(lbl_name, LV_LABEL_LONG_CLIP);
-            lv_obj_set_width(lbl_name, 180);
-            lv_obj_align(lbl_name, LV_ALIGN_TOP_LEFT, 10, 8);
+            lv_obj_set_width(lbl_name, card_w - 16);
+            lv_obj_align(lbl_name, LV_ALIGN_TOP_LEFT, 8, 8);
 
             // État ON/OFF ou capteur
             lv_obj_t *lbl_pw = lv_label_create(card);
             lv_label_set_text(lbl_pw, "...");
             lv_obj_set_style_text_font(lbl_pw, &lv_font_montserrat_16, 0);
             lv_obj_set_style_text_color(lbl_pw, lv_color_hex(C_MUTED), 0);
-            lv_obj_align(lbl_pw, LV_ALIGN_BOTTOM_LEFT, 10, -8);
+            lv_obj_align(lbl_pw, LV_ALIGN_BOTTOM_LEFT, 8, -8);
             _lbl_power[i] = lbl_pw;
 
             // Hors ligne
@@ -228,14 +230,12 @@ static void fetch_task(void *) {
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
 
-    // Auth Tuya : init credentials puis récupère le token
     tuya_api_init(_tuya_id, _tuya_sec);
     if (!tuya_api_get_token()) {
         strlcpy(_fres.err, "Auth Tuya echouee", sizeof(_fres.err));
         lv_async_call(on_fetch_done, nullptr); vTaskDelete(NULL); return;
     }
 
-    // Devices list (premier fetch uniquement)
     if (_dev_count == 0) {
         char *buf = (char *)malloc(8192);
         if (buf && tuya_api_get_devices(buf, 8192)) {
@@ -244,7 +244,6 @@ static void fetch_task(void *) {
         free(buf);
     }
 
-    // Status de chaque device
     for (int i = 0; i < _dev_count && _app_active; i++) {
         char *buf = (char *)malloc(2048);
         if (buf && tuya_api_get_device_status(_devices[i].id, buf, 2048)) {
@@ -281,7 +280,7 @@ static void do_close() {
     _lbl_status    = nullptr;
     _list_cont     = nullptr;
     for (int i = 0; i < MAX_DEVICES; i++) { _dev_cards[i] = nullptr; _lbl_power[i] = nullptr; _lbl_sensor[i] = nullptr; }
-    ui_launcher_return();             // retour au launcher avec animation
+    ui_launcher_return();
     lv_obj_delete_delayed(_scr_to_delete, 350);
     _scr_to_delete = nullptr;
     Serial.println("[APP/SMARTHOME] Fermee");
@@ -306,10 +305,10 @@ void smarthome_app_start() {
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Header
+    // ── Header (safe area : UI_X/APP_Y/UI_W) ─────────────────────────────────
     lv_obj_t *hdr = lv_obj_create(_scr);
-    lv_obj_set_size(hdr, LV_HOR_RES, 48);
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_size(hdr, UI_W, 48);
+    lv_obj_set_pos(hdr, UI_X, APP_Y);
     lv_obj_set_style_bg_color(hdr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
@@ -350,12 +349,14 @@ void smarthome_app_start() {
     lv_label_set_text(_lbl_status, "Chargement...");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_pos(_lbl_status, UI_X, APP_Y + 56);
+    lv_obj_set_width(_lbl_status, UI_W);
+    lv_obj_set_style_text_align(_lbl_status, LV_TEXT_ALIGN_CENTER, 0);
 
-    // Liste scrollable 2 colonnes
+    // ── Liste scrollable 2 colonnes (safe area) ───────────────────────────────
     _list_cont = lv_obj_create(_scr);
-    lv_obj_set_size(_list_cont, LV_HOR_RES, LV_VER_RES - 56);
-    lv_obj_align(_list_cont, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(_list_cont, UI_W, APP_H - 56);
+    lv_obj_set_pos(_list_cont, UI_X, APP_Y + 56);
     lv_obj_set_style_bg_color(_list_cont, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(_list_cont, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(_list_cont, 0, 0);

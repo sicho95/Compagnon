@@ -8,9 +8,11 @@
 #include "../apps/bourse/bourse_app.h"
 #include "../apps/meteo/meteo_app.h"
 #include "../apps/musique/musique_app.h"
+#include "../apps/smarthome/smarthome_app.h"
+#include "../apps/ecovacs/ecovacs_app.h"
 #include "../net/ble_mgr.h"
 
-#define APP_COUNT 5
+#define APP_COUNT 7
 #define LONG_MS   800
 
 struct AppEntry {
@@ -25,11 +27,13 @@ struct AppEntry {
 
 // palette AMOLED cohérente avec les apps respectives
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nestor_app_stop  },
-    { "Radars",  "Alertes routieres", 0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop   },
-    { "Bourse",  "Marches & Actifs",  0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop  },
-    { "Meteo",   "Previsions",        0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop   },
-    { "Musique", "AirPlay & SD",      0x1b0030, 0xCC99FF, LV_SYMBOL_AUDIO,   musique_app_start, musique_app_stop },
+    { "Nestor",     "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,    nestor_app_stop    },
+    { "Radars",     "Alertes routieres", 0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,     radar_app_stop     },
+    { "Bourse",     "Marches & Actifs",  0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,    bourse_app_stop    },
+    { "Meteo",      "Previsions",        0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,     meteo_app_stop     },
+    { "Musique",    "AirPlay & SD",      0x1b0030, 0xCC99FF, LV_SYMBOL_AUDIO,   musique_app_start,   musique_app_stop   },
+    { "Maison",     "Tuya SmartHome",    0x001A0D, 0x3fb950, LV_SYMBOL_HOME,    smarthome_app_start, smarthome_app_stop },
+    { "Ecovacs",    "Robot aspirateur",  0x0D1117, 0x388bfd, LV_SYMBOL_REFRESH, ecovacs_app_start,   ecovacs_app_stop   },
 };
 
 static lv_obj_t *scr_launcher   = nullptr;
@@ -78,17 +82,13 @@ static void stop_current_and_return() {
     ActiveApp app = orchestrator_get_app();
     // Si déjà sur le launcher, rien à faire
     if (app == APP_LAUNCHER) return;
-    // APP_NESTOR=1 → APPS[0], APP_RADAR=2 → APPS[1], …, APP_MUSIQUE=5 → APPS[4]
+    // APP_NESTOR=1 → APPS[0], APP_RADAR=2 → APPS[1], …
     int idx = (int)app - 1;
     if (idx >= 0 && idx < APP_COUNT && APPS[idx].stop) {
         APPS[idx].stop();
     } else {
-        // Sécurité : revenir quand même même si pas de .stop()
         ui_launcher_return();
     }
-    // Note : les fonctions stop() des apps appellent elles-mêmes ui_launcher_return()
-    // ou orchestrator_set_app(APP_LAUNCHER). On n'appelle pas ui_launcher_return()
-    // ici pour éviter un double appel — sauf si aucun stop() n'a été trouvé.
 }
 
 // Mettre à jour l'opacité des cartes selon la tuile active
@@ -153,7 +153,6 @@ static void btn_next_l() {
     } else {
         lv_group_t *g = lv_group_get_default();
         lv_obj_t   *f = g ? lv_group_get_focused(g) : nullptr;
-        // LVGL9: lv_obj_send_event() remplace lv_event_send()
         if (f) lv_obj_send_event(f, LV_EVENT_CLICKED, nullptr);
     }
 }
@@ -223,8 +222,6 @@ void ui_launcher_init() {
     lv_obj_remove_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 
     // ── Tileview positionné dans la safe area (sous la status bar) ────────────
-    // UI_X / APP_Y / UI_W / APP_H sont définis dans ui_config.h et tiennent
-    // compte des bordures du boîtier arrondi (BORDER_H=20, BORDER_V=10).
     tileview = lv_tileview_create(scr_launcher);
     lv_obj_set_size(tileview, UI_W, APP_H);
     lv_obj_set_pos(tileview, UI_X, APP_Y);
@@ -234,7 +231,7 @@ void ui_launcher_init() {
     lv_obj_add_event_cb(tileview, on_tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     for (int i = 0; i < APP_COUNT; i++) make_tile(i);
-    update_tile_opacities(0);  // opacité initiale correcte dès le démarrage
+    update_tile_opacities(0);
 
     lv_obj_t *hint = lv_label_create(scr_launcher);
     lv_label_set_text(hint, "glisser | btn droit long = ouvrir");
@@ -248,8 +245,6 @@ void ui_launcher_init() {
     ble_mgr_set_music_cb(musique_ble_cmd);
 
     lv_scr_load(scr_launcher);
-    // Note : add_screen_border() supprimée — la safe area gère le recadrage.
-    // lv_layer_sys() reste disponible pour les overlays futurs.
 
     Serial.println("[UI/LAUNCH] Launcher OK");
 }
@@ -312,6 +307,4 @@ void ui_power_menu_show() {
     _make_btn(_power_overlay, "Veille",         0x1A3A1A, _power_sleep, 54);
     _make_btn(_power_overlay, "Arret complet",  0x3A1A1A, _power_off,   106);
     _make_btn(_power_overlay, "Annuler",        0x1A1A2A, _power_close, 158);
-
-    // lv_layer_sys() reste toujours au-dessus — pas besoin d'appel supplémentaire
 }
