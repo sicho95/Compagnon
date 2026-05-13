@@ -6,6 +6,7 @@
 #include "../../net/ble_mgr.h"
 #include "../../system/orchestrator.h"
 #include "../../config/nvs_config.h"
+#include "../../config/ui_config.h"
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -91,7 +92,7 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     bourse_app_stop();
-    orchestrator_set_app(APP_LAUNCHER);
+    // orchestrator_set_app() est déjà appelé dans bourse_app_stop() via do_close()
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -100,25 +101,28 @@ static void build_ui() {
     lv_obj_set_style_bg_color(_screen, lv_color_hex(0x0a0a0a), 0);
     lv_obj_set_style_bg_opa(_screen, LV_OPA_COVER, 0);
 
-    // Titre
+    // Titre positionné sous la status bar
     lv_obj_t *title = lv_label_create(_screen);
     lv_label_set_text(title, "Bourse");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_set_pos(title, 0, APP_Y + 6);
+    lv_obj_set_width(title, SCREEN_W);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
     // Bouton retour
     lv_obj_t *btn_back = lv_btn_create(_screen);
     lv_obj_set_size(btn_back, 60, 36);
-    lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 8);
+    lv_obj_set_pos(btn_back, 8, APP_Y);
     lv_obj_add_event_cb(btn_back, on_back, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_back = lv_label_create(btn_back);
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
     lv_obj_center(lbl_back);
 
-    // 4 cartes 2×2
+    // 4 cartes 2×2 — origine Y décalée sous status bar + en-tête
     int card_w = 180, card_h = 100;
-    int pad_x = 20, pad_y = 70;
+    int pad_x = 20;
+    int pad_y = APP_Y + 44;  // 44 px de marge après la status bar pour le titre
     for (int i = 0; i < TICKER_COUNT; i++) {
         int col = i % 2, row = i / 2;
         int x = pad_x + col * (card_w + 10);
@@ -165,11 +169,14 @@ static void do_close() {
         _name_lbl[i] = nullptr;
     }
     _status_lbl = nullptr;
+    orchestrator_set_app(APP_LAUNCHER);
+    ui_launcher_return();
 }
 
 // ─── API publique ─────────────────────────────────────────────────────────────
 void bourse_app_start() {
     if (_open) return;
+    orchestrator_set_app(APP_BOURSE);  // FIX: enregistrer l'app active avant tout
 
     // Charger la clé API depuis NVS
     String key = nvs_get_str("bourse_key", "");

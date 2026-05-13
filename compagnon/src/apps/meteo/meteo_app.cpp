@@ -6,6 +6,8 @@
 #include "../../net/ble_mgr.h"
 #include "../../system/orchestrator.h"
 #include "../../config/nvs_config.h"
+#include "../../config/ui_config.h"
+#include "../../ui/launcher.h"
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -141,7 +143,7 @@ static void on_timer(lv_timer_t *) {
 // ─── Bouton retour ────────────────────────────────────────────────────────────
 static void on_back(lv_event_t *) {
     meteo_app_stop();
-    orchestrator_set_app(APP_LAUNCHER);
+    // orchestrator_set_app() et ui_launcher_return() appelés dans do_close()
 }
 
 // ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -150,22 +152,27 @@ static void build_ui() {
     lv_obj_set_style_bg_color(_screen, lv_color_hex(0x0a0a1a), 0);
     lv_obj_set_style_bg_opa(_screen, LV_OPA_COVER, 0);
 
+    // Titre positionné sous la status bar
     lv_obj_t *title = lv_label_create(_screen);
-    lv_label_set_text(title, LV_SYMBOL_UP " Météo");  // LV_SYMBOL_CLOUD absent de LVGL9
+    lv_label_set_text(title, LV_SYMBOL_UP " Météo");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_set_pos(title, 0, APP_Y + 6);
+    lv_obj_set_width(title, SCREEN_W);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t *btn_back = lv_btn_create(_screen);
     lv_obj_set_size(btn_back, 60, 36);
-    lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 8);
+    lv_obj_set_pos(btn_back, 8, APP_Y);
     lv_obj_add_event_cb(btn_back, on_back, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl = lv_label_create(btn_back);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT);
     lv_obj_center(lbl);
 
     int card_w = 90, card_h = 200;
-    int start_x = 15, start_y = 65, gap = 8;
+    int start_x = 15;
+    int start_y = APP_Y + 48;  // sous la status bar + marge titre
+    int gap = 8;
 
     for (int i = 0; i < FORECAST_DAYS; i++) {
         int x = start_x + i * (card_w + gap);
@@ -221,11 +228,14 @@ static void do_close() {
         _cards[i] = _day_lbl[i] = _tmin_lbl[i] = _tmax_lbl[i] = _rain_lbl[i] = nullptr;
     }
     _status_lbl = nullptr;
+    orchestrator_set_app(APP_LAUNCHER);
+    ui_launcher_return();
 }
 
 // ─── API publique ─────────────────────────────────────────────────────────────
 void meteo_app_start() {
     if (_open) return;
+    orchestrator_set_app(APP_METEO);  // FIX: enregistrer l'app active avant tout
 
     String key = nvs_get_str("meteo_key", "");
     if (key.length() == 0)

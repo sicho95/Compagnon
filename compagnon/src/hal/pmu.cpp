@@ -53,9 +53,19 @@ void hal_pmu_tick() {
     _irq_fired = false;
     pmu.getIrqStatus();
 
+    // ── Diagnostic IRQ (à retirer une fois validé) ──────────────────────────
+    Serial.printf("[HAL/PMU] IRQ fired — short=%d long=%d scr_on=%d\n",
+        (int)pmu.isPekeyShortPressIrq(),
+        (int)pmu.isPekeyLongPressIrq(),
+        (int)scr_on);
+
     if (pmu.isPekeyShortPressIrq()) {
-        if (scr_on) hal_pmu_screen_off();
-        else        hal_pmu_screen_on();
+        // Appui court bouton PWR → bascule écran ON/OFF + light sleep
+        if (scr_on) {
+            hal_pmu_enter_sleep();
+        } else {
+            hal_pmu_screen_on();
+        }
     }
     if (pmu.isPekeyLongPressIrq()) {
         if (_long_cb) _long_cb();

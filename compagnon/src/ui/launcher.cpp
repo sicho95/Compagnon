@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "../config/pin_config.h"
+#include "../config/ui_config.h"
 #include "../hal/pmu.h"
 #include "../system/orchestrator.h"
 #include "../apps/nestor/nestor_app.h"
@@ -29,7 +30,7 @@ struct AppEntry {
 
 // palette AMOLED cohérente avec les apps respectives
 static const AppEntry APPS[APP_COUNT] = {
-    { "Nestor",  "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nullptr          },
+    { "Nestor",  "IA Compagnon",      0x0D1B3E, 0x7EB8F7, LV_SYMBOL_WIFI,    nestor_app_start,  nestor_app_stop  },
     { "Radars",  "Alertes routieres", 0x0A0A1A, 0x7EB8F7, LV_SYMBOL_AUDIO,   radar_app_start,   radar_app_stop   },
     { "Bourse",  "Marches & Actifs",  0x071A07, 0x66EE88, LV_SYMBOL_UP,      bourse_app_start,  bourse_app_stop  },
     { "Meteo",   "Previsions",        0x0A0E1A, 0xFFCC44, LV_SYMBOL_WARNING, meteo_app_start,   meteo_app_stop   },
@@ -77,29 +78,22 @@ static void open_current() {
     if (APPS[cur_idx].launch) APPS[cur_idx].launch();
 }
 
-// Arrête proprement l'app active par son enum
-static void stop_active_app() {
-    ActiveApp a = orchestrator_get_app();
-    switch (a) {
-        case APP_NESTOR:  /* nestor gère son propre retour via bouton interne */ break;
-        case APP_RADAR:   radar_app_stop();   break;
-        case APP_BOURSE:  bourse_app_stop();  break;
-        case APP_METEO:   meteo_app_stop();   break;
-        case APP_MUSIQUE: musique_app_stop(); break;
-        default: break;
-    }
-}
-
 // Arrête l'app active et revient au launcher
 static void stop_current_and_return() {
     ActiveApp app = orchestrator_get_app();
+    // Si déjà sur le launcher, rien à faire
     if (app == APP_LAUNCHER) return;
     // APP_NESTOR=1 → APPS[0], APP_RADAR=2 → APPS[1], …, APP_MUSIQUE=5 → APPS[4]
     int idx = (int)app - 1;
     if (idx >= 0 && idx < APP_COUNT && APPS[idx].stop) {
         APPS[idx].stop();
+    } else {
+        // Sécurité : revenir quand même même si pas de .stop()
+        ui_launcher_return();
     }
-    ui_launcher_return();
+    // Note : les fonctions stop() des apps appellent elles-mêmes ui_launcher_return()
+    // ou orchestrator_set_app(APP_LAUNCHER). On n'appelle pas ui_launcher_return()
+    // ici pour éviter un double appel — sauf si aucun stop() n'a été trouvé.
 }
 
 // Mettre à jour l'opacité des cartes selon la tuile active
@@ -263,9 +257,12 @@ void ui_launcher_init() {
     lv_obj_set_style_bg_opa(scr_launcher, LV_OPA_COVER, 0);
     lv_obj_remove_flag(scr_launcher, LV_OBJ_FLAG_SCROLLABLE);
 
+    // ── FIX: tileview positionné SOUS la status bar ──────────────────────────
+    // La status bar occupe les STATUS_BAR_H premiers pixels (lv_layer_top).
+    // On décale le tileview vers le bas et on réduit sa hauteur en conséquence.
     tileview = lv_tileview_create(scr_launcher);
-    lv_obj_set_size(tileview, LV_PCT(100), LV_PCT(100));
-    lv_obj_align(tileview, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(tileview, LCD_WIDTH, LCD_HEIGHT - STATUS_BAR_H);
+    lv_obj_set_pos(tileview, 0, STATUS_BAR_H);
     lv_obj_set_style_bg_color(tileview, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tileview, LV_OPA_COVER, 0);
     lv_obj_remove_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
