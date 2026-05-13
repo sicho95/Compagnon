@@ -6,8 +6,8 @@
  * Ref : https://developer.tuya.com/en/docs/cloud/getting-started
  */
 #include "tuya_api.h"
+#include "net_utils.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <mbedtls/md.h>
 #include <Arduino.h>
@@ -59,11 +59,9 @@ static void build_sign(const char *method, const char *path, const char *body,
     char body_hash[65];
     sha256_hex(body, body_hash);
 
-    // stringToSign = method + "\n" + body_sha256 + "\n" + "" + "\n" + path
     char sts[512];
     snprintf(sts, sizeof(sts), "%s\n%s\n\n%s", method, body_hash, path);
 
-    // str_to_sign = client_id + [access_token] + ts + nonce + stringToSign
     char str[640];
     if (use_token)
         snprintf(str, sizeof(str), "%s%s%s%s%s", _client_id, _access_token, ts, nonce, sts);
@@ -73,7 +71,7 @@ static void build_sign(const char *method, const char *path, const char *body,
     hmac_sha256_hex(_client_secret, str, sign_out);
 }
 
-// ─── Requête générique GET/POST ───────────────────────────────────────────────
+// ─── Requête générique GET/POST via net_utils (NetworkClientSecure heap) ──────
 static int tuya_request(const char *method, const char *path, const char *body,
                          char *resp, size_t resp_len) {
     if (!WiFi.isConnected()) return -1;
@@ -81,36 +79,36 @@ static int tuya_request(const char *method, const char *path, const char *body,
     unsigned long ts_ms = (unsigned long)(time(nullptr)) * 1000UL;
     char ts[14];
     snprintf(ts, sizeof(ts), "%lu", ts_ms);
-    char nonce[9] = "00000001";  // simplifié — valeur fixe acceptable
+    char nonce[9] = "00000001";
 
     char sign[65];
     bool use_token = (_access_token[0] != '\0');
     build_sign(method, path, body ? body : "", ts, nonce, use_token, sign);
 
+    // Construction de l'URL complète
     String url = String(TUYA_HOST) + path;
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(url);
-    http.addHeader("client_id",   _client_id);
-    http.addHeader("sign",        sign);
-    http.addHeader("t",           ts);
-    http.addHeader("sign_method", "HMAC-SHA256");
-    http.addHeader("nonce",       nonce);
-    http.addHeader("Content-Type","application/json");
-    if (use_token) http.addHeader("access_token", _access_token);
+
+    // Headers supplémentaires au format "Key: Value\nKey2: Value2"
+    String extra_headers = String("client_id: ") + _client_id + "\n"
+                         + "sign: " + sign + "\n"
+                         + "t: " + ts + "\n"
+                         + "sign_method: HMAC-SHA256\n"
+                         + "nonce: " + nonce + "\n"
+                         + "Content-Type: application/json";
+    if (use_token)
+        extra_headers += String("\naccess_token: ") + _access_token;
 
     int rc;
+    String result;
     if (strcmp(method, "POST") == 0)
-        rc = http.POST(body ? String(body) : "");
+        result = https_post_ex(url.c_str(), body ? body : "", extra_headers.c_str(), &rc);
     else
-        rc = http.GET();
+        result = https_get_ex(url.c_str(), extra_headers.c_str(), &rc);
 
     if (rc == 200 && resp) {
-        String s = http.getString();
-        strncpy(resp, s.c_str(), resp_len - 1);
+        strncpy(resp, result.c_str(), resp_len - 1);
         resp[resp_len - 1] = '\0';
     }
-    http.end();
     Serial.printf("[TUYA] %s %s → HTTP %d\n", method, path, rc);
     return rc;
 }
@@ -165,7 +163,6 @@ bool tuya_api_send_command(const char *device_id, const char *code, const char *
     if (!tuya_api_is_ready()) return false;
     char path[96];
     snprintf(path, sizeof(path), "/v1.0/iot-03/devices/%s/commands", device_id);
-    // body : {"commands":[{"code":"switch_1","value":true}]}
     char body[256];
     snprintf(body, sizeof(body), "{\"commands\":[{\"code\":\"%s\",\"value\":%s}]}", code, value);
     return tuya_request("POST", path, body, nullptr, 0) == 200;

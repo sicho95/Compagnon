@@ -1,66 +1,100 @@
-#pragma once
 /**
- * net_utils.h — Helper HTTPS pour ESP32
+ * net_utils.h — Helpers HTTPS GET/POST avec NetworkClientSecure alloué sur le heap
  *
- * Utilise NetworkClientSecure alloué sur le heap (new/delete) pour éviter
- * la fragmentation mémoire et l'erreur SSL -32512 (Memory allocation failed).
- * setInsecure() désactive la vérification de certificat pour économiser ~8KB.
+ * Utilise setInsecure() pour éviter la gestion des certificats root CA.
+ * NetworkClientSecure est alloué/libéré à chaque appel pour ne pas bloquer
+ * la mémoire entre les requêtes.
+ *
+ * Usage basique :
+ *   String body = https_get("https://api.example.com/data");
+ *   String resp = https_post("https://api.example.com/cmd", "{\"key\":\"val\"}");
+ *
+ * Usage avec headers custom :
+ *   int rc;
+ *   String body = https_get_ex(url, "Authorization: Bearer TOKEN", &rc);
  */
+#pragma once
 #include <Arduino.h>
+#include <WiFi.h>
 #include <NetworkClientSecure.h>
 #include <HTTPClient.h>
 
 /**
- * Effectue un GET HTTPS.
- * @param url      URL complète (https://...)
- * @param out_body Corps de la réponse si code == 200
- * @param timeout_ms Timeout en ms (défaut 8000)
- * @return Code HTTP (200 = OK, -1 = erreur réseau)
+ * https_get_ex — GET HTTPS avec headers custom optionnels.
+ * @param url          URL complète (https://...)
+ * @param extra_headers Headers supplémentaires au format "Key: Value\nKey2: Val2" (nullptr ok)
+ * @param out_code     Si non nullptr, reçoit le code HTTP retourné
+ * @return             Body de la réponse, ou String vide en cas d'erreur
  */
-inline int https_get(const char* url, String& out_body, int timeout_ms = 8000) {
-    NetworkClientSecure* client = new NetworkClientSecure();
-    if (!client) return -1;
-    client->setInsecure();  // Pas de vérif CA — économise ~8KB heap
-
+inline String https_get_ex(const char *url, const char *extra_headers, int *out_code) {
+    NetworkClientSecure *client = new NetworkClientSecure;
+    if (!client) { if (out_code) *out_code = -1; return ""; }
+    client->setInsecure();
     HTTPClient http;
+    http.setTimeout(8000);
     http.begin(*client, url);
-    http.setTimeout(timeout_ms);
-
-    int code = http.GET();
-    if (code == 200) {
-        out_body = http.getString();
+    if (extra_headers && extra_headers[0]) {
+        // Parsing ligne par ligne "Key: Value\n..."
+        String hdrs = extra_headers;
+        int pos = 0;
+        while (pos < (int)hdrs.length()) {
+            int nl = hdrs.indexOf('\n', pos);
+            String line = (nl < 0) ? hdrs.substring(pos) : hdrs.substring(pos, nl);
+            int colon = line.indexOf(":");
+            if (colon > 0)
+                http.addHeader(line.substring(0, colon).c_str(),
+                               line.substring(colon + 2).c_str());
+            if (nl < 0) break;
+            pos = nl + 1;
+        }
     }
+    int rc = http.GET();
+    String result = (rc == 200) ? http.getString() : "";
     http.end();
-    delete client;  // Libération immédiate — critique pour éviter fragmentation
-    return code;
+    delete client;
+    if (out_code) *out_code = rc;
+    Serial.printf("[NET] GET %s → %d\n", url, rc);
+    return result;
 }
 
 /**
- * Effectue un POST HTTPS avec body JSON.
- * @param url         URL complète
- * @param payload     Corps de la requête
- * @param content_type Content-Type (défaut "application/json")
- * @param out_body    Réponse si code 2xx
- * @param timeout_ms  Timeout en ms
- * @return Code HTTP
+ * https_post_ex — POST HTTPS avec body JSON et headers custom optionnels.
  */
-inline int https_post(const char* url, const String& payload,
-                      const char* content_type, String& out_body,
-                      int timeout_ms = 8000) {
-    NetworkClientSecure* client = new NetworkClientSecure();
-    if (!client) return -1;
+inline String https_post_ex(const char *url, const char *body, const char *extra_headers, int *out_code) {
+    NetworkClientSecure *client = new NetworkClientSecure;
+    if (!client) { if (out_code) *out_code = -1; return ""; }
     client->setInsecure();
-
     HTTPClient http;
+    http.setTimeout(8000);
     http.begin(*client, url);
-    http.setTimeout(timeout_ms);
-    http.addHeader("Content-Type", content_type);
-
-    int code = http.POST(payload);
-    if (code >= 200 && code < 300) {
-        out_body = http.getString();
+    http.addHeader("Content-Type", "application/json");
+    if (extra_headers && extra_headers[0]) {
+        String hdrs = extra_headers;
+        int pos = 0;
+        while (pos < (int)hdrs.length()) {
+            int nl = hdrs.indexOf('\n', pos);
+            String line = (nl < 0) ? hdrs.substring(pos) : hdrs.substring(pos, nl);
+            int colon = line.indexOf(":");
+            if (colon > 0)
+                http.addHeader(line.substring(0, colon).c_str(),
+                               line.substring(colon + 2).c_str());
+            if (nl < 0) break;
+            pos = nl + 1;
+        }
     }
+    int rc = http.POST(body ? String(body) : "");
+    String result = (rc > 0) ? http.getString() : "";
     http.end();
     delete client;
-    return code;
+    if (out_code) *out_code = rc;
+    Serial.printf("[NET] POST %s → %d\n", url, rc);
+    return result;
+}
+
+// Versions simplifiées sans headers custom
+inline String https_get(const char *url, int *out_code = nullptr) {
+    return https_get_ex(url, nullptr, out_code);
+}
+inline String https_post(const char *url, const char *body, int *out_code = nullptr) {
+    return https_post_ex(url, body, nullptr, out_code);
 }

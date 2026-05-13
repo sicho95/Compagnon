@@ -12,8 +12,8 @@
 #include "../../config/ui_config.h"
 #include "../../ui/launcher.h"
 #include "../../system/orchestrator.h"
+#include "../../net/net_utils.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <mbedtls/md.h>
 #include <lvgl.h>
@@ -98,7 +98,7 @@ void ecovacs_set_credentials(const char *user, const char *pass) {
     _state.authenticated = false;
 }
 
-// ─── Auth Ecovacs ──────────────────────────────────────────────────────────────
+// ─── Auth Ecovacs via net_utils (NetworkClientSecure heap) ────────────────────
 static bool ecovacs_auth() {
     char pass_md5[33];
     md5_hex(_eco_pass, pass_md5);
@@ -111,16 +111,10 @@ static bool ecovacs_auth() {
         "\"authTimeZone\":\"GMT+1\"}",
         _eco_user, pass_md5);
 
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(ECOVACS_AUTH_URL);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("User-Agent",   "Dalvik/2.1.0");
-    int rc = http.POST(body);
-    if (rc != 200) { Serial.printf("[ECOVACS] Auth HTTP %d\n", rc); http.end(); return false; }
-
-    String resp = http.getString();
-    http.end();
+    int rc;
+    String resp = https_post_ex(ECOVACS_AUTH_URL, body,
+                                "User-Agent: Dalvik/2.1.0", &rc);
+    if (rc != 200) { Serial.printf("[ECOVACS] Auth HTTP %d\n", rc); return false; }
 
     JsonDocument doc;
     if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
@@ -135,60 +129,50 @@ static bool ecovacs_auth() {
     return _state.authenticated;
 }
 
+// ─── Helpers POST API Ecovacs ─────────────────────────────────────────────────
+static String eco_post(const char *path, const char *body) {
+    char url[256];
+    snprintf(url, sizeof(url), "%s%s", ECOVACS_API_URL, path);
+    int rc;
+    String resp = https_post(url, body, &rc);
+    if (rc != 200) return "";
+    return resp;
+}
+
 // ─── Récupère la liste des bots et l'état ─────────────────────────────────────
 static bool ecovacs_get_device_list() {
-    char url[256];
-    snprintf(url, sizeof(url), "%s/users/user.do", ECOVACS_API_URL);
     char body[256];
     snprintf(body, sizeof(body),
         "{\"todo\":\"GetDeviceList\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"}}",
         _state.user_id, _state.access_token);
 
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    int rc = http.POST(body);
-    if (rc != 200) { http.end(); return false; }
-
-    String resp = http.getString();
-    http.end();
+    String resp = eco_post("/users/user.do", body);
+    if (resp.isEmpty()) return false;
 
     JsonDocument doc;
     if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
-
     JsonArray devices = doc["devices"].as<JsonArray>();
     if (!devices) return false;
     for (JsonObject d : devices) {
         strlcpy(_state.robot_id, d["did"] | "", sizeof(_state.robot_id));
         _state.online = d["online"] | false;
-        break;  // premier robot seulement
+        break;
     }
     return (_state.robot_id[0] != '\0');
 }
 
 static bool ecovacs_get_clean_info() {
-    char url[256];
-    snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
     char body[512];
     snprintf(body, sizeof(body),
         "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
         "\"cmdName\":\"getCleanInfo\"}",
         _state.robot_id, _state.user_id, _state.access_token);
 
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    int rc = http.POST(body);
-    if (rc != 200) { http.end(); return false; }
-
-    String resp = http.getString();
-    http.end();
+    String resp = eco_post("/iot/devmanager.do", body);
+    if (resp.isEmpty()) return false;
 
     JsonDocument doc;
     if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
-
     const char *st = doc["resp"]["body"]["data"]["state"] | "idle";
     strlcpy(_state.status, st, sizeof(_state.status));
     strlcpy(_state.mode,   doc["resp"]["body"]["data"]["cleanState"]["motionState"] | "-", sizeof(_state.mode));
@@ -196,23 +180,14 @@ static bool ecovacs_get_clean_info() {
 }
 
 static bool ecovacs_get_battery() {
-    char url[256];
-    snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
     char body[512];
     snprintf(body, sizeof(body),
         "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
         "\"cmdName\":\"getBattery\"}",
         _state.robot_id, _state.user_id, _state.access_token);
 
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    int rc = http.POST(body);
-    if (rc != 200) { http.end(); return false; }
-
-    String resp = http.getString();
-    http.end();
+    String resp = eco_post("/iot/devmanager.do", body);
+    if (resp.isEmpty()) return false;
 
     JsonDocument doc;
     if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
@@ -222,21 +197,13 @@ static bool ecovacs_get_battery() {
 
 // ─── Envoie une commande ──────────────────────────────────────────────────────
 static bool ecovacs_send_cmd(const char *cmdName) {
-    char url[256];
-    snprintf(url, sizeof(url), "%s/iot/devmanager.do", ECOVACS_API_URL);
     char body[512];
     snprintf(body, sizeof(body),
         "{\"did\":\"%s\",\"td\":\"q\",\"auth\":{\"uid\":\"%s\",\"accessToken\":\"%s\"},"
         "\"cmdName\":\"%s\"}",
         _state.robot_id, _state.user_id, _state.access_token, cmdName);
-
-    HTTPClient http;
-    http.setTimeout(8000);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    int rc = http.POST(body);
-    http.end();
-    return (rc == 200);
+    String resp = eco_post("/iot/devmanager.do", body);
+    return !resp.isEmpty();
 }
 
 // ─── Mise à jour UI (thread LVGL) ────────────────────────────────────────────
@@ -351,7 +318,6 @@ static void build_ui() {
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ── Header (safe area : UI_X / APP_Y / UI_W) ──────────────────────────────
     lv_obj_t *hdr = lv_obj_create(_scr);
     lv_obj_set_size(hdr, UI_W, 48);
     lv_obj_set_pos(hdr, UI_X, APP_Y);
@@ -361,7 +327,6 @@ static void build_ui() {
     lv_obj_set_style_pad_all(hdr, 0, 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bouton retour
     lv_obj_t *btn_back = lv_btn_create(hdr);
     lv_obj_set_size(btn_back, 44, 44);
     lv_obj_align(btn_back, LV_ALIGN_LEFT_MID, 4, 0);
@@ -372,14 +337,12 @@ static void build_ui() {
     lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
     lv_obj_center(lbl_back);
 
-    // Titre
     lv_obj_t *lbl_title = lv_label_create(hdr);
     lv_label_set_text(lbl_title, LV_SYMBOL_REFRESH " Ecovacs");
     lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(lbl_title, lv_color_hex(C_TXT), 0);
     lv_obj_align(lbl_title, LV_ALIGN_CENTER, 0, 0);
 
-    // Bouton refresh
     lv_obj_t *btn_ref = lv_btn_create(hdr);
     lv_obj_set_size(btn_ref, 44, 44);
     lv_obj_align(btn_ref, LV_ALIGN_RIGHT_MID, -4, 0);
@@ -390,9 +353,7 @@ static void build_ui() {
     lv_label_set_text(lbl_ref, LV_SYMBOL_REFRESH);
     lv_obj_center(lbl_ref);
 
-    // ── Carte état robot ──────────────────────────────────────────────────────
-    // Centrée horizontalement dans la safe area
-    int card_w = UI_W - 32;  // marge interne 16px de chaque côté
+    int card_w = UI_W - 32;
     lv_obj_t *card = lv_obj_create(_scr);
     lv_obj_set_size(card, card_w, 160);
     lv_obj_set_pos(card, UI_X + 16, APP_Y + 56);
@@ -403,7 +364,6 @@ static void build_ui() {
     lv_obj_set_style_border_color(card, lv_color_hex(0x30363d), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Batterie : barre + label
     _bar_battery = lv_bar_create(card);
     lv_obj_set_size(_bar_battery, card_w - 80, 12);
     lv_obj_align(_bar_battery, LV_ALIGN_TOP_LEFT, 8, 16);
@@ -418,34 +378,28 @@ static void build_ui() {
     lv_obj_set_style_text_color(_lbl_battery, lv_color_hex(C_TXT), 0);
     lv_obj_align(_lbl_battery, LV_ALIGN_TOP_RIGHT, -8, 8);
 
-    // État
     _lbl_state = lv_label_create(card);
     lv_label_set_text(_lbl_state, "--");
     lv_obj_set_style_text_font(_lbl_state, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(_lbl_state, lv_color_hex(C_ACCENT), 0);
     lv_obj_align(_lbl_state, LV_ALIGN_CENTER, 0, -10);
 
-    // Mode
     _lbl_mode = lv_label_create(card);
     lv_label_set_text(_lbl_mode, "--");
     lv_obj_set_style_text_font(_lbl_mode, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_mode, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_mode, LV_ALIGN_CENTER, 0, 18);
 
-    // Status (online/offline)
     _lbl_status = lv_label_create(card);
     lv_label_set_text(_lbl_status, "Chargement...");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_BOTTOM_MID, 0, -8);
 
-    // ── Boutons de commande ───────────────────────────────────────────────────
-    // Répartis horizontalement dans la safe area
-    int btn_y   = APP_Y + 56 + 168 + 12;  // sous la carte état
-    int btn_w   = (UI_W - 32 - 16) / 3;   // 3 boutons, gap=8 entre eux
+    int btn_y   = APP_Y + 56 + 168 + 12;
+    int btn_w   = (UI_W - 32 - 16) / 3;
     int btn_x0  = UI_X + 16;
 
-    // Nettoyer
     _btn_clean = lv_btn_create(_scr);
     lv_obj_set_size(_btn_clean, btn_w, 48);
     lv_obj_set_pos(_btn_clean, btn_x0, btn_y);
@@ -457,7 +411,6 @@ static void build_ui() {
     lv_obj_set_style_text_font(lc, &lv_font_montserrat_12, 0);
     lv_obj_center(lc);
 
-    // Stop
     _btn_stop = lv_btn_create(_scr);
     lv_obj_set_size(_btn_stop, btn_w, 48);
     lv_obj_set_pos(_btn_stop, btn_x0 + btn_w + 8, btn_y);
@@ -469,7 +422,6 @@ static void build_ui() {
     lv_obj_set_style_text_font(ls, &lv_font_montserrat_12, 0);
     lv_obj_center(ls);
 
-    // Charge
     _btn_charge = lv_btn_create(_scr);
     lv_obj_set_size(_btn_charge, btn_w, 48);
     lv_obj_set_pos(_btn_charge, btn_x0 + (btn_w + 8) * 2, btn_y);
