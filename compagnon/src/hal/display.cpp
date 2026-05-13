@@ -81,13 +81,10 @@ void hal_display_init() {
   lv_obj_set_style_pad_all(scr,      0,                LV_PART_MAIN);
   lv_obj_set_style_border_width(scr, 0,                LV_PART_MAIN);
   // Note : radius + clip_corner sur lv_screen_active() n'a aucun effet en
-  // LVGL 9.x. Les coins arrondis sont gérés par _create_corner_overlays().
 
-  // ── Coin-overlays : masquage LVGL des 4 coins (LCD_CORNER_RADIUS = LCD_CORNER_RADIUS px) ──
-  _create_corner_overlays();
 
-  Serial.printf("[HAL/DISP] LVGL OK - %dx%d corner_radius=%dpx (overlay)\n",
-                LCD_WIDTH, LCD_HEIGHT, LCD_CORNER_RADIUS);
+  Serial.printf("[HAL/DISP] LVGL OK \n",
+                LCD_WIDTH, LCD_HEIGHT,);
 }
 
 lv_display_t *hal_display_get() { return s_disp; }
