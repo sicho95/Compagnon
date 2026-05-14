@@ -17,14 +17,13 @@
 #define CHAR_LLM_RELAY     "12345678-0005-5678-1234-56789abcdef0"
 #define CHAR_DEVICE_STATUS "12345678-0006-5678-1234-56789abcdef0"
 #define CHAR_GPS           "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+#define CHAR_SPEED         "12345678-0007-5678-1234-56789abcdef0"
 
 #define DEVICE_NAME      "Nestor"
 #define MTU_MAX          512
-#define BLE_HANDLE_COUNT 30
+#define BLE_HANDLE_COUNT 36   // augmenté pour la nouvelle char SPEED
 
 // ─── Buffer anti-fragmentation AgentSync ─────────────────────────────────────
-// Les paquets BLE > MTU arrivent en plusieurs onWrite(). On accumule jusqu'à
-// recevoir un JSON complet (accolade finale '}') avant de dispatcher.
 #define AGENT_BUF_SIZE 2048
 static char   _agent_buf[AGENT_BUF_SIZE];
 static size_t _agent_buf_len = 0;
@@ -34,7 +33,6 @@ static void agent_buf_reset() {
     _agent_buf_len = 0;
 }
 
-// Retourne true si le buffer contient un JSON complet (autant de { que de }).
 static bool agent_buf_complete() {
     if (_agent_buf_len == 0) return false;
     int depth = 0;
@@ -62,6 +60,7 @@ static BLECharacteristic *_c_text_input    = nullptr;
 static BLECharacteristic *_c_llm_relay     = nullptr;
 static BLECharacteristic *_c_device_status = nullptr;
 static BLECharacteristic *_c_gps           = nullptr;
+static BLECharacteristic *_c_speed         = nullptr;
 
 static bool   _connected  = false;
 static bool   _active     = false;
@@ -69,6 +68,8 @@ static bool   _scanning   = false;
 static double _lat        = 0.0;
 static double _lon        = 0.0;
 static bool   _has_gps    = false;
+static float  _speed_kmh  = 0.0f;
+static bool   _has_speed  = false;
 
 static music_cmd_cb_t   _music_cb      = nullptr;
 static text_input_cb_t  _text_input_cb = nullptr;
@@ -85,6 +86,7 @@ class ConnCB : public BLEServerCallbacks {
     void onDisconnect(BLEServer *s) override {
         _connected = false;
         _has_gps   = false;
+        _has_speed = false;
         agent_buf_reset();
         Serial.println("[BLE] Deconnecte — re-advertising");
         s->startAdvertising();
@@ -105,6 +107,21 @@ class GpsCB : public BLECharacteristicCallbacks {
         _lon = (double)lon;
         _has_gps = true;
         Serial.printf("[BLE] GPS: %.5f, %.5f\n", _lat, _lon);
+    }
+};
+
+// ─── SPEED : 4 octets float32 little-endian (vitesse en km/h) ────────────────
+class SpeedCB : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override {
+        String val = c->getValue();
+        if ((int)val.length() < 4) return;
+        const uint8_t *b = (const uint8_t *)val.c_str();
+        float spd;
+        memcpy(&spd, b, 4);
+        if (spd < 0.0f || spd > 400.0f) return;  // sanity check
+        _speed_kmh = spd;
+        _has_speed = true;
+        Serial.printf("[BLE] Speed: %.1f km/h\n", _speed_kmh);
     }
 };
 
@@ -131,7 +148,7 @@ class WifiProvCB : public BLECharacteristicCallbacks {
     }
 };
 
-// ─── Agent sync : JSON envoyé par la PWA — avec buffer anti-fragmentation ─────
+// ─── Agent sync ───────────────────────────────────────────────────────────────
 class AgentSyncCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
         String chunk = c->getValue();
@@ -140,9 +157,7 @@ class AgentSyncCB : public BLECharacteristicCallbacks {
 
         Serial.printf("[BLE] AgentSync: %u bytes\n", chunk_len);
 
-        // Accumulation dans le buffer
         if (_agent_buf_len + chunk_len >= AGENT_BUF_SIZE - 1) {
-            // Buffer plein : reset et recommencer avec ce chunk
             Serial.println("[BLE] AgentSync: buffer plein, reset");
             agent_buf_reset();
         }
@@ -150,7 +165,6 @@ class AgentSyncCB : public BLECharacteristicCallbacks {
         _agent_buf_len += chunk_len;
         _agent_buf[_agent_buf_len] = '\0';
 
-        // On dispatche seulement quand le JSON est complet
         if (agent_buf_complete()) {
             _agent_sync_cb(_agent_buf);
             agent_buf_reset();
@@ -158,7 +172,7 @@ class AgentSyncCB : public BLECharacteristicCallbacks {
     }
 };
 
-// ─── Text input : message texte depuis la PWA ─────────────────────────────────
+// ─── Text input ───────────────────────────────────────────────────────────────
 class TextInputCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *c) override {
         String val = c->getValue();
@@ -233,6 +247,12 @@ void ble_mgr_init() {
         BLECharacteristic::PROPERTY_WRITE_NR);
     _c_gps->setCallbacks(new GpsCB());
 
+    _c_speed = svc->createCharacteristic(
+        CHAR_SPEED,
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_WRITE_NR);
+    _c_speed->setCallbacks(new SpeedCB());
+
     svc->start();
 
     BLEAdvertising *adv = BLEDevice::getAdvertising();
@@ -285,6 +305,12 @@ bool ble_mgr_is_active() { return _active; }
 bool ble_mgr_get_gps(double *lat, double *lon) {
     if (!_has_gps) return false;
     *lat = _lat; *lon = _lon;
+    return true;
+}
+
+bool ble_mgr_get_speed(float *speed_kmh) {
+    if (!_has_speed) return false;
+    *speed_kmh = _speed_kmh;
     return true;
 }
 

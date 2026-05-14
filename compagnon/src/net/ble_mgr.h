@@ -10,6 +10,7 @@
 // Char LLM_RELAY    : 12345678-0005-5678-1234-56789abcdef0  (notify)
 // Char DEVICE_STATUS: 12345678-0006-5678-1234-56789abcdef0  (notify)
 // Char GPS          : 6e400003-b5a3-f393-e0a9-e50e24dcca9e  (write, float32 LE x2)
+// Char SPEED        : 12345678-0007-5678-1234-56789abcdef0  (write, float32 LE, km/h)
 // ─────────────────────────────────────────────────────────────────────────────
 #include <stdbool.h>
 
@@ -25,6 +26,10 @@ bool ble_mgr_is_active();
 
 // GPS — position reçue depuis la PWA (float32 LE, 8 octets)
 bool ble_mgr_get_gps(double *lat, double *lon);
+
+// Vitesse — reçue depuis la PWA (float32 LE, 4 octets, km/h)
+// Retourne true si une valeur est disponible
+bool ble_mgr_get_speed(float *speed_kmh);
 
 // Notifications vers la PWA
 void ble_mgr_notify_llm(const char *json);
