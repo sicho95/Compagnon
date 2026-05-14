@@ -13,9 +13,14 @@
  *   - Distance au prochain radar calculée par Haversine
  *   - Vitesse : priorité BLE téléphone, sinon 0 km/h (pas d'alerte vitesse)
  *   - Seuils d'alerte : 500 m / 300 m / 150 m
- *   - Sons joués sur le HP ES8311 via ledcWriteTone sur pin PA (46)
+ *   - Sons joués sur le HP ES8311 via ledcWriteTone (API arduino-esp32 ≥3.x)
  *
  * Aucune dépendance à l'appli Nestor / sicho95.github.io
+ *
+ * NOTE API audio arduino-esp32 3.x :
+ *   ledcSetup() + ledcAttachPin()  →  ledcAttach(pin, freq, resolution)
+ *   ledcDetachPin()                →  ledcDetach(pin)
+ *   ledcWriteTone() reste disponible et inchangé
  */
 #include "radar_app.h"
 #include "../../ui/launcher.h"
@@ -52,10 +57,11 @@
 #define ALERT_MID_M     300
 #define ALERT_NEAR_M    150
 
-// Audio — canal LEDC dédié (canal 0 libre sur cet usage)
-#define AUDIO_LEDC_CH   0
-#define AUDIO_LEDC_RES  8          // 8 bits
-#define AUDIO_DUTY_50   128        // 50 % duty = carré pur
+// Audio — API arduino-esp32 3.x : ledcAttach(pin, freq, resolution)
+// Plus de canal explicite : le canal est géré en interne par le driver
+#define AUDIO_LEDC_FREQ  880        // fréquence d'attache initiale (Hz)
+#define AUDIO_LEDC_RES   8          // 8 bits de résolution
+#define AUDIO_DUTY_50    128        // 50 % duty = carré pur
 
 // Fréquences et durées des bips
 #define BEEP_FAR_HZ     880
@@ -91,7 +97,6 @@ static float    _speed_kmh     = 0.0f;
 static volatile bool _fetch_running = false;
 
 // ─── Alerte sonore ────────────────────────────────────────────────────────────
-// Niveau actif : 0=aucun, 1=loin(500m), 2=moyen(300m), 3=proche(150m)
 static int      _alert_level   = 0;
 static uint32_t _alert_last_ms = 0;
 static bool     _audio_init    = false;
@@ -101,59 +106,47 @@ static void audio_init() {
     // Activer l'ampli classe-D
     pinMode(PA, OUTPUT);
     digitalWrite(PA, HIGH);
-    // Configurer LEDC sur le GPIO ES8311 DOUT (sortie analogique HP)
-    ledcSetup(AUDIO_LEDC_CH, BEEP_FAR_HZ, AUDIO_LEDC_RES);
-    ledcAttachPin(PIN_ES8311_DOUT, AUDIO_LEDC_CH);
-    ledcWrite(AUDIO_LEDC_CH, 0);  // silence
+    // API arduino-esp32 ≥3.x : ledcAttach(pin, freq_hz, resolution_bits)
+    // Remplace ledcSetup() + ledcAttachPin() de l'ancienne API
+    ledcAttach(PIN_ES8311_DOUT, AUDIO_LEDC_FREQ, AUDIO_LEDC_RES);
+    ledcWrite(PIN_ES8311_DOUT, 0);  // silence
     _audio_init = true;
     Serial.println("[RADAR] Audio initialisé");
 }
 
-static void audio_stop() {
-    if (!_audio_init) return;
-    ledcWrite(AUDIO_LEDC_CH, 0);
-    // Désactiver l'ampli pour économiser de l'énergie
-    digitalWrite(PA, LOW);
-}
-
 static void audio_deinit() {
     if (!_audio_init) return;
-    ledcDetachPin(PIN_ES8311_DOUT);
+    // API arduino-esp32 ≥3.x : ledcDetach(pin)
+    // Remplace ledcDetachPin() de l'ancienne API
+    ledcDetach(PIN_ES8311_DOUT);
     digitalWrite(PA, LOW);
     _audio_init = false;
 }
 
-// Jouer un bip bloquant (appelé hors tâche LVGL via lv_async_call)
+// Jouer un bip bloquant depuis la tâche dédiée (jamais depuis le contexte LVGL)
+// API 3.x : ledcWriteTone(pin, freq) + ledcWrite(pin, duty)
 static void beep(uint32_t freq_hz, uint32_t duration_ms) {
     if (!_audio_init) return;
     digitalWrite(PA, HIGH);
-    ledcWriteTone(AUDIO_LEDC_CH, freq_hz);
-    ledcWrite(AUDIO_LEDC_CH, AUDIO_DUTY_50);
+    ledcWriteTone(PIN_ES8311_DOUT, freq_hz);
+    ledcWrite(PIN_ES8311_DOUT, AUDIO_DUTY_50);
     delay(duration_ms);
-    ledcWrite(AUDIO_LEDC_CH, 0);
-    ledcWriteTone(AUDIO_LEDC_CH, 0);
-    // On laisse l'ampli allumé pendant l'app pour les bips suivants
+    ledcWrite(PIN_ES8311_DOUT, 0);
+    ledcWriteTone(PIN_ES8311_DOUT, 0);
 }
-
-// Jouer le pattern sonore selon le niveau d'alerte
-// Appelé en dehors du contexte LVGL (depuis une tâche ou lv_async_call)
-struct BeepParams { uint32_t freq; uint32_t dur; int reps; uint32_t pause; };
 
 static void play_alert_pattern(int level) {
     if (!_audio_init) return;
-    // Niveau 1 : 1 bip court grave
-    // Niveau 2 : 2 bips courts médium
-    // Niveau 3 : 3 bips courts aigus rapprochés
     switch (level) {
-        case 1:
+        case 1:  // 1 bip grave — 500 m
             beep(BEEP_FAR_HZ, BEEP_SHORT_MS);
             break;
-        case 2:
+        case 2:  // 2 bips médium — 300 m
             beep(BEEP_MID_HZ, BEEP_SHORT_MS);
             delay(80);
             beep(BEEP_MID_HZ, BEEP_SHORT_MS);
             break;
-        case 3:
+        case 3:  // 3 bips aigus — 150 m
             beep(BEEP_NEAR_HZ, BEEP_SHORT_MS);
             delay(50);
             beep(BEEP_NEAR_HZ, BEEP_SHORT_MS);
@@ -165,7 +158,7 @@ static void play_alert_pattern(int level) {
 }
 
 // ─── Tâche FreeRTOS dédiée aux bips (évite de bloquer LVGL) ─────────────────
-static volatile int   _beep_request = 0;  // niveau à jouer (>0 = jouer)
+static volatile int   _beep_request = 0;
 static TaskHandle_t   _beep_task_h  = nullptr;
 
 static void beep_task(void *) {
@@ -216,7 +209,6 @@ static void sort_radars() {
 }
 
 // ─── Logique d'alerte ─────────────────────────────────────────────────────────
-// Appelé à chaque tick — calcule le niveau d'alerte et déclenche les bips
 static void update_alert() {
     if (_nb_radars == 0 || !_has_gps) {
         if (_alert_level != 0) {
@@ -226,22 +218,19 @@ static void update_alert() {
         return;
     }
 
-    // Radar le plus proche (déjà trié)
-    float nearest = _radars[0].dist_m;
-    int speed_limit = _radars[0].speed;
+    float nearest    = _radars[0].dist_m;
+    int   speed_limit = _radars[0].speed;
 
-    // Calculer le niveau d'alerte
     int new_level = 0;
     if      (nearest < ALERT_NEAR_M) new_level = 3;
     else if (nearest < ALERT_MID_M)  new_level = 2;
     else if (nearest < ALERT_FAR_M)  new_level = 1;
 
-    // Fréquence des bips selon le niveau (ms entre deux patterns)
     static const uint32_t BEEP_INTERVAL[] = { 0, 4000, 2000, 800 };
     uint32_t now = millis();
 
     if (new_level > 0) {
-        bool level_changed = (new_level != _alert_level);
+        bool level_changed    = (new_level != _alert_level);
         bool interval_elapsed = (now - _alert_last_ms) >= BEEP_INTERVAL[new_level];
 
         if (level_changed || interval_elapsed) {
@@ -249,11 +238,9 @@ static void update_alert() {
             _alert_last_ms = now;
             trigger_beep(new_level);
 
-            // Mettre à jour le label d'alerte
             if (_lbl_alert) {
-                char buf[64];
-                const char *level_str[] = { "", "⚠ Radar 500m", "⚠⚠ Radar 300m", "🚨 RADAR 150m" };
-                uint32_t alert_colors[] = { C_BG, C_GREEN, C_ORANGE, C_RED };
+                const char *level_str[]   = { "", "⚠ Radar 500m", "⚠⚠ Radar 300m", "🚨 RADAR 150m" };
+                uint32_t    alert_colors[] = { C_BG, C_GREEN, C_ORANGE, C_RED };
                 lv_label_set_text(_lbl_alert, level_str[new_level]);
                 lv_obj_set_style_text_color(_lbl_alert,
                     lv_color_hex(alert_colors[new_level]), 0);
@@ -266,7 +253,6 @@ static void update_alert() {
         }
     }
 
-    // Indication de dépassement de vitesse (si vitesse limite connue)
     if (_lbl_speed) {
         char spd_buf[48];
         if (speed_limit > 0 && _speed_kmh > 0.0f) {
@@ -345,17 +331,14 @@ static void on_radar_done(void *) {
     update_alert();
     if (_lbl_status) {
         char buf[40];
-        bool wifi_ok = WiFi.isConnected();
         snprintf(buf, sizeof(buf), "%d radar(s) — %s",
-                 _nb_radars,
-                 wifi_ok ? "WiFi" : "cache");
+                 _nb_radars, WiFi.isConnected() ? "WiFi" : "cache");
         lv_label_set_text(_lbl_status, buf);
     }
 }
 
 // ─── Tâche FreeRTOS — fetch Lufop ────────────────────────────────────────────
 static void fetch_task(void *) {
-    // Pas de WiFi → on n'efface pas le cache, on remet juste le flag
     if (!WiFi.isConnected()) {
         lv_async_call([](void *) {
             _fetch_running = false;
@@ -469,7 +452,6 @@ static void back_cb(lv_event_t *) { do_close(); }
 void radar_app_start() {
     orchestrator_set_app(APP_RADAR);
 
-    // Init audio + tâche bip
     audio_init();
     xTaskCreatePinnedToCore(beep_task, "radar_beep", 2048, nullptr, 5, &_beep_task_h, 1);
 
@@ -478,7 +460,6 @@ void radar_app_start() {
     lv_obj_set_style_bg_opa(_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bouton retour
     lv_obj_t *btn = lv_btn_create(_scr);
     lv_obj_set_size(btn, 52, 36);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 46);
@@ -490,28 +471,24 @@ void radar_app_start() {
     lv_obj_set_style_text_color(lb, lv_color_hex(C_TITLE), 0);
     lv_obj_center(lb);
 
-    // Titre
     lv_obj_t *title = lv_label_create(_scr);
     lv_label_set_text(title, "Radars");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 50);
 
-    // Label GPS
     _lbl_gps = lv_label_create(_scr);
     lv_label_set_text(_lbl_gps, "GPS: attente...");
     lv_obj_set_style_text_font(_lbl_gps, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_gps, lv_color_hex(C_MUTED), 0);
     lv_obj_align(_lbl_gps, LV_ALIGN_TOP_LEFT, 14, 86);
 
-    // Label vitesse
     _lbl_speed = lv_label_create(_scr);
     lv_label_set_text(_lbl_speed, "Vitesse: N/A");
     lv_obj_set_style_text_font(_lbl_speed, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(_lbl_speed, lv_color_hex(C_NEUTRAL), 0);
     lv_obj_align(_lbl_speed, LV_ALIGN_TOP_RIGHT, -14, 86);
 
-    // Label alerte (grande, centré)
     _lbl_alert = lv_label_create(_scr);
     lv_label_set_text(_lbl_alert, "");
     lv_obj_set_style_text_font(_lbl_alert, &lv_font_montserrat_18, 0);
@@ -519,14 +496,12 @@ void radar_app_start() {
     lv_obj_set_style_text_align(_lbl_alert, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(_lbl_alert, LV_ALIGN_TOP_MID, 0, 108);
 
-    // Label statut (chargement, nb radars)
     _lbl_status = lv_label_create(_scr);
     lv_label_set_text(_lbl_status, "");
     lv_obj_set_style_text_font(_lbl_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(_lbl_status, lv_color_hex(C_STATUS), 0);
     lv_obj_align(_lbl_status, LV_ALIGN_TOP_MID, 0, 132);
 
-    // Liste radars
     _list = lv_obj_create(_scr);
     lv_obj_set_size(_list, 460, 280);
     lv_obj_align(_list, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -550,23 +525,16 @@ void radar_app_start() {
 void radar_app_tick() {
     if (!_app_active || !_scr) return;
 
-    // 1. Récupérer position GPS
-    //    Priorité : GPS matériel → BLE téléphone
     double lat = 0.0, lon = 0.0;
     bool got_pos = false;
 
 #ifdef GPS_AVAILABLE
     GpsData gps_hw;
     if (gps_get_data(&gps_hw) && gps_hw.valid) {
-        lat = gps_hw.lat;
-        lon = gps_hw.lon;
-        got_pos = true;
+        lat = gps_hw.lat; lon = gps_hw.lon; got_pos = true;
     }
 #endif
-
-    if (!got_pos) {
-        got_pos = ble_mgr_get_gps(&lat, &lon);
-    }
+    if (!got_pos) got_pos = ble_mgr_get_gps(&lat, &lon);
 
     if (got_pos) {
         _has_gps = true;
@@ -574,8 +542,7 @@ void radar_app_tick() {
                     ? haversine(_lat, _lon, lat, lon) : 9999.f;
         if (delta > MOVE_THRESH_M) {
             _lat = lat; _lon = lon;
-            _last_fetch = 0;  // force re-fetch
-            // Mettre à jour les distances
+            _last_fetch = 0;
             for (int i = 0; i < _nb_radars; i++)
                 _radars[i].dist_m = haversine(_lat, _lon, _radars[i].lat, _radars[i].lon);
             sort_radars();
@@ -589,25 +556,17 @@ void radar_app_tick() {
         if (_lbl_gps) lv_label_set_text(_lbl_gps, "GPS: attente BLE...");
     }
 
-    // 2. Récupérer vitesse depuis BLE
     float spd;
-    if (ble_mgr_get_speed(&spd)) {
-        _speed_kmh = spd;
-    }
+    if (ble_mgr_get_speed(&spd)) _speed_kmh = spd;
 
-    // 3. Déclencher fetch si besoin
     if (_has_gps) {
         uint32_t now = millis();
-        if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= FETCH_MS)) {
+        if (!_fetch_running && (_last_fetch == 0 || (now - _last_fetch) >= FETCH_MS))
             start_fetch();
-        }
     }
 
-    // 4. Mise à jour alerte sonore + labels vitesse
     update_alert();
 }
 
-// ─── Stop ─────────────────────────────────────────────────────────────────────
-void radar_app_stop() {
-    do_close();
-}
+// ─── Stop ────────────────────────────────────────────────────────────────────
+void radar_app_stop() { do_close(); }
