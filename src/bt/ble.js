@@ -11,6 +11,9 @@ export const CHAR = {
   LLM_RELAY:      '12345678-0005-5678-1234-56789abcdef0',
   DEVICE_STATUS:  '12345678-0006-5678-1234-56789abcdef0',
   GPS:            '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+  // Vitesse envoyée vers l'ESP32 (float32 LE, 4 octets, km/h)
+  // Utilisée par l'app Radars pour l'alerte sonore autonome
+  SPEED:          '12345678-0007-5678-1234-56789abcdef0',
 };
 
 let _device = null, _server = null, _chars = {};
@@ -95,18 +98,52 @@ export async function bleSubscribe(charKey, callback) {
   });
 }
 
-// Surveiller la géolocalisation et envoyer lat/lon via BLE toutes les ≤1 s
-// Encodage : 8 octets float32 little-endian (lat 0-3, lon 4-7)
+// ─── GPS + Vitesse ────────────────────────────────────────────────────────────
+//
+// watchPosition est appelé à chaque position GPS disponible (enableHighAccuracy).
+// À chaque position reçue, on envoie :
+//   • CHAR.GPS   : 8 octets — float32 LE lat (0-3) + float32 LE lon (4-7)
+//   • CHAR.SPEED : 4 octets — float32 LE vitesse en km/h
+//                  coords.speed est en m/s (W3C Geolocation API) → ×3.6
+//                  Si null (GPS fixe sans vitesse Doppler), on envoie 0.0
+//
+// Les deux écritures sont faites en parallèle (Promise.all) pour minimiser
+// la latence et ne pas bloquer la boucle principale.
+// ─────────────────────────────────────────────────────────────────────────────
 export function startGpsWatch() {
   if (_gpsWatchId !== null || !('geolocation' in navigator) || !bleConnected()) return;
+
   _gpsWatchId = navigator.geolocation.watchPosition(
     pos => {
-      if (!_chars.GPS) return;
-      const buf  = new ArrayBuffer(8);
-      const view = new DataView(buf);
-      view.setFloat32(0, pos.coords.latitude,  true);
-      view.setFloat32(4, pos.coords.longitude, true);
-      bleWrite('GPS', new Uint8Array(buf)).catch(e => console.warn('[GPS]', e.message));
+      const writes = [];
+
+      // — Position GPS (8 octets, float32 LE) —
+      if (_chars.GPS) {
+        const gpsBuf  = new ArrayBuffer(8);
+        const gpsView = new DataView(gpsBuf);
+        gpsView.setFloat32(0, pos.coords.latitude,  true);
+        gpsView.setFloat32(4, pos.coords.longitude, true);
+        writes.push(
+          bleWrite('GPS', new Uint8Array(gpsBuf))
+            .catch(e => console.warn('[GPS] write:', e.message))
+        );
+      }
+
+      // — Vitesse (4 octets, float32 LE, km/h) —
+      if (_chars.SPEED) {
+        // coords.speed : m/s ou null si non disponible
+        const speedMs  = pos.coords.speed;
+        const speedKmh = (speedMs !== null && speedMs >= 0) ? speedMs * 3.6 : 0.0;
+        const spdBuf   = new ArrayBuffer(4);
+        const spdView  = new DataView(spdBuf);
+        spdView.setFloat32(0, speedKmh, true);
+        writes.push(
+          bleWrite('SPEED', new Uint8Array(spdBuf))
+            .catch(e => console.warn('[SPEED] write:', e.message))
+        );
+      }
+
+      Promise.all(writes);
     },
     err => console.warn('[GPS] watchPosition:', err.message),
     { maximumAge: 0, timeout: 1000, enableHighAccuracy: true }
