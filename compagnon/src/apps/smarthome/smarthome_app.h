@@ -13,8 +13,11 @@
  *   - Affichage capteurs temp/humidité en temps réel
  *   - Rafraîchissement auto toutes les 60 s
  */
+
 void smarthome_app_start();
 void smarthome_app_stop();
+bool smarthome_app_is_running();   // retourne true si l'app est active
 void smarthome_app_tick();
+
 void smarthome_set_tuya_id(const char *id);
 void smarthome_set_tuya_secret(const char *secret);

@@ -12,7 +12,10 @@
  *   - Commandes : Nettoyer / Arrêter / Retour base
  *   - Rafraîchissement état toutes les 30 s
  */
+
 void ecovacs_app_start();
 void ecovacs_app_stop();
+bool ecovacs_app_is_running();   // retourne true si l'app est active
 void ecovacs_app_tick();
+
 void ecovacs_set_credentials(const char *user, const char *pass);

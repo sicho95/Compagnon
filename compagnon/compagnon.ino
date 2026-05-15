@@ -3,17 +3,16 @@
  * Fichier principal Arduino IDE
  *
  * Ordre d'initialisation critique :
- *   1. PMU  — active les rails ALDO1/ALDO3 et configure le bouton power
- *   2. NVS  — crée le namespace "compagnon" si absent (flash vierge)
- *   3. Affichage — reset matériel pin 2 (partagé avec touch)
- *   4. Touch — attend 500 ms post-reset, puis init CST9220
- *   5. IMU  — QMI8658 (orientation)
- *   6. UI   — status bar (lv_layer_top), puis launcher
- *   7. Réseau — WiFiManager + OTA
- *   8. Orchestrateur — démarre le cerveau/planificateur
- *   9. Callback power — relie appui long PMU → menu UI
+ *  1. PMU    — active les rails ALDO1/ALDO3 et configure le bouton power
+ *  2. NVS    — crée le namespace "compagnon" si absent (flash vierge)
+ *  3. Affichage — reset matériel pin 2 (partagé avec touch)
+ *  4. Touch  — attend 500 ms post-reset, puis init CST9220
+ *  5. IMU    — QMI8658 (orientation)
+ *  6. UI     — status bar (lv_layer_top), puis launcher
+ *  7. Réseau — WiFiManager + OTA
+ *  8. Orchestrateur — démarre le cerveau/planificateur
+ *  9. Callback power — relie appui long PMU → menu UI
  */
-
 #include "src/hal/display.h"
 #include "src/hal/touch.h"
 #include "src/hal/imu.h"
@@ -25,54 +24,55 @@
 #include "src/config/nvs_config.h"
 #include "src/ui/status_bar.h"
 #include "src/ui/launcher.h"
+#include "src/apps/smarthome/smarthome_app.h"
+#include "src/apps/ecovacs/ecovacs_app.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 
 // ─── Mapping noms longs PWA → clés NVS courtes (≤ 15 chars) ──────────────────
 struct KeyMapping { const char *pwa_name; const char *nvs_name; };
 static const KeyMapping KEY_MAP[] = {
-    { "GROQ_API_KEY",           NVS_KEY_GROQ         },
-    { "GEMINI_API_KEY",         NVS_KEY_GEMINI       },
-    { "SERPER_API_KEY",         NVS_KEY_SERPER       },
-    { "OPENROUTER_API_KEY",     NVS_KEY_OPENROUTER   },
-    { "TWELVE_DATA_API_KEY",    NVS_KEY_TWELVEDATA   },
-    { "TWELVEDATA_API_KEY",     NVS_KEY_TWELVEDATA   },
-    { "METEO_CONCEPT_API_KEY",  NVS_KEY_METEO        },
-    { "METEO_API_KEY",          NVS_KEY_METEO        },
-    { "SPOTIFY_CLIENT_ID",      NVS_KEY_SPOTIFY_ID   },
-    { "SPOTIFY_CLIENT_SECRET",  NVS_KEY_SPOTIFY_SEC  },
+    { "GROQ_API_KEY",           NVS_KEY_GROQ        },
+    { "GEMINI_API_KEY",         NVS_KEY_GEMINI      },
+    { "SERPER_API_KEY",         NVS_KEY_SERPER      },
+    { "OPENROUTER_API_KEY",     NVS_KEY_OPENROUTER  },
+    { "TWELVE_DATA_API_KEY",    NVS_KEY_TWELVEDATA  },
+    { "TWELVEDATA_API_KEY",     NVS_KEY_TWELVEDATA  },
+    { "METEO_CONCEPT_API_KEY",  NVS_KEY_METEO       },
+    { "METEO_API_KEY",          NVS_KEY_METEO       },
+    { "SPOTIFY_CLIENT_ID",      NVS_KEY_SPOTIFY_ID  },
+    { "SPOTIFY_CLIENT_SECRET",  NVS_KEY_SPOTIFY_SEC },
     // Tuya domotique
-    { "TUYA_CLIENT_ID",         NVS_KEY_TUYA_ID      },
-    { "TUYA_CLIENT_SECRET",     NVS_KEY_TUYA_SEC     },
-    { NVS_KEY_TUYA_ID,          NVS_KEY_TUYA_ID      },
-    { NVS_KEY_TUYA_SEC,         NVS_KEY_TUYA_SEC     },
+    { "TUYA_CLIENT_ID",         NVS_KEY_TUYA_ID     },
+    { "TUYA_CLIENT_SECRET",     NVS_KEY_TUYA_SEC    },
+    { NVS_KEY_TUYA_ID,          NVS_KEY_TUYA_ID     },
+    { NVS_KEY_TUYA_SEC,         NVS_KEY_TUYA_SEC    },
     // Ecovacs robot
-    { "ECOVACS_EMAIL",          NVS_KEY_ECOVACS_U    },
-    { "ECOVACS_PASSWORD",       NVS_KEY_ECOVACS_P    },
-    { NVS_KEY_ECOVACS_U,        NVS_KEY_ECOVACS_U    },
-    { NVS_KEY_ECOVACS_P,        NVS_KEY_ECOVACS_P    },
+    { "ECOVACS_EMAIL",          NVS_KEY_ECOVACS_U   },
+    { "ECOVACS_PASSWORD",       NVS_KEY_ECOVACS_P   },
+    { NVS_KEY_ECOVACS_U,        NVS_KEY_ECOVACS_U   },
+    { NVS_KEY_ECOVACS_P,        NVS_KEY_ECOVACS_P   },
     // Clés courtes (pass-through)
-    { NVS_KEY_GROQ,             NVS_KEY_GROQ         },
-    { NVS_KEY_GEMINI,           NVS_KEY_GEMINI       },
-    { NVS_KEY_SERPER,           NVS_KEY_SERPER       },
-    { NVS_KEY_OPENROUTER,       NVS_KEY_OPENROUTER   },
-    { NVS_KEY_TWELVEDATA,       NVS_KEY_TWELVEDATA   },
-    { NVS_KEY_METEO,            NVS_KEY_METEO        },
-    { NVS_KEY_SPOTIFY_ID,       NVS_KEY_SPOTIFY_ID   },
-    { NVS_KEY_SPOTIFY_SEC,      NVS_KEY_SPOTIFY_SEC  },
+    { NVS_KEY_GROQ,             NVS_KEY_GROQ        },
+    { NVS_KEY_GEMINI,           NVS_KEY_GEMINI      },
+    { NVS_KEY_SERPER,           NVS_KEY_SERPER      },
+    { NVS_KEY_OPENROUTER,       NVS_KEY_OPENROUTER  },
+    { NVS_KEY_TWELVEDATA,       NVS_KEY_TWELVEDATA  },
+    { NVS_KEY_METEO,            NVS_KEY_METEO       },
+    { NVS_KEY_SPOTIFY_ID,       NVS_KEY_SPOTIFY_ID  },
+    { NVS_KEY_SPOTIFY_SEC,      NVS_KEY_SPOTIFY_SEC },
     { nullptr, nullptr }
 };
 
 static const char *resolve_nvs_key(const char *pwa_key) {
     if (!pwa_key || !pwa_key[0]) return nullptr;
-    for (int i = 0; KEY_MAP[i].pwa_name != nullptr; i++) {
+    for (int i = 0; KEY_MAP[i].pwa_name != nullptr; i++)
         if (strcasecmp(KEY_MAP[i].pwa_name, pwa_key) == 0)
             return KEY_MAP[i].nvs_name;
-    }
     return nullptr;
 }
 
-// ─── Pont BLE → WiFi provisioning ─────────────────────────────────────────────
+// ─── Pont BLE → WiFi provisioning ────────────────────────────────────────────
 // La PWA envoie : {"ssid":"...","password":"..."}
 // Clés alternatives acceptées : "s"/"ssid" pour le SSID, "p"/"pwd"/"password" pour le mot de passe
 static void ble_wifi_prov_cb(const char *json) {
@@ -84,30 +84,24 @@ static void ble_wifi_prov_cb(const char *json) {
         Serial.println(err.c_str());
         return;
     }
-    // Accepter les deux formes de clés (compacte et complète)
     const char *ssid = nullptr;
     if (doc["ssid"].is<const char*>())     ssid = doc["ssid"];
     else if (doc["s"].is<const char*>())   ssid = doc["s"];
-
     const char *pwd = "";
-    if (doc["password"].is<const char*>())  pwd = doc["password"];
-    else if (doc["pwd"].is<const char*>())  pwd = doc["pwd"];
-    else if (doc["p"].is<const char*>())    pwd = doc["p"];
-
+    if      (doc["password"].is<const char*>()) pwd = doc["password"];
+    else if (doc["pwd"].is<const char*>())      pwd = doc["pwd"];
+    else if (doc["p"].is<const char*>())        pwd = doc["p"];
     if (!ssid || ssid[0] == '\0') {
         Serial.println("[BLE/WIFI] SSID vide — ignoré");
         return;
     }
-    Serial.printf("[BLE/WIFI] Provision SSID='%s' (pwd_len=%d)\n",
-                  ssid, (int)strlen(pwd));
+    Serial.printf("[BLE/WIFI] Provision SSID='%s' (pwd_len=%d)\n", ssid, (int)strlen(pwd));
     wifi_mgr_provision(ssid, pwd);
-
-    // Notifier la PWA que le réseau a été ajouté
     String nets = wifi_mgr_list_networks();
     char ack[256];
     snprintf(ack, sizeof(ack),
-        "{\"cmd\":\"wifi_prov_ack\",\"ok\":true,\"networks\":%s}",
-        nets.c_str());
+             "{\"cmd\":\"wifi_prov_ack\",\"ok\":true,\"networks\":%s}",
+             nets.c_str());
     ble_mgr_notify_agent_sync(ack);
 }
 
@@ -116,8 +110,10 @@ static void ble_agent_sync_cb(const char *json) {
     if (!json) return;
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) { Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str()); return; }
-
+    if (err) {
+        Serial.printf("[BLE/AGENT] JSON invalide: %s\n", err.c_str());
+        return;
+    }
     const char *cmd = doc["cmd"] | "";
     if (!cmd || cmd[0] == '\0') return;
 
@@ -125,17 +121,21 @@ static void ble_agent_sync_cb(const char *json) {
         const char *pwa_key = doc["key"] | "";
         const char *val     = doc["val"] | doc["value"] | "";
         if (!pwa_key[0]) { Serial.println("[BLE/AGENT] set_api_key: champ 'key' manquant"); return; }
-        if (!val[0]) { Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", pwa_key); return; }
+        if (!val[0])     { Serial.printf("[BLE/AGENT] set_api_key: valeur vide pour %s\n", pwa_key); return; }
         const char *nvs_key = resolve_nvs_key(pwa_key);
         if (!nvs_key) {
             char ack[160];
-            snprintf(ack, sizeof(ack), "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":false,\"err\":\"unknown_key\"}", pwa_key);
+            snprintf(ack, sizeof(ack),
+                     "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":false,\"err\":\"unknown_key\"}",
+                     pwa_key);
             ble_mgr_notify_agent_sync(ack);
             return;
         }
         bool ok = nvs_set_api_key(nvs_key, val);
         char ack[160];
-        snprintf(ack, sizeof(ack), "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}", pwa_key, ok ? "true" : "false");
+        snprintf(ack, sizeof(ack),
+                 "{\"cmd\":\"set_api_key_ack\",\"key\":\"%s\",\"ok\":%s}",
+                 pwa_key, ok ? "true" : "false");
         ble_mgr_notify_agent_sync(ack);
         return;
     }
@@ -144,7 +144,8 @@ static void ble_agent_sync_cb(const char *json) {
         char json_out[512];
         nvs_list_api_keys_json(json_out, sizeof(json_out));
         char resp[600];
-        snprintf(resp, sizeof(resp), "{\"cmd\":\"api_keys_status\",\"keys\":%s}", json_out);
+        snprintf(resp, sizeof(resp),
+                 "{\"cmd\":\"api_keys_status\",\"keys\":%s}", json_out);
         ble_mgr_notify_agent_sync(resp);
         return;
     }
@@ -156,17 +157,18 @@ static void ble_agent_sync_cb(const char *json) {
         if (!nvs_key) return;
         nvs_clear_api_key(nvs_key);
         char ack[160];
-        snprintf(ack, sizeof(ack), "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", pwa_key);
+        snprintf(ack, sizeof(ack),
+                 "{\"cmd\":\"clear_api_key_ack\",\"key\":\"%s\",\"ok\":true}", pwa_key);
         ble_mgr_notify_agent_sync(ack);
         return;
     }
 
-    // ── Gestion WiFi via agent_sync ────────────────────────────────────────────
+    // ── Gestion WiFi via agent_sync ───────────────────────────────────────────
     if (strcmp(cmd, "wifi_list") == 0) {
         String nets = wifi_mgr_list_networks();
         char resp[512];
-        snprintf(resp, sizeof(resp), "{\"cmd\":\"wifi_list_ack\",\"networks\":%s}",
-                 nets.c_str());
+        snprintf(resp, sizeof(resp),
+                 "{\"cmd\":\"wifi_list_ack\",\"networks\":%s}", nets.c_str());
         ble_mgr_notify_agent_sync(resp);
         return;
     }
@@ -178,29 +180,28 @@ static void ble_agent_sync_cb(const char *json) {
             String nets = wifi_mgr_list_networks();
             char resp[512];
             snprintf(resp, sizeof(resp),
-                     "{\"cmd\":\"wifi_remove_ack\",\"ok\":true,\"networks\":%s}",
-                     nets.c_str());
+                     "{\"cmd\":\"wifi_remove_ack\",\"ok\":true,\"networks\":%s}", nets.c_str());
             ble_mgr_notify_agent_sync(resp);
         }
         return;
     }
 
-    // ─── battery_status / get_device_status ───────────────────────────────────
+    // ─── battery_status / get_device_status ──────────────────────────────────
     if (strcmp(cmd, "battery_status") == 0 || strcmp(cmd, "get_device_status") == 0) {
         int  bat_pct  = hal_pmu_battery_pct();
         bool charging = hal_pmu_is_charging();
         String nets   = wifi_mgr_list_networks();
         char resp[300];
         snprintf(resp, sizeof(resp),
-            "{\"cmd\":\"device_status\",\"battery\":%d,\"charging\":%s,\"wifi\":%s,\"wifi_networks\":%s}",
-            (bat_pct >= 0) ? bat_pct : 0,
-            charging           ? "true"  : "false",
-            WiFi.isConnected() ? "true"  : "false",
-            nets.c_str()
-        );
+                 "{\"cmd\":\"device_status\",\"battery\":%d,\"charging\":%s,"
+                 "\"wifi\":%s,\"wifi_networks\":%s}",
+                 (bat_pct >= 0) ? bat_pct : 0,
+                 charging ? "true" : "false",
+                 WiFi.isConnected() ? "true" : "false",
+                 nets.c_str());
         ble_mgr_notify_agent_sync(resp);
         Serial.printf("[BLE/AGENT] battery_status -> bat=%d%% charging=%s\n",
-            bat_pct, charging ? "oui" : "non");
+                      bat_pct, charging ? "oui" : "non");
         return;
     }
 
@@ -217,17 +218,14 @@ void setup() {
     hal_display_init();
     hal_touch_init();
     hal_imu_init();
-
     ui_status_bar_init();
     wifi_mgr_init();
     net_ota_init();
     ble_mgr_init();
     ble_mgr_set_wifi_prov_cb(ble_wifi_prov_cb);
     ble_mgr_set_agent_sync_cb(ble_agent_sync_cb);
-
     orchestrator_init();
     ui_launcher_init();
-
     hal_pmu_set_long_press_cb(ui_power_menu_show);
 
     Serial.println("[BOOT] Pret.");
@@ -235,14 +233,13 @@ void setup() {
 
 void loop() {
     lv_timer_handler();
-
     hal_pmu_tick();
     wifi_mgr_tick();
     net_ota_tick();
     ble_mgr_tick();
-
     ui_status_bar_tick();
     hal_imu_tick();
+
     if (hal_imu_changed()) {
         static const lv_display_rotation_t rot_map[] = {
             LV_DISPLAY_ROTATION_270,
@@ -254,7 +251,11 @@ void loop() {
     }
 
     orchestrator_tick();
-    ui_launcher_btn_tick();
 
+    // ── Tick des apps actives (rafraîchissement auto) ─────────────────────────
+    smarthome_app_tick();   // rafraîchit les devices Tuya toutes les 60 s
+    ecovacs_app_tick();     // rafraîchit l'état du robot toutes les 30 s
+
+    ui_launcher_btn_tick();
     delay(1);
 }
