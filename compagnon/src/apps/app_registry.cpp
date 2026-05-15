@@ -5,7 +5,7 @@
 #include "bourse/bourse_app.h"
 #include "nestor/nestor_app.h"
 #include "musique/musique_app.h"
-#include "radars/radars_app.h"
+#include "radars/radar_app.h"
 #include "smarthome/smarthome_app.h"
 #include "ecovacs/ecovacs_app.h"
 
